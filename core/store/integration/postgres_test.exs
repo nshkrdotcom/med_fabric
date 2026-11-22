@@ -43,6 +43,22 @@ defmodule MedFabric.Store.PostgresTest do
              Postgres.accept(c.db, c.key, c.tmp_dir, c.a.file_sha256, "actor")
   end
 
+  test "routing changes and late conflicting evidence preserve the accepted decision", c do
+    assert {:error, :destination_changed} =
+             Postgres.ready(c.db, c.key, "session", c.a, "source", %{"destination" => "other"})
+
+    assert {:ok, :ok} = Postgres.accept(c.db, c.key, c.tmp_dir, c.a.file_sha256, "actor")
+
+    assert {:error, :accepted_recording_conflict} =
+             Postgres.ready(c.db, c.key, "session", %{c.a | continuity: :unknown}, "source")
+
+    assert :ok = Postgres.delivery_result(c.db, c.key, {:ok, %{remote_ref: "Observation/1"}})
+    assert :ok = Postgres.delivery_result(c.db, c.key, {:error, :late_timeout})
+
+    assert {:ok, %{accepted_by: "actor", conflict: false, remote_ref: "Observation/1"}} =
+             Postgres.fetch(c.db, c.key)
+  end
+
   test "changed artifact blocks acceptance and outbox creation", c do
     File.write!(c.path, "changed")
 

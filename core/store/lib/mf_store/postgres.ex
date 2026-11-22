@@ -61,17 +61,26 @@ defmodule MedFabric.Store.Postgres do
 
   def ready(db, {enc, acq}, session, %{acquisition_id: acq} = capture, source, refs \\ %{}) do
     with {:ok, metadata} <- Encounter.metadata(session, capture, source),
-         {:ok, %{rows: [[conflict]]}} <-
+         {:ok, %{rows: [[conflict, accepted_at, same_recording, same_destination]]}} <-
            Postgrex.query(
              db,
              """
              INSERT INTO exam_recordings AS r (encounter_id, acquisition_id, metadata) VALUES ($1,$2,$3)
              ON CONFLICT (encounter_id, acquisition_id) DO UPDATE
-               SET conflict = r.conflict OR r.metadata <> EXCLUDED.metadata RETURNING conflict
+               SET conflict = r.conflict OR (
+                 r.accepted_at IS NULL AND (r.metadata - 'delivery') <> (EXCLUDED.metadata - 'delivery')
+               )
+             RETURNING conflict, accepted_at, (r.metadata - 'delivery') = ($3::jsonb - 'delivery'),
+               r.metadata->'delivery' = $3::jsonb->'delivery'
              """,
              [enc, acq, Map.put(metadata, "delivery", refs)]
            ) do
-      if conflict, do: {:error, :conflicting_recording}, else: :ok
+      cond do
+        accepted_at && !same_recording -> {:error, :accepted_recording_conflict}
+        conflict -> {:error, :conflicting_recording}
+        !same_destination -> {:error, :destination_changed}
+        true -> :ok
+      end
     end
   end
 
@@ -152,8 +161,8 @@ defmodule MedFabric.Store.Postgres do
         {:ok, %{remote_ref: ref}} ->
           {ref, nil}
 
-        {:error, reason} ->
-          {nil, inspect(reason, limit: 3, printable_limit: 80) |> String.slice(0, 160)}
+        {:error, _reason} ->
+          {nil, "delivery_failed"}
       end
 
     case Postgrex.query(
@@ -161,13 +170,13 @@ defmodule MedFabric.Store.Postgres do
            """
            UPDATE exam_deliveries SET remote_ref=coalesce(remote_ref,$3), attempts=attempts+1,
              last_error=CASE WHEN remote_ref IS NULL THEN $4 ELSE NULL END
-           WHERE encounter_id=$1 AND acquisition_id=$2 AND (remote_ref IS NULL OR remote_ref=$3)
+           WHERE encounter_id=$1 AND acquisition_id=$2 AND (remote_ref IS NULL OR remote_ref=$3 OR $3 IS NULL)
            RETURNING remote_ref
            """,
            [enc, acq, remote, error]
          ) do
       {:ok, %{rows: [[nil]]}} -> result
-      {:ok, %{rows: [[^remote]]}} -> :ok
+      {:ok, %{rows: [[stored]]}} when remote == nil or remote == stored -> :ok
       {:ok, %{rows: []}} -> {:error, :delivery_state_changed}
       error -> error
     end

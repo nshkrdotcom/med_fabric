@@ -42,11 +42,18 @@ start_postgres() {
   done
   "$bin/initdb" --version | grep -Eq '^initdb \(PostgreSQL\) 18\.' ||
     die "Activate PostgreSQL 18 binaries."
+  if [[ -s "$state/pgdata/PG_VERSION" && ! -s "$state/pg.pass" ]]; then
+    die "Choose a fresh MF_SERVICE_STATE or supply DATABASE_URL for the existing cluster."
+  fi
   if [[ ! -s "$state/pgdata/PG_VERSION" ]]; then
-    "$bin/initdb" -D "$state/pgdata" --username=med_fabric --encoding=UTF8 --locale=C --auth=trust >>"$state/postgres.log" 2>&1 ||
+    openssl rand -hex 24 >"$state/pg.pass"
+    "$bin/initdb" -D "$state/pgdata" --username=med_fabric --encoding=UTF8 --locale=C --auth=scram-sha-256 --pwfile="$state/pg.pass" >>"$state/postgres.log" 2>&1 ||
       die "PostgreSQL initialization failed. See $state/postgres.log"
   fi
 
+  local password
+  password="$(cat "$state/pg.pass")"
+  native_db_url="postgresql://med_fabric:$password@127.0.0.1:$pg_port/med_fabric_dev"
   if ! "$bin/pg_ctl" -D "$state/pgdata" status >/dev/null; then
     "$bin/pg_ctl" -D "$state/pgdata" -l "$state/postgres.log" \
       -o "-h 127.0.0.1 -p $pg_port -k ''" -w start >&2 ||
@@ -54,7 +61,7 @@ start_postgres() {
   fi
 
   if ! "$bin/psql" -Xq "$native_db_url" -c 'SELECT 1' >/dev/null 2>&1; then
-    "$bin/createdb" --host=127.0.0.1 --port="$pg_port" --username=med_fabric med_fabric_dev
+    PGPASSWORD="$password" "$bin/createdb" --host=127.0.0.1 --port="$pg_port" --username=med_fabric med_fabric_dev
   fi
 }
 
@@ -155,7 +162,7 @@ print_env() {
 [[ $# == 1 ]] || die "Specify one service command"
 case "${1:-}" in
   start|postgres)
-    for tool in curl jq shasum tar; do
+    for tool in curl jq shasum tar openssl; do
       command -v "$tool" >/dev/null || die "Missing prerequisite: $tool"
     done
     validate_port "$pg_port"
@@ -184,6 +191,9 @@ case "${1:-}" in
     wait_hapi "$native_fhir_url"
     ;;
   env)
+    if [[ -z "${DATABASE_URL:-}" && -s "$state/pg.pass" ]]; then
+      native_db_url="postgresql://med_fabric:$(cat "$state/pg.pass")@127.0.0.1:$pg_port/med_fabric_dev"
+    fi
     print_env
     ;;
   stop)

@@ -120,10 +120,10 @@ defmodule MedFabric.Interop.FhirClient do
   defp confirmed(expected, %{"id" => id} = actual, identifier, created?)
        when is_binary(id) and byte_size(id) > 0 do
     fields = Map.drop(expected, ["identifier"])
-    remote_identifiers = Map.get(actual, "identifier", [])
+    remote_identifiers = List.wrap(actual["identifier"])
 
-    if matches?(fields, actual) and
-         Enum.any?(remote_identifiers, &(Map.take(&1, ["system", "value"]) == identifier)) do
+    if clinical_fields_match?(fields, actual) and
+         Enum.any?(remote_identifiers, &matches?(identifier, &1)) do
       {:ok,
        %{remote_ref: "#{actual["resourceType"]}/#{id}", resource: actual, created?: created?}}
     else
@@ -133,6 +133,19 @@ defmodule MedFabric.Interop.FhirClient do
 
   defp confirmed(_expected, _actual, _identifier, _created?),
     do: {:error, :unconfirmed_remote_record}
+
+  defp clinical_fields_match?(%{"resourceType" => "Observation"} = expected, actual) do
+    {components, fields} = Map.pop!(expected, "component")
+
+    matches?(fields, actual) and
+      Enum.sort(components) == Enum.sort(List.wrap(actual["component"])) and
+      Enum.all?(Map.keys(actual), fn key ->
+        not String.starts_with?(key, "value") and
+          key not in ["dataAbsentReason", "interpretation", "modifierExtension"]
+      end)
+  end
+
+  defp clinical_fields_match?(expected, actual), do: matches?(expected, actual)
 
   # HAPI can enrich reference objects and reorder repeated elements.
   defp matches?(expected, actual) when is_map(expected) and is_map(actual),

@@ -1,14 +1,24 @@
 defmodule MedFabric.Domain.Encounter do
   @moduledoc "Clinical recording intake and review rules."
 
-  def metadata(session, capture, source) do
-    {start_ms, end_ms} = capture.interval_ms
-
-    if Enum.all?([capture.file_sha256, capture.artifact_sha256], &digest?/1) and
+  def metadata(
+        session,
+        %{
+          interval_ms: {start_ms, end_ms},
+          file_sha256: _,
+          artifact_sha256: _,
+          sample_count: _,
+          sample_rate_hz: _,
+          continuity: _
+        } = capture,
+        source
+      ) do
+    if identity?(session) and identity?(source) and
+         Enum.all?([capture.file_sha256, capture.artifact_sha256], &digest?/1) and
          is_integer(start_ms) and start_ms >= 0 and is_integer(end_ms) and
          positive?(capture.sample_count) and positive?(capture.sample_rate_hz) and
          end_ms - start_ms == round(1000 * capture.sample_count / capture.sample_rate_hz) and
-         capture.continuity in [:observed_continuous, :observed_gap, :unknown] do
+         capture.continuity in [:observed_continuous, :unknown] do
       {:ok,
        %{
          "session_id" => session,
@@ -25,6 +35,10 @@ defmodule MedFabric.Domain.Encounter do
       {:error, :invalid_recording}
     end
   end
+
+  def metadata(_, _, _), do: {:error, :invalid_recording}
+
+  defp identity?(value), do: is_binary(value) and String.trim(value) != ""
 
   def review(%{"file_sha256" => digest}, digest, false), do: :ok
   def review(_, _, true), do: {:error, :conflicting_recording}

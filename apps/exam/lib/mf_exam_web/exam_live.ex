@@ -14,7 +14,13 @@ defmodule MedFabric.ExamWeb.ExamLive do
 
       {:ok,
        socket
-       |> assign(view: Exam.snapshot(Exam.lab()), encounter_id: id, token: token, error: nil)}
+       |> assign(
+         view: Exam.snapshot(Exam.lab()),
+         encounter_id: id,
+         token: token,
+         error: nil,
+         delivering: false
+       )}
     else
       {:ok, redirect(socket, to: "/")}
     end
@@ -29,22 +35,32 @@ defmodule MedFabric.ExamWeb.ExamLive do
   @impl true
   def handle_event("capture", _params, socket), do: result(socket, CaptureRunner.start())
 
-  def handle_event("deliver", _params, socket),
-    do: {:noreply, start_async(socket, :delivery, fn -> Exam.deliver(Exam.lab()) end)}
+  def handle_event("deliver", _params, %{assigns: %{delivering: true}} = socket),
+    do: {:noreply, socket}
+
+  def handle_event("deliver", _params, socket) do
+    socket = assign(socket, :delivering, true)
+    {:noreply, start_async(socket, :delivery, fn -> Exam.deliver(Exam.lab()) end)}
+  end
 
   def handle_event("accept", %{"digest" => digest}, socket) do
     result(socket, Exam.accept(Exam.lab(), digest))
   end
 
   @impl true
-  def handle_async(:delivery, {:ok, result}, socket), do: result(socket, result)
-  def handle_async(:delivery, {:exit, _}, socket), do: result(socket, {:error, :delivery_failed})
+  def handle_async(:delivery, {:ok, result}, socket),
+    do: result(assign(socket, :delivering, false), result)
+
+  def handle_async(:delivery, {:exit, _}, socket),
+    do: result(assign(socket, :delivering, false), {:error, :delivery_failed})
 
   defp result(socket, :ok),
     do: {:noreply, assign(socket, view: Exam.snapshot(Exam.lab()), error: nil)}
 
   defp result(socket, {:error, _reason}),
-    do: {:noreply, assign(socket, :error, "The action failed. Please retry.")}
+    do:
+      {:noreply,
+       assign(socket, view: Exam.snapshot(Exam.lab()), error: "The action failed. Please retry.")}
 
   @impl true
   def render(assigns) do
@@ -88,7 +104,8 @@ defmodule MedFabric.ExamWeb.ExamLive do
         <p id="observation-id">obs:{@encounter_id}:circor-1</p>
         <p id="outbox-status">{if @view.row.remote_ref, do: "delivered", else: "pending"}</p>
         <p id="remote-reference">{@view.row.remote_ref}</p>
-        <button id="deliver-recording" type="button" phx-click="deliver">Deliver to FHIR</button>
+        <p :if={@view.row.last_error && !@view.row.remote_ref} role="status">Delivery failed. Retry when ready.</p>
+        <button :if={!@view.row.remote_ref} disabled={@delivering} id="deliver-recording" type="button" phx-click="deliver">Deliver to FHIR</button>
       </section>
 
       <p :if={@error} role="alert">{@error}</p>

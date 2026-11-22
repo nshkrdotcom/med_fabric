@@ -51,11 +51,7 @@ curl -fsS --max-time 5 -H 'Accept: application/fhir+json' "${FHIR_BASE_URL%/}/me
   jq -e '.fhirVersion == "4.0.1"' >/dev/null
 
 
-(cd apps/exam && env -u MF_LAB mix run --no-start -e '
-  script = Application.app_dir(:med_ex, "priv/fixtures/prepare.sh")
-  {_, status} = System.cmd("bash", [script, System.fetch_env!("MF_FIXTURE_DIR")], into: IO.stream())
-  System.halt(status)
-')
+bash ops/fixtures/circor/prepare.sh "$MF_FIXTURE_DIR"
 
 export MF_REFS_FILE="$work/refs.json"
 (cd apps/exam && env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs)

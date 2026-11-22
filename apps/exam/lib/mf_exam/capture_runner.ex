@@ -23,7 +23,10 @@ defmodule MedFabric.Exam.CaptureRunner do
   end
 
   @impl true
-  def init(config), do: {:ok, %{config: config, task: nil, error: nil}}
+  def init(config) do
+    Process.flag(:trap_exit, true)
+    {:ok, %{config: config, task: nil, error: nil}}
+  end
 
   @impl true
   def handle_call(:status, _, state), do: {:reply, {state.task != nil, state.error}, state}
@@ -52,8 +55,16 @@ defmodule MedFabric.Exam.CaptureRunner do
     {:noreply, %{state | task: nil, error: result != :ok}}
   end
 
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{task: ref} = state) do
+    Exam.announce(state.config)
+    {:noreply, %{state | task: nil, error: true}}
+  end
+
+  def handle_info({:EXIT, _, _}, state), do: {:noreply, state}
+
   defp capture(config) do
     {enc, acq} = key = Exam.key(config)
+    generation = make_ref()
 
     with :ok <- File.mkdir_p(config.artifact_dir),
          {:ok, artifact} <-
@@ -66,7 +77,7 @@ defmodule MedFabric.Exam.CaptureRunner do
                Phoenix.PubSub.broadcast(
                  MedFabric.Exam.PubSub,
                  "preview:" <> enc,
-                 {:preview_frame, index, frame}
+                 {:preview_frame, generation, index, frame}
                )
              end
            ) do

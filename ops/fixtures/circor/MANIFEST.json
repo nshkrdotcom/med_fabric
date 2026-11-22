@@ -1,0 +1,21 @@
+{
+  "dataset": "The CirCor DigiScope Phonocardiogram Dataset (PhysioNet v1.0.3)",
+  "dataset_url": "https://physionet.org/content/circor-heart-sound/1.0.3/",
+  "license": "Open Data Commons Attribution License v1.0",
+  "citation": "Oliveira, J., Renna, F., Costa, P., Nogueira, M., Oliveira, A. C., Ferreira, C., Jorge, A., Mattos, S., Hatem, T., Tavares, T., Elola, A., Rad, A. B., Sameni, R., Clifford, G. D., & Coimbra, M. T. (2022). The CirCor DigiScope Phonocardiogram Dataset (version 1.0.3). PhysioNet.",
+  "fixtures": [
+    {
+      "file": "2530_AV.wav",
+      "source_url": "https://physionet.org/files/circor-heart-sound/1.0.3/training_data/2530_AV.wav",
+      "auscultation_location": "AV (Aortic Valve)",
+      "channels": 1,
+      "bits_per_sample": 16,
+      "sample_rate_hz": 4000,
+      "sample_count": 94400,
+      "duration_ms": 23600,
+      "pcm_byte_size": 188800,
+      "file_sha256": "493602122456932b91e62a694bd42f4d2c14f952804d17be85a1613f1ccd4e9f",
+      "pcm_sha256": "7c8c93ee4602072aa5c0e4c81a5a9e28d926b278f701218ea588bde9644efc66"
+    }
+  ]
+}

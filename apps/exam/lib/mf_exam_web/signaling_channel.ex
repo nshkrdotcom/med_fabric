@@ -16,8 +16,8 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
        assign(socket,
          peer: nil,
          subscribed: false,
-         epoch: System.monotonic_time(:millisecond),
-         last_tick: -1
+         sequence: 0,
+         media: nil
        )}
     else
       _ -> {:error, %{reason: "unauthorized_encounter"}}
@@ -51,17 +51,18 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
   end
 
   def handle_info(
-        {:preview_frame, _index, frame},
-        %{assigns: %{peer: %Preview{} = peer}} = socket
+        {:preview_frame, generation, index, frame},
+        %{assigns: %{peer: %Preview{} = peer, media: media, sequence: sequence}} = socket
       ) do
-    tick =
-      max(
-        socket.assigns.last_tick + 1,
-        div(System.monotonic_time(:millisecond) - socket.assigns.epoch, 20)
-      )
+    case media do
+      {^generation, previous, _tick} when index <= previous ->
+        {:noreply, socket}
 
-    Preview.send_opus(peer, frame, tick)
-    {:noreply, assign(socket, :last_tick, tick)}
+      _ ->
+        tick = media_tick(media, generation, index)
+        Preview.send_opus(peer, frame, sequence, tick)
+        {:noreply, assign(socket, sequence: sequence + 1, media: {generation, index, tick})}
+    end
   end
 
   def handle_info(
@@ -71,9 +72,13 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
       when state in [:failed, :closed],
       do: {:stop, :normal, socket}
 
-  def handle_info({:preview_frame, _, _}, socket), do: {:noreply, socket}
+  def handle_info({:preview_frame, _, _, _}, socket), do: {:noreply, socket}
 
   def handle_info({:ex_webrtc, _pid, _event}, socket), do: {:noreply, socket}
+
+  defp media_tick(nil, _generation, _index), do: 0
+  defp media_tick({generation, previous, tick}, generation, index), do: tick + index - previous
+  defp media_tick({_previous_generation, _previous, tick}, _generation, _index), do: tick + 1
 
   @impl true
   def terminate(_reason, socket) do
