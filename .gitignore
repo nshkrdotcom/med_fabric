@@ -1,0 +1,9 @@
+_build/
+deps/
+cover/
+doc/
+dist/
+.blitz/
+*.plt
+*.plt.hash
+erl_crash.dump
