@@ -13,9 +13,9 @@ defmodule MedFabric.Domain.Encounter do
         } = capture,
         source
       ) do
-    if identity?(session) and identity?(source) and
+    if valid_identity?(session, source) and
          Enum.all?([capture.file_sha256, capture.artifact_sha256], &digest?/1) and
-         is_integer(start_ms) and start_ms >= 0 and is_integer(end_ms) and
+         valid_interval?(start_ms, end_ms) and
          positive?(capture.sample_count) and positive?(capture.sample_rate_hz) and
          end_ms - start_ms == round(1000 * capture.sample_count / capture.sample_rate_hz) and
          capture.continuity in [:observed_continuous, :unknown] do
@@ -37,6 +37,11 @@ defmodule MedFabric.Domain.Encounter do
   end
 
   def metadata(_, _, _), do: {:error, :invalid_recording}
+
+  defp valid_identity?(session, source), do: identity?(session) and identity?(source)
+
+  defp valid_interval?(start_ms, end_ms),
+    do: is_integer(start_ms) and start_ms >= 0 and is_integer(end_ms)
 
   defp identity?(value), do: is_binary(value) and String.trim(value) != ""
 
