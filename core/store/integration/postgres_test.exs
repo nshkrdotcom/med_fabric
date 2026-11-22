@@ -1,124 +1,79 @@
 defmodule MedFabric.Store.PostgresTest do
-  use ExUnit.Case, async: false
-
-  alias MedFabric.Domain.Encounter
+  use ExUnit.Case
   alias MedFabric.Store.Postgres
 
-  setup do
+  @moduletag :tmp_dir
+  setup %{tmp_dir: dir} do
     url = System.fetch_env!("DATABASE_URL")
-    server = start_supervised!({Postgres, url: url, pool_size: 2})
-    assert :ok = Postgres.migrate(server)
+    db = start_supervised!({Postgres, url: url, pool_size: 3})
+    {:ok, :ok} = Postgres.migrate(db)
+    key = {"pg-" <> Base.encode16(:crypto.strong_rand_bytes(8)), "recording"}
+    pcm = <<123::little-16>>
 
-    encounter_id = "db-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+    wav =
+      <<"RIFF", 38::little-32, "WAVEfmt ", 16::little-32, 1::little-16, 1::little-16,
+        1000::little-32, 2000::little-32, 2::little-16, 16::little-16, "data", 2::little-32,
+        pcm::binary>>
 
-    {:ok, encounter} =
-      Encounter.new(encounter_id) |> Encounter.request_acquisition("acq", "session")
+    digest = fn bytes -> Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) end
 
-    encounter =
-      Encounter.apply_fact(
-        encounter,
-        {:capture_completed,
-         %{
-           encounter_ref: encounter_id,
-           acquisition_id: "acq",
-           session_id: "session",
-           artifact_sha256: "recording-digest",
-           interval_ms: {0, 1_000},
-           continuity: :observed_continuous
-         }}
-      )
-
-    {:ok, _updated, acceptance} =
-      Encounter.accept_acquisition(encounter, "acq", "recording-digest", "reviewer")
-
-    %{
-      url: url,
-      server: server,
-      acceptance: acceptance,
-      observation_id: acceptance.observation.observation_id,
-      provenance: %{
-        source_kind: "fixture",
-        source_ref: "clip.wav",
-        artifact_path: "/test/clip.wav"
-      }
+    a = %{
+      acquisition_id: "recording",
+      interval_ms: {0, 1},
+      artifact_sha256: digest.(pcm),
+      file_sha256: digest.(wav),
+      continuity: :observed_continuous,
+      sample_count: 1,
+      sample_rate_hz: 1000
     }
+
+    path = Path.join(dir, a.file_sha256 <> ".wav")
+    File.write!(path, wav)
+    assert :ok = Postgres.ready(db, key, "session", a, "source")
+    %{db: db, key: key, a: a, path: path, url: url}
   end
 
-  test "rolls back observation if provenance insert fails", ctx do
-    assert {:error, %Postgrex.Error{}} =
-             Postgres.commit_acceptance(ctx.server, ctx.acceptance, nil)
+  test "metadata conflict with identical PCM survives redelivery and blocks acceptance", c do
+    assert :ok = Postgres.ready(c.db, c.key, "session", c.a, "source")
 
-    assert row_counts(ctx) == [0, 0, 0]
+    assert {:error, :conflicting_recording} =
+             Postgres.ready(c.db, c.key, "session", %{c.a | continuity: :unknown}, "source")
 
-    assert {:ok, :committed, _} =
-             Postgres.commit_acceptance(ctx.server, ctx.acceptance, ctx.provenance)
-
-    assert row_counts(ctx) == [1, 1, 1]
+    assert {:error, :conflicting_recording} =
+             Postgres.accept(c.db, c.key, c.tmp_dir, c.a.file_sha256, "actor")
   end
 
-  test "concurrent requests and a lost reply preserve one committed record after reconnect",
-       ctx do
-    attempts =
-      for _ <- 1..2 do
-        Task.async(fn ->
-          Postgres.commit_acceptance(ctx.server, ctx.acceptance, ctx.provenance)
-        end)
+  test "changed artifact blocks acceptance and outbox creation", c do
+    File.write!(c.path, "changed")
+
+    assert {:error, :recording_changed} =
+             Postgres.accept(c.db, c.key, c.tmp_dir, c.a.file_sha256, "actor")
+
+    assert {:ok, %{accepted_by: nil}} = Postgres.fetch(c.db, c.key)
+
+    assert {:error, :delivery_state_changed} =
+             Postgres.delivery_result(c.db, c.key, {:ok, %{remote_ref: "Observation/1"}})
+  end
+
+  test "concurrent acceptance and manual retry preserve one decision and remote identity", c do
+    results =
+      for actor <- ["one", "two"] do
+        Task.async(fn -> Postgres.accept(c.db, c.key, c.tmp_dir, c.a.file_sha256, actor) end)
       end
 
-    assert [
-             {:ok, :already_committed, record},
-             {:ok, :committed, record}
-           ] = attempts |> Task.await_many() |> Enum.sort()
+    assert [{:ok, :ok}, {:ok, :ok}] = Task.await_many(results)
+    assert {:error, :timeout} = Postgres.delivery_result(c.db, c.key, {:error, :timeout})
+    assert :ok = Postgres.delivery_result(c.db, c.key, {:ok, %{remote_ref: "Observation/1"}})
 
-    assert row_counts(ctx) == [1, 1, 1]
+    assert {:error, :delivery_state_changed} =
+             Postgres.delivery_result(c.db, c.key, {:ok, %{remote_ref: "Observation/2"}})
+
     stop_supervised!(Postgres)
-    reopened = start_supervised!({Postgres, url: ctx.url})
-    assert {:ok, ^record} = Postgres.fetch_record(reopened, ctx.observation_id)
+    db = start_supervised!({Postgres, url: c.url})
 
-    assert {:ok, :already_committed, ^record} =
-             Postgres.commit_acceptance(reopened, ctx.acceptance, ctx.provenance)
+    assert {:ok, %{accepted_by: actor, remote_ref: "Observation/1", last_error: nil}} =
+             Postgres.fetch(db, c.key)
 
-    assert record.provenance.artifact_path == "/test/clip.wav"
-  end
-
-  test "delivered is terminal and a different digest cannot replace acceptance", ctx do
-    assert {:ok, :committed, record} =
-             Postgres.commit_acceptance(ctx.server, ctx.acceptance, ctx.provenance)
-
-    intent_id = record.outbox.intent_id
-
-    assert {:ok, %{status: :retry_scheduled}} =
-             Postgres.mark_delivery_failed(ctx.server, intent_id, :timeout, 4_000)
-
-    assert {:ok, %{status: :delivered, attempts: 2, next_retry_at_ms: nil} = delivered} =
-             Postgres.mark_delivered(ctx.server, intent_id, "Observation/1")
-
-    assert {:ok, ^delivered} = Postgres.mark_delivered(ctx.server, intent_id, "Observation/1")
-
-    assert {:ok, ^delivered} =
-             Postgres.mark_delivery_failed(ctx.server, intent_id, :late_failure, 5_000)
-
-    conflicting =
-      ctx.acceptance
-      |> put_in([:observation, :artifact_sha256], "another-digest")
-      |> put_in([:export_intent, :artifact_sha256], "another-digest")
-
-    assert {:error, :conflicting_observation} =
-             Postgres.commit_acceptance(ctx.server, conflicting, ctx.provenance)
-  end
-
-  defp row_counts(ctx) do
-    %{rows: [counts]} =
-      Postgrex.query!(
-        ctx.server,
-        """
-        SELECT (SELECT count(*) FROM accepted_observations WHERE observation_id = $1),
-               (SELECT count(*) FROM artifact_provenance WHERE observation_id = $1),
-               (SELECT count(*) FROM fhir_export_outbox WHERE observation_id = $1)
-        """,
-        [ctx.observation_id]
-      )
-
-    counts
+    assert actor in ["one", "two"]
   end
 end
