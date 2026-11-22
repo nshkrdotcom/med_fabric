@@ -22,6 +22,15 @@ defmodule MedFabric.Workspace.MixProject do
         root: __DIR__,
         projects: Path.wildcard("{apps,core}/*/mix.exs") |> Enum.map(&Path.dirname/1),
         isolation: [deps_path: true, build_path: true, lockfile: true],
+        parallelism: [
+          multiplier: :auto,
+          base: [
+            deps_get: 4,
+            test: 4,
+            quality: 4
+          ],
+          overrides: []
+        ],
         tasks: [
           deps_get: [args: ["deps.get"], preflight?: false],
           test: [args: ["test"], mix_env: :test],
