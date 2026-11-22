@@ -63,7 +63,7 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
 
       _ ->
         tick = media_tick(media, generation, index)
-        send_preview(peer, frame, sequence, tick)
+        Preview.send_opus(peer, frame, sequence, tick)
         {:noreply, assign(socket, sequence: sequence + 1, media: {generation, index, tick})}
     end
   end
@@ -78,14 +78,6 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
   def handle_info({:preview_frame, _, _, _}, socket), do: {:noreply, socket}
 
   def handle_info({:ex_webrtc, _pid, _event}, socket), do: {:noreply, socket}
-
-  defp send_preview(peer, frame, sequence, tick) do
-    if function_exported?(Preview, :send_opus, 4) do
-      apply(Preview, :send_opus, [peer, frame, sequence, tick])
-    else
-      Preview.send_opus(peer, frame, tick)
-    end
-  end
 
   defp media_tick(nil, _generation, _index), do: 0
   defp media_tick({generation, previous, tick}, generation, index), do: tick + index - previous
