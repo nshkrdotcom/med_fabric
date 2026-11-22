@@ -7,18 +7,52 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
 </p>
 
-## Planned responsibility
+`mf_interop` is the single authoritative healthcare record exchange package across both `med_fabric` and `med_ex`. It maps accepted observations into HL7 FHIR R4 `Observation` resources and delivers them idempotently over HTTP using `Req`.
 
-Single authoritative healthcare exchange plane across `med_fabric` and `med_ex`. Maps committed observations to HL7 FHIR resources at export time, preserving units, timestamps, provenance, and artifact continuity metadata. Uses stable identifiers so `mf_store` outbox retries safely reconcile remote FHIR records.
+---
 
-DICOM/DICOMweb export is intentionally deferred as a future `mf_interop` adapter until an imaging product requires it.
+## What This Owns (and Does Not Own)
 
-## Direct workspace dependencies
+**`mf_interop` owns:**
+- `MedFabric.Interop.FhirClient.build_observation/4` — Builds an HL7 FHIR R4 `Observation` JSON map carrying a stable business `identifier`, synthetic `subject` (`Patient/...`) kept strictly separate from public recording provenance (`note`), `encounter` reference, `artifact_sha256`, and `continuity`.
+- `MedFabric.Interop.FhirClient.deliver/2` — Delivers the `Observation` with FHIR conditional create (`If-None-Exist: identifier=<system>|<value>`) so retrying after a lost HTTP response never creates duplicate remote resources.
+- `MedFabric.Interop.FhirClient.fetch_by_identifier/2` — Reads back matching `Observation` resources from the FHIR server by stable business identifier.
 
-[domain](../domain/README.md)
+**`mf_interop` does not own:**
+- Clinical acceptance logic (`core/domain`) or outbox state persistence (`core/store`). DICOM/DICOMweb export is deferred until an imaging product requires it.
 
-## First acceptance scenario
+---
 
-Exercise failed FHIR delivery and idempotent outbox replay against a test endpoint.
+## Walkthrough
 
-[Workspace plan](../../README.md)
+In `test/mf_interop_test.exs`, an offline `Req` adapter simulates HAPI FHIR R4:
+1. First `POST /fhir/Observation` writes `Observation/hapi-1` on the server, then drops the HTTP response in flight.
+2. Second `POST /fhir/Observation` sends the identical `If-None-Exist` conditional create header and receives `200 OK` returning `Observation/hapi-1` (`created?: false`) without duplicating the remote resource.
+3. `fetch_by_identifier/2` confirms exactly 1 remote FHIR R4 `Observation` exists.
+
+Against a live HAPI FHIR R4 server (`docker compose -f ops/compose.yml up -d`), omit `:adapter` and pass `base_url: "http://localhost:8080/fhir"`.
+
+---
+
+## Commands & Verification
+
+```bash
+cd core/interop
+mix test
+mix credo --strict
+mix dialyzer --force-check
+```
+
+## Upstream References
+
+- Req: https://github.com/wojtekmach/req
+- HAPI FHIR JPA Server: https://github.com/hapifhir/hapi-fhir-jpaserver-starter
+- HL7 FHIR R4 Observation: https://hl7.org/fhir/R4/observation.html
+
+## Related Packages
+
+- [Med Fabric Workspace](../../README.md)
+- [Domain](../domain/README.md)
+- [Runtime](../runtime/README.md)
+- [Store](../store/README.md)
+- [Exam App](../../apps/exam/README.md)

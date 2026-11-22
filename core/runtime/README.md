@@ -7,16 +7,31 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
 </p>
 
-## Planned responsibility
+`mf_runtime` is the encounter workflow execution boundary in [Med Fabric](../../README.md). It depends only on [`mf_domain`](../domain/README.md) with zero database or Phoenix dependencies.
 
-Supervise one workflow per active encounter. Load durable history on restart, pass commands to the domain and hand committed intents to interpreters. Keep retry identifiers stable across restarts.
+---
 
-## Direct workspace dependencies
+## What This Owns (and Current Scope)
 
-[domain](../domain/README.md)
+**Intentionally minimal today**: Currently `MedFabric.Exam`, `MedFabric.ExamWeb.ExamLive`, and `MedFabric.Store.OutboxStore` handle encounter commands and atomic acceptance directly without needing a separate long-lived encounter `GenServer`.
 
-## First acceptance scenario
+Per the architecture rule—*add a long-lived encounter process only when a workflow needs multi-actor coordination that a supervised request/LiveView + transactional store cannot provide*—`mf_runtime` stays a clean package boundary until durable multi-process encounter recovery or background outbox worker supervision earns its keep.
 
-Recover an interrupted acquisition from committed events and reconcile outstanding effects.
+---
 
-[Workspace plan](../../README.md)
+## Commands & Verification
+
+```bash
+cd core/runtime
+mix test
+mix credo --strict
+mix dialyzer --force-check
+```
+
+## Related Packages
+
+- [Med Fabric Workspace](../../README.md)
+- [Domain](../domain/README.md)
+- [Store](../store/README.md)
+- [Interop](../interop/README.md)
+- [Exam App](../../apps/exam/README.md)
