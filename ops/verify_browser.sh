@@ -8,6 +8,9 @@ for tool in mix node uv openssl curl psql jq; do
 done
 [[ -d ops/browser/node_modules/playwright ]] || { echo "Run ./onboard.sh --integration." >&2; exit 1; }
 
+mode="${1:-}"
+[[ -z "$mode" || "$mode" == "--release" ]] || { echo "Usage: $0 [--release]" >&2; exit 1; }
+
 mkdir -p _build
 work="$(mktemp -d "$PWD/_build/browser.XXXXXXXX")"
 export MF_EXAM_ID="exam-$(openssl rand -hex 8)"
@@ -47,8 +50,17 @@ curl -fsS --max-time 5 -H 'Accept: application/fhir+json' "${FHIR_BASE_URL%/}/me
 
 bash apps/exam/deps/med_ex/priv/fixtures/prepare.sh "$MF_FIXTURE_DIR"
 
+if [[ "$mode" == "--release" ]]; then
+  (cd apps/exam && env -u MF_LAB MIX_ENV=prod mix release --overwrite) >"$work/release.log" 2>&1 ||
+    { cat "$work/release.log" >&2; exit 1; }
+fi
+
 start_exam() {
-  (cd apps/exam && exec mix run --no-halt) >>"$work/exam.log" 2>&1 &
+  if [[ "$mode" == "--release" ]]; then
+    (cd apps/exam && exec _build/prod/rel/mf_exam/bin/mf_exam start) >>"$work/exam.log" 2>&1 &
+  else
+    (cd apps/exam && exec mix run --no-halt) >>"$work/exam.log" 2>&1 &
+  fi
   pid=$!
   for ((attempt=0; attempt<120; attempt++)); do
     if [[ "$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$MF_HTTP_PORT/encounters/$MF_EXAM_ID" 2>/dev/null || true)" == 403 ]]; then
