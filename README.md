@@ -51,7 +51,7 @@ Blitz installs child dependencies with `mix setup`, fans out ExUnit with `mix te
 
 ## Proposed composition with MedEx
 
-MedEx and Med Fabric can ship independently while sharing individual OTP applications. The first consumer is the connected exam. It needs the same stream profiles, browser media hooks and WebRTC session implementation as PulseScope. This proposal assigns one maintainer and one implementation to each shared responsibility.
+MedEx and Med Fabric can ship independently while sharing individual OTP applications. The first consumer is the connected exam. It uses the shared stream profiles, browser media hooks and WebRTC session implementation. This proposal assigns one maintainer and one implementation to each shared responsibility.
 
 | Responsibility | Proposed home | Consumer contract |
 | --- | --- | --- |
@@ -60,14 +60,14 @@ MedEx and Med Fabric can ship independently while sharing individual OTP applica
 | Browser tracks, signaling hooks and connection indicators | MedEx `med_web` | `mf_web` supplies the encounter workflow, review views and clinical authorization. |
 | Device acquisition, durable encounter history, accepted observations and export | Med Fabric `mf_devices`, `mf_domain`, `mf_runtime`, `mf_store`, `mf_interop` | Persist an accepted observation and its export intent together. Give FHIR delivery one implementation here. |
 | Recorded signal review | Med Fabric `mf_media` | Associate acquired artifacts and gaps with clinical provenance. Consume integrity results from MedEx. |
-| Inference and biosignal integrations | MedEx `med_adapters` | PulseScope selects adapters through its product profile. |
-| End-user workflows | Med Fabric exam and MedEx PulseScope | Exercise auscultation inside the exam via a profile. Keep the current `apps/steth` skeleton as a composition example until a separate product workflow emerges. |
+| Inference and biosignal integrations | MedEx `med_adapters` | Product profiles select adapters. |
+| End-user workflows | Med Fabric exam and MedEx products | Exercise auscultation inside the exam via a profile. Keep the current `apps/steth` skeleton as a composition example until a separate product workflow emerges. |
 
 The clinical encounter ID spans acquisitions and reconnects. Med Fabric owns its lifecycle. MedEx owns a live session's participants, transport and signal state. Correlate session ID, acquisition ID and encounter ID explicitly. A peer reconnect can create a new session while acquisition continues on the device. A stream event may update the UI immediately. Accepting an observation requires a separate clinical decision.
 
 ### Mix dependency boundaries
 
-Start with a single downward edge from `mf_rtc` to `med_core` to exercise a real stream profile, then add `med_rtc` for the first call. Add `med_web` at the UI boundary when the shared browser hook exists. The pure `mf_domain` continues to work independently. Keep the initial repository dependency direction from Med Fabric into MedEx. If PulseScope later needs durable observations, first evaluate composing it in a product host that consumes both libraries. A reverse dependency between core packages would complicate independent releases.
+Start with a single downward edge from `mf_rtc` to `med_core` to exercise a real stream profile, then add `med_rtc` for the first call. Add `med_web` at the UI boundary when the shared browser hook exists. The pure `mf_domain` continues to work independently. Keep the initial repository dependency direction from Med Fabric into MedEx. If a MedEx product later needs durable observations, first evaluate composing it in a product host that consumes both libraries. A reverse dependency between core packages would complicate independent releases.
 
 From `med_fabric/core/rtc/mix.exs`, the local development tuple for the first edge is:
 
