@@ -93,7 +93,8 @@ defmodule MedFabric.Interop.FhirClientTest do
   end
 
   test "lost HTTP response after remote write followed by conditional-create retry produces exactly one FHIR Observation" do
-    {:ok, enc} = Encounter.new("enc_fhir_1") |> Encounter.request_acquisition("acq_1")
+    {:ok, enc} =
+      Encounter.new("enc_fhir_1") |> Encounter.request_acquisition("acq_1", "sess_fhir_1")
 
     enc =
       Encounter.apply_fact(
@@ -101,6 +102,7 @@ defmodule MedFabric.Interop.FhirClientTest do
         {:capture_completed,
          %{
            acquisition_id: "acq_1",
+           encounter_ref: "enc_fhir_1",
            session_id: "sess_fhir_1",
            artifact_sha256: "7c8c93ee4602072aa5c0e4c81a5a9e28d926b278f701218ea588bde9644efc66",
            interval_ms: {200, 23_800},
@@ -125,7 +127,10 @@ defmodule MedFabric.Interop.FhirClientTest do
     }
 
     resource =
-      FhirClient.build_observation(obs, outbox, provenance, patient_ref: "Patient/synth-001")
+      FhirClient.build_observation(obs, outbox, provenance,
+        patient_ref: "Patient/synth-001",
+        encounter_ref: "Encounter/synth-001"
+      )
 
     assert resource["subject"] == %{"reference" => "Patient/synth-001"}
     assert hd(resource["note"])["text"] =~ "physionet_circor:2530_AV.wav"

@@ -5,7 +5,7 @@ defmodule MedFabric.Interop.MixProject do
     [
       app: :mf_interop,
       version: "0.1.0",
-      elixir: "~> 1.18",
+      elixir: "~> 1.20",
       description: "Healthcare record exchange",
       dialyzer: [plt_add_apps: [:mix]],
       aliases: [quality: ["credo --strict", "dialyzer --force-check"]],

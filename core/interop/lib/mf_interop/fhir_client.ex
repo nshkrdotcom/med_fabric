@@ -1,68 +1,38 @@
 defmodule MedFabric.Interop.FhirClient do
   @moduledoc """
-  HL7 FHIR R4 `Observation` projection and idempotent delivery client.
+  Exports a reviewed recording to FHIR R4 using conditional create by identifier.
 
-  Uses a stable business identifier (`system|value`) together with FHIR
-  conditional create (`If-None-Exist`) so retrying after a lost HTTP response
-  or transient failure never creates duplicate remote `Observation` resources
-  on a HAPI FHIR R4 server.
-
-  Keeps synthetic patient references strictly separate from recording dataset
-  provenance (stored under `note` / `meta.tag`).
+  The test server receives synthetic clinical references. Fixture origin and
+  continuity describe the reviewed artifact independently of those references.
   """
 
-  @identifier_system "urn:med_fabric:observation"
-  @default_base_url "http://localhost:8080/fhir"
+  @identifier_system "urn:med-fabric:observation"
+  @fixture_system "urn:med-fabric:fixture"
+  @default_base_url "http://127.0.0.1:18080/fhir"
+  @headers [{"content-type", "application/fhir+json"}, {"accept", "application/fhir+json"}]
 
-  @type delivery_result ::
-          {:ok, %{remote_ref: String.t(), resource: map(), created?: boolean()}}
-          | {:error, term()}
-
-  @doc """
-  Builds an HL7 FHIR R4 `Observation` JSON map from an accepted observation,
-  outbox entry, and recording provenance.
-
-  Options:
-  - `:patient_ref` (required synthetic patient ref, e.g. `"Patient/synth-001"`)
-  """
   @spec build_observation(map(), map(), map(), keyword()) :: map()
-  def build_observation(observation, outbox, provenance, opts)
-      when is_map(observation) and is_map(outbox) and is_map(provenance) do
+  def build_observation(observation, outbox, provenance, opts) do
     patient_ref = Keyword.fetch!(opts, :patient_ref)
+    encounter_ref = Keyword.fetch!(opts, :encounter_ref)
     {start_ms, end_ms} = observation.interval_ms
 
     %{
       "resourceType" => "Observation",
-      "identifier" => [
-        %{
-          "system" => @identifier_system,
-          "value" => outbox.external_id
-        }
-      ],
+      "identifier" => identifier(@identifier_system, outbox.external_id),
       "status" => "final",
-      "category" => [
-        %{
-          "coding" => [
-            %{
-              "system" => "http://terminology.hl7.org/CodeSystem/observation-category",
-              "code" => "exam",
-              "display" => "Exam"
-            }
-          ]
-        }
-      ],
       "code" => %{
         "coding" => [
           %{
-            "system" => "http://loinc.org",
-            "code" => "8867-4",
-            "display" => "Heart auscultation recording"
+            "system" => "https://med-fabric.local/fhir/CodeSystem/exam-observation",
+            "code" => "reviewed-auscultation-recording",
+            "display" => "Reviewed auscultation recording"
           }
         ],
-        "text" => "Clinical auscultation acquisition #{observation.acquisition_id}"
+        "text" => "Reviewed auscultation recording"
       },
       "subject" => %{"reference" => patient_ref},
-      "encounter" => %{"reference" => "Encounter/#{observation.encounter_id}"},
+      "encounter" => %{"reference" => encounter_ref},
       "performer" => [%{"display" => observation.accepted_by}],
       "valueString" =>
         "sha256:#{observation.artifact_sha256} continuity:#{observation.continuity}",
@@ -78,92 +48,120 @@ defmodule MedFabric.Interop.FhirClient do
     }
   end
 
-  @doc """
-  Delivers a FHIR R4 `Observation` using conditional create (`If-None-Exist`)
-  keyed on the stable business identifier.
+  @doc "Seeds a synthetic patient and encounter using stable identifiers on the receiving server."
+  @spec seed_exam(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def seed_exam(fixture_id, opts \\ []) do
+    patient = %{
+      "resourceType" => "Patient",
+      "identifier" => identifier(@fixture_system, fixture_id),
+      "active" => true,
+      "name" => [%{"family" => "Fixture", "given" => ["Exam"]}]
+    }
 
-  Options:
-  - `:base_url` (default `"http://localhost:8080/fhir"`)
-  - `:adapter` (optional `Req` adapter function for offline tests; defaults to Finch)
-  """
-  @spec deliver(map(), keyword()) :: delivery_result()
+    with {:ok, %{remote_ref: patient_ref}} <- conditional_create(patient, opts) do
+      encounter = %{
+        "resourceType" => "Encounter",
+        "identifier" => identifier(@fixture_system, fixture_id),
+        "status" => "finished",
+        "class" => %{
+          "system" => "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+          "code" => "AMB"
+        },
+        "subject" => %{"reference" => patient_ref}
+      }
+
+      with {:ok, %{remote_ref: encounter_ref}} <- conditional_create(encounter, opts) do
+        {:ok, %{patient_ref: patient_ref, encounter_ref: encounter_ref}}
+      end
+    end
+  end
+
+  @spec deliver(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def deliver(%{"resourceType" => "Observation"} = resource, opts \\ []) do
-    [%{"system" => system, "value" => value} | _] = Map.fetch!(resource, "identifier")
-    if_none_exist = "identifier=#{URI.encode_www_form("#{system}|#{value}")}"
-
-    req =
-      build_request(opts)
-      |> Req.merge(
-        method: :post,
-        url: "/Observation",
-        headers: [
-          {"content-type", "application/fhir+json"},
-          {"accept", "application/fhir+json"},
-          {"if-none-exist", if_none_exist}
-        ],
-        json: resource,
-        retry: false
-      )
-
-    case Req.request(req) do
-      {:ok, %Req.Response{status: status, body: %{"id" => id} = body}}
-      when status in [200, 201] ->
-        {:ok, %{remote_ref: "Observation/#{id}", resource: body, created?: status == 201}}
-
-      {:ok, %Req.Response{status: status, body: body}} ->
-        {:error, {:http_error, status, body}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    conditional_create(resource, opts)
   end
 
-  @doc """
-  Reads back matching `Observation` resources from the FHIR server by stable
-  business identifier.
-  """
   @spec fetch_by_identifier(String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
-  def fetch_by_identifier(external_id, opts \\ []) when is_binary(external_id) do
-    req =
-      build_request(opts)
-      |> Req.merge(
-        method: :get,
-        url: "/Observation",
-        params: [identifier: "#{@identifier_system}|#{external_id}"],
-        headers: [{"accept", "application/fhir+json"}],
-        retry: false
-      )
+  def fetch_by_identifier(external_id, opts \\ []) do
+    search("Observation", @identifier_system, external_id, opts)
+  end
 
-    case Req.request(req) do
-      {:ok, %Req.Response{status: 200, body: %{"resourceType" => "Bundle"} = bundle}} ->
-        entries =
-          bundle
-          |> Map.get("entry", [])
-          |> Enum.map(&Map.fetch!(&1, "resource"))
+  defp conditional_create(%{"resourceType" => type, "identifier" => [first | _]} = resource, opts) do
+    %{"system" => system, "value" => value} = first
+    condition = URI.encode_query(identifier: "#{system}|#{value}")
 
-        {:ok, entries}
+    case request(opts,
+           method: :post,
+           url: "/#{type}",
+           headers: [{"if-none-exist", condition}, {"prefer", "return=representation"} | @headers],
+           json: resource
+         ) do
+      {:ok, %{status: status, body: %{"id" => _} = remote}} when status in [200, 201] ->
+        confirmed(resource, remote, first, status == 201)
 
-      {:ok, %Req.Response{status: status, body: body}} ->
-        {:error, {:http_error, status, body}}
+      {:ok, %{status: status}} when status in [200, 201] ->
+        with {:ok, [remote]} <- search(type, system, value, opts) do
+          confirmed(resource, remote, first, status == 201)
+        else
+          {:ok, _} -> {:error, :unconfirmed_remote_record}
+          {:error, _} = error -> error
+        end
 
-      {:error, reason} ->
-        {:error, reason}
+      result ->
+        response_error(result)
     end
   end
 
-  defp build_request(opts) do
-    base_url = Keyword.get(opts, :base_url, @default_base_url)
+  defp confirmed(expected, %{"id" => id} = actual, identifier, created?)
+       when is_binary(id) and byte_size(id) > 0 do
+    identity = ["resourceType", "subject", "encounter", "valueString"]
+    remote_identifiers = Map.get(actual, "identifier", [])
 
-    req =
-      [base_url: base_url]
-      |> maybe_put(:adapter, Keyword.get(opts, :adapter))
-      |> Req.new()
-
-    opts
-    |> Keyword.get(:private, %{})
-    |> Enum.reduce(req, fn {k, v}, acc -> Req.Request.put_private(acc, k, v) end)
+    if Map.take(expected, identity) == Map.take(actual, identity) and
+         Enum.any?(remote_identifiers, &(Map.take(&1, ["system", "value"]) == identifier)) do
+      {:ok,
+       %{remote_ref: "#{actual["resourceType"]}/#{id}", resource: actual, created?: created?}}
+    else
+      {:error, :conflicting_remote_record}
+    end
   end
 
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
+  defp confirmed(_expected, _actual, _identifier, _created?),
+    do: {:error, :unconfirmed_remote_record}
+
+  defp search(type, system, value, opts) do
+    case request(opts,
+           method: :get,
+           url: "/#{type}",
+           params: [identifier: "#{system}|#{value}"],
+           headers: @headers
+         ) do
+      {:ok, %{status: 200, body: %{"resourceType" => "Bundle"} = bundle}} ->
+        {:ok, Enum.map(Map.get(bundle, "entry", []), &Map.fetch!(&1, "resource"))}
+
+      result ->
+        response_error(result)
+    end
+  end
+
+  defp request(opts, request_opts) do
+    defaults = [base_url: Keyword.get(opts, :base_url, @default_base_url), retry: false]
+    defaults = Keyword.merge(defaults, Keyword.take(opts, [:adapter, :receive_timeout]))
+
+    defaults
+    |> Req.new()
+    |> then(fn req ->
+      Enum.reduce(Keyword.get(opts, :private, %{}), req, fn {key, value}, request ->
+        Req.Request.put_private(request, key, value)
+      end)
+    end)
+    |> Req.request(request_opts)
+  end
+
+  defp response_error({:ok, %{status: status, body: body}}),
+    do: {:error, {:http_error, status, body}}
+
+  defp response_error({:error, _} = error), do: error
+
+  defp identifier(system, value), do: [%{"system" => system, "value" => value}]
 end
