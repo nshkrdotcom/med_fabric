@@ -9,7 +9,7 @@
 
 ## Planned responsibility
 
-Compose a patient and clinician encounter, establish a call, request a measurement and display its quality for review. Commit the accepted observation before dispatching an export. Begin with a simulated device.
+Compose a patient and clinician encounter, declare a `MedCore.Profile` stream plan, establish a real WebRTC session via `med_ex` (`mf_rtc`), request a simulated device acquisition, reconcile preview disconnects against recording continuity, and commit the clinician-accepted observation with its FHIR export intent in one transaction.
 
 ## Direct workspace dependencies
 
@@ -17,6 +17,6 @@ Compose a patient and clinician encounter, establish a call, request a measureme
 
 ## First acceptance scenario
 
-Follow one measurement from request through clinician review and a retried FHIR export.
+Run a two-browser call with a simulated acquisition, drop and reconnect the clinician preview mid-capture, deduplicate a repeated completion notification, review the intact recording, and verify a retried FHIR export.
 
 [Workspace plan](../../README.md)

@@ -16,7 +16,7 @@ defmodule MedFabric.Workspace.MixProject do
       aliases: [
         setup: ["blitz.workspace deps_get --"],
         test: ["blitz.workspace test --"],
-        quality: ["credo --strict", "dialyzer", "blitz.workspace quality --"]
+        quality: ["blitz.workspace quality --"]
       ],
       blitz_workspace: [
         root: __DIR__,

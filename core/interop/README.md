@@ -9,7 +9,9 @@
 
 ## Planned responsibility
 
-Map committed observations to FHIR resources at export time. Preserve units, timestamps and provenance. Use stable identifiers so that an outbox retry can reconcile the remote record.
+Single authoritative healthcare exchange plane across `med_fabric` and `med_ex`. Maps committed observations to HL7 FHIR resources at export time, preserving units, timestamps, provenance, and artifact continuity metadata. Uses stable identifiers so `mf_store` outbox retries safely reconcile remote FHIR records.
+
+DICOM/DICOMweb export is intentionally deferred as a future `mf_interop` adapter until an imaging product requires it.
 
 ## Direct workspace dependencies
 
@@ -17,6 +19,6 @@ Map committed observations to FHIR resources at export time. Preserve units, tim
 
 ## First acceptance scenario
 
-Exercise failed delivery and replay against a test endpoint.
+Exercise failed FHIR delivery and idempotent outbox replay against a test endpoint.
 
 [Workspace plan](../../README.md)

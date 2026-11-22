@@ -1,6 +1,6 @@
-<p align="center"><img src="assets/steth.svg" width="200" alt="Remote digital stethoscope" /></p>
+<p align="center"><img src="assets/steth.svg" width="200" alt="Digital stethoscope composition example" /></p>
 
-<h1 align="center">Remote digital stethoscope</h1>
+<h1 align="center">Digital stethoscope composition example</h1>
 
 <p align="center">
   <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
@@ -9,7 +9,7 @@
 
 ## Planned responsibility
 
-Compose guided auscultation with a live listening preview and a separate lossless acquisition. Link recording position, quality flags and clinician annotations to the encounter.
+Lightweight composition example showing how an encounter workflow consumes guided auscultation (live preview + independent lossless capture from `med_ex`) and attaches recording position, continuity verdicts, and clinician annotations via `mf_media` and `mf_store`. Standalone digital stethoscope + RPM product work lives in `med_ex`'s `apps/med_pulse`.
 
 ## Direct workspace dependencies
 
@@ -17,6 +17,6 @@ Compose guided auscultation with a live listening preview and a separate lossles
 
 ## First acceptance scenario
 
-Interrupt the preview and verify that the acquisition retains its own continuity and quality record.
+Interrupt the live preview during guided auscultation and verify that the finalized recording artifact retains its own continuity record in `mf_media` for clinician review.
 
 [Workspace plan](../../README.md)

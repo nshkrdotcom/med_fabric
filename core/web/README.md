@@ -9,7 +9,7 @@
 
 ## Planned responsibility
 
-Define reusable encounter, device-status and acquisition views. LiveView presents workflow state while browser hooks own media tracks across view updates. Product applications supply routing and authorization.
+Define reusable encounter workflow, clinical review, and observation acceptance views. Composes live WebRTC signaling hooks, WebAudio worklets, and signal integrity badges from `med_ex`'s `med_web` once built, while owning encounter routing, clinical authorization, and review acceptance controls.
 
 ## Direct workspace dependencies
 
@@ -17,6 +17,6 @@ Define reusable encounter, device-status and acquisition views. LiveView present
 
 ## First acceptance scenario
 
-Reconnecting the control view reconciles the session without duplicating a stream.
+Reconnecting the clinician browser rejoins the existing `session_id` on a new `connection_id`, surfaces the live-preview interruption separately from recording continuity, and presents one deduplicated acquisition for review.
 
 [Workspace plan](../../README.md)

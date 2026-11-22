@@ -6,7 +6,7 @@ defmodule MedFabric.Media.MixProject do
       app: :mf_media,
       version: "0.1.0",
       elixir: "~> 1.18",
-      description: "Signal profiles and recording",
+      description: "Clinical artifact provenance and recorded signal review indexing",
       dialyzer: [plt_add_apps: [:mix]],
       aliases: [quality: ["credo --strict", "dialyzer"]],
       deps: [
