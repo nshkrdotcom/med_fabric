@@ -23,6 +23,17 @@ The exam supervisor starts PubSub, Postgrex, a capture runner, and the Phoenix e
 3. Run `./onboard.sh --integration` from Fabric. The browser installation needs Chromium host libraries. If missing, run `ops/browser/node_modules/.bin/playwright install-deps chromium` with appropriate system privileges and retry. `./onboard.sh` alone prepares ordinary Mix checks.
 4. Run `ops/verify_browser.sh`. It starts disposable local PostgreSQL 18 and JVM HAPI if service URLs are absent. To reuse dedicated test services, export both `DATABASE_URL` and `FHIR_BASE_URL`; they must be safe for synthetic test data. Service ports default to 15432 and 18080, with `MF_POSTGRES_PORT` and `MF_HAPI_PORT` overrides. `MF_HTTP_PORT` defaults to 14000. It prepares the pinned SDK's fixture, starts the normal exam process, proves real browser audio before and after preview replacement, verifies the artifact hash, restarts the exam before acceptance, verifies the recovered WAV, delivers once, then restarts the exam and its owned file-backed HAPI receiver for independent read-back. It records its run directory under `_build`. Use `ops/verify_browser.sh --release` to exercise the assembled Mix release through the same browser check.
 
+## Workspace-local SDK check
+
+Run `./onboard.sh --integration` in Fabric and `mix weld.project` in MedEx first. Use the medical workspace registry and fetch the exam dependencies inside the same MWO context that runs the browser.
+
+```sh
+mix_workspace_ops run --project med_fabric.mf_exam --mode local \
+  --registry "$HOME/.config/mix_workspace_ops/medical/registry.json" \
+  --checkout-root .. --timeout 12m -- \
+  bash -c 'set -e; mix deps.get; exec bash ../../ops/verify_browser.sh'
+```
+
 ## Focused checks
 
 - `cd core/domain && mix test` checks the reviewed file identity and conflict gate.

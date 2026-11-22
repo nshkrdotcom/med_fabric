@@ -6,8 +6,21 @@ defmodule MedFabric.Exam.CaptureRunner do
   alias MedRTC.WavCapture
 
   def start_link(config), do: GenServer.start_link(__MODULE__, config, name: __MODULE__)
-  def start, do: GenServer.call(__MODULE__, :start)
-  def status, do: GenServer.call(__MODULE__, :status)
+  def start, do: call(:start)
+
+  def status do
+    case call(:status) do
+      {:error, :capture_unavailable} -> {false, true}
+      status -> status
+    end
+  end
+
+  defp call(message) do
+    GenServer.call(__MODULE__, message)
+  catch
+    :exit, {reason, _call} when reason in [:noproc, :normal, :shutdown] ->
+      {:error, :capture_unavailable}
+  end
 
   @impl true
   def init(config), do: {:ok, %{config: config, task: nil, error: nil}}

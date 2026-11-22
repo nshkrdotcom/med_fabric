@@ -9,3 +9,5 @@ dist/
 erl_crash.dump
 
 /ops/browser/node_modules/
+
+/core/store/tmp/

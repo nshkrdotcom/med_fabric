@@ -55,6 +55,26 @@ defmodule MedFabric.Store.PostgresTest do
              Postgres.delivery_result(c.db, c.key, {:ok, %{remote_ref: "Observation/1"}})
   end
 
+  test "an outbox insertion failure rolls back the reviewer update", c do
+    DBConnection.run(c.db, fn conn ->
+      Postgrex.query!(
+        conn,
+        "CREATE TEMP TABLE exam_deliveries (LIKE public.exam_deliveries INCLUDING ALL, CHECK (false))",
+        []
+      )
+
+      try do
+        assert_raise Postgrex.Error, fn ->
+          Postgres.accept(conn, c.key, c.tmp_dir, c.a.file_sha256, "actor")
+        end
+
+        assert {:ok, %{accepted_by: nil, accepted_at: nil}} = Postgres.fetch(conn, c.key)
+      after
+        Postgrex.query!(conn, "DROP TABLE pg_temp.exam_deliveries", [])
+      end
+    end)
+  end
+
   test "concurrent acceptance and manual retry preserve one decision and remote identity", c do
     results =
       for actor <- ["one", "two"] do
