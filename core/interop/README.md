@@ -11,47 +11,8 @@
 
 ---
 
-## What This Owns (and Does Not Own)
+## Delivery
 
-**`mf_interop` owns:**
-- `MedFabric.Interop.FhirClient.build_observation/4` — Builds an HL7 FHIR R4 `Observation` JSON map carrying a stable business `identifier`, synthetic `subject` (`Patient/...`) kept strictly separate from public recording provenance (`note`), `encounter` reference, `artifact_sha256`, and `continuity`.
-- `MedFabric.Interop.FhirClient.deliver/2` — Delivers the `Observation` with FHIR conditional create (`If-None-Exist: identifier=<system>|<value>`) so retrying after a lost HTTP response never creates duplicate remote resources.
-- `MedFabric.Interop.FhirClient.fetch_by_identifier/2` — Reads back matching `Observation` resources from the FHIR server by stable business identifier.
+`MedFabric.Interop.FhirClient` maps reviewed auscultation recordings to FHIR R4 and uses conditional create with a stable observation identifier. It confirms the remote identity, including the subject, encounter, and recording value.
 
-**`mf_interop` does not own:**
-- Clinical acceptance logic (`core/domain`) or outbox state persistence (`core/store`). DICOM/DICOMweb export is deferred until an imaging product requires it.
-
----
-
-## Walkthrough
-
-In `test/mf_interop_test.exs`, an offline `Req` adapter simulates HAPI FHIR R4:
-1. First `POST /fhir/Observation` writes `Observation/hapi-1` on the server, then drops the HTTP response in flight.
-2. Second `POST /fhir/Observation` sends the identical `If-None-Exist` conditional create header and receives `200 OK` returning `Observation/hapi-1` (`created?: false`) without duplicating the remote resource.
-3. `fetch_by_identifier/2` confirms exactly 1 remote FHIR R4 `Observation` exists.
-
-Against a live HAPI FHIR R4 server (see the native runbook), omit `:adapter` and pass `base_url: "http://127.0.0.1:18080/fhir"`.
-
----
-
-## Commands & Verification
-
-```bash
-cd core/interop
-mix test
-mix credo --strict
-mix dialyzer --force-check
-```
-
-## Upstream References
-
-- Req: https://github.com/wojtekmach/req
-- HAPI FHIR JPA Server: https://github.com/hapifhir/hapi-fhir-jpaserver-starter
-- HL7 FHIR R4 Observation: https://hl7.org/fhir/R4/observation.html
-
-## Related Packages
-
-- [Med Fabric Workspace](../../README.md)
-- [Domain](../domain/README.md)
-- [Store](../store/README.md)
-- [Exam App](../../apps/exam/README.md)
+Use `FHIR_BASE_URL` for a dedicated HAPI R4 test server. Run `mix test integration` from this directory to exercise real delivery after losing a successful response. See the [native runbook](../../docs/architecture/browser-to-record.md).

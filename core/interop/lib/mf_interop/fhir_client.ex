@@ -149,11 +149,6 @@ defmodule MedFabric.Interop.FhirClient do
 
     defaults
     |> Req.new()
-    |> then(fn req ->
-      Enum.reduce(Keyword.get(opts, :private, %{}), req, fn {key, value}, request ->
-        Req.Request.put_private(request, key, value)
-      end)
-    end)
     |> Req.request(request_opts)
   end
 

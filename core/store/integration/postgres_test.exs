@@ -4,7 +4,6 @@ defmodule MedFabric.Store.PostgresTest do
   alias MedFabric.Domain.Encounter
   alias MedFabric.Store.Postgres
 
-
   setup do
     url = System.fetch_env!("DATABASE_URL")
     server = start_supervised!({Postgres, url: url, pool_size: 2})
