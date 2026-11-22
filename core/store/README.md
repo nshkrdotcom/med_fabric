@@ -9,7 +9,7 @@
 
 ## Planned responsibility
 
-Persist events, observations and outbox entries in one PostgreSQL transaction. Store recording references and integrity metadata alongside the encounter. Apply access and retention policy at the storage boundary.
+Persist encounter events, clinician-accepted observations, finalized recording provenance references (`artifact_sha256`, storage URI, and `:med_ex` continuity reports), and FHIR outbox entries in one PostgreSQL transaction. Apply clinical access and retention policy at the storage boundary.
 
 ## Direct workspace dependencies
 
@@ -17,6 +17,6 @@ Persist events, observations and outbox entries in one PostgreSQL transaction. S
 
 ## First acceptance scenario
 
-A failed export remains retryable after its originating observation commits.
+A failed FHIR export remains retryable after its originating accepted observation and artifact provenance metadata commit atomically.
 
 [Workspace plan](../../README.md)

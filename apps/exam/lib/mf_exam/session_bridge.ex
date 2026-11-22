@@ -1,9 +1,7 @@
-defmodule MedFabric.Rtc do
+defmodule MedFabric.Exam.SessionBridge do
   @moduledoc """
-  Encounter-to-MedEx live session bridge within Med Fabric.
-
-  Translates encounter correlation IDs and permissions into `MedCore.Session`
-  and `MedRTC` transport calls without duplicating WebRTC or Membrane state.
+  Product-local bridge translating Med Fabric encounter authorization and
+  correlation IDs (`encounter_ref`, `acquisition_id`) onto the `:med_ex` SDK.
   """
 
   alias MedCore.Session
@@ -19,6 +17,6 @@ defmodule MedFabric.Rtc do
     }
   end
 
-  @spec runtime_core_version() :: String.t()
-  def runtime_core_version, do: MedRTC.core_version()
+  @spec sdk_version() :: String.t()
+  def sdk_version, do: MedWeb.runtime_core_version()
 end
