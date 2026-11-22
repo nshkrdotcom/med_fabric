@@ -1,39 +1,87 @@
 defmodule MedFabric.Exam do
-  @moduledoc """
-  Connected remote clinical examination product within Med Fabric.
+  @moduledoc "Composition of one authorized fixture exam."
+  alias MedFabric.Exam.CaptureRunner
+  alias MedFabric.Interop.FhirClient
+  alias MedFabric.Store.Postgres
 
-  Composes Med Fabric's pure encounter domain (`MedFabric.Domain.Encounter`)
-  directly with the single Welded `:med_ex` SDK (`MedCore.Session`,
-  `MedRTC.SessionServer`, `MedWeb.Signaling`) with no intermediate forwarding
-  wrapper.
-  """
+  def lab, do: Application.fetch_env!(:mf_exam, :lab)
+  def key(config), do: {config.encounter_id, "circor-1"}
+  def session_id(enc), do: "preview-" <> enc
 
-  alias MedCore.Session
-  alias MedFabric.Domain.Encounter
+  def announce(config),
+    do:
+      Phoenix.PubSub.broadcast(
+        MedFabric.Exam.PubSub,
+        "exam:" <> config.encounter_id,
+        :exam_changed
+      )
 
-  @doc """
-  Creates a `:med_ex` live session correlated to an encounter (`encounter_ref`).
-  """
-  @spec start_session(String.t(), String.t(), keyword()) :: Session.t()
-  def start_session(encounter_ref, session_id, opts \\ [])
-      when is_binary(encounter_ref) and is_binary(session_id) do
-    Session.new(
-      id: session_id,
-      encounter_ref: encounter_ref,
-      topology: Keyword.get(opts, :topology, :server_terminated),
-      streams: Keyword.get(opts, :streams, [])
-    )
+  def snapshot(config) do
+    {active, failed} = CaptureRunner.status()
+
+    case Postgres.fetch(Postgres, key(config)) do
+      {:ok, row} -> %{capture: active, error: failed, row: row}
+      {:error, _} -> %{capture: active, error: true, row: nil}
+    end
   end
 
-  @doc """
-  Translates `{:emit_fact, kind, payload}` effects emitted by `:med_ex` into
-  `MedFabric.Domain.Encounter` transitions.
-  """
-  @spec ingest_effects(Encounter.t(), [Session.effect()]) :: Encounter.t()
-  def ingest_effects(%Encounter{} = encounter, effects) when is_list(effects) do
-    Enum.reduce(effects, encounter, fn
-      {:emit_fact, kind, payload}, acc -> Encounter.apply_fact(acc, {kind, payload})
-      _other_effect, acc -> acc
-    end)
+  def accept(config, digest) do
+    with {:ok, :ok} <-
+           Postgres.accept(Postgres, key(config), config.artifact_dir, digest, "lab-clinician") do
+      announce(config)
+    end
+  end
+
+  def deliver(config) do
+    case Postgres.fetch(Postgres, key(config)) do
+      {:ok, %{remote_ref: ref}} when is_binary(ref) ->
+        :ok
+
+      {:ok, %{conflict: false, accepted_by: actor} = row} when is_binary(actor) ->
+        result = export(config, row)
+        status = Postgres.delivery_result(Postgres, key(config), result)
+        announce(config)
+        status
+
+      {:ok, _} ->
+        {:error, :review_required}
+
+      error ->
+        error
+    end
+  end
+
+  defp export(config, row) do
+    {enc, acq} = key(config)
+    m = row.metadata
+    opts = [base_url: config.fhir_base_url]
+
+    refs = m["delivery"]
+
+    if refs == config.refs do
+      observation = %{
+        interval_ms: {m["start_ms"], m["end_ms"]},
+        artifact_sha256: m["artifact_sha256"],
+        continuity: m["continuity"],
+        accepted_by: row.accepted_by
+      }
+
+      resource =
+        FhirClient.build_observation(
+          observation,
+          %{external_id: "urn:med_fabric:observation:obs:#{enc}:#{acq}"},
+          %{
+            source_kind: :physionet_circor,
+            source_ref: m["source_ref"],
+            sample_rate_hz: m["sample_rate_hz"]
+          },
+          patient_ref: refs["patient_ref"],
+          encounter_ref: refs["encounter_ref"]
+        )
+
+      FhirClient.deliver(resource, opts)
+    else
+      {:error, :destination_changed}
+    end
   end
 end

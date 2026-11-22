@@ -2,7 +2,7 @@ defmodule MedFabric.Exam.Application do
   @moduledoc false
   use Application
 
-  alias MedFabric.Exam.Demo
+  alias MedFabric.Exam.CaptureRunner
   alias MedFabric.ExamWeb.Endpoint
   alias MedFabric.Store.Postgres
 
@@ -18,8 +18,8 @@ defmodule MedFabric.Exam.Application do
         lab ->
           [
             {Postgres, url: lab.database_url, name: Postgres},
-            {Task.Supervisor, name: MedFabric.Exam.CaptureTasks},
-            {Demo, lab}
+            %{id: :schema, start: {__MODULE__, :schema, []}},
+            {CaptureRunner, lab}
           ]
       end
 
@@ -27,5 +27,12 @@ defmodule MedFabric.Exam.Application do
       strategy: :one_for_one,
       name: MedFabric.Exam.Supervisor
     )
+  end
+
+  def schema do
+    case Postgres.migrate() do
+      {:ok, :ok} -> :ignore
+      {:error, reason} -> {:error, {:schema_unavailable, reason}}
+    end
   end
 end

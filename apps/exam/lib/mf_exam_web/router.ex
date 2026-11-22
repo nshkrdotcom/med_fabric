@@ -3,7 +3,7 @@ defmodule MedFabric.ExamWeb.Router do
   use Phoenix.Router
   import Phoenix.LiveView.Router
 
-  alias MedFabric.Exam.Demo
+  alias MedFabric.Exam
 
   pipeline :browser do
     plug(:accepts, ["html", "wav"])
@@ -29,16 +29,14 @@ defmodule MedFabric.ExamWeb.Router do
     def init(opts), do: opts
 
     def call(conn, _opts) do
-      state = Demo.snapshot()
+      config = Exam.lab()
+      store = MedFabric.Store.Postgres
 
-      path =
-        get_in(state, [:artifact, :artifact_path]) ||
-          get_in(state, [:record, :provenance, :artifact_path])
-
-      if path && File.regular?(path) do
-        conn |> put_resp_content_type("audio/wav") |> send_file(200, path)
+      with {:ok, %{metadata: m}} <- store.fetch(store, Exam.key(config)),
+           {:ok, bytes} <- store.bytes(config.artifact_dir, m) do
+        conn |> put_resp_content_type("audio/wav") |> send_resp(200, bytes)
       else
-        send_resp(conn, 404, "Recording unavailable")
+        _ -> send_resp(conn, 404, "Recording unavailable")
       end
     end
   end

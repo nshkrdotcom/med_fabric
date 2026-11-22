@@ -2,6 +2,8 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
+[[ $# == 0 || ( $# == 1 && "$1" == "--integration" ) ]] || { echo "Usage: $0 [--integration]" >&2; exit 2; }
+
 for tool in git curl tar make cc mix elixir erl; do
   command -v "$tool" >/dev/null || { echo "Missing prerequisite: $tool" >&2; exit 1; }
 done
@@ -14,6 +16,14 @@ if [[ "${1:-}" == "--integration" ]]; then
   for tool in node npm uv jq openssl psql shasum; do
     command -v "$tool" >/dev/null || { echo "Missing integration prerequisite: $tool" >&2; exit 1; }
   done
+  if [[ -z "${DATABASE_URL:-}" ]]; then
+    if command -v pg_ctl >/dev/null; then pg_dir=$(dirname "$(command -v pg_ctl)")
+    else pg_dir=$(pg_config --bindir) || { echo "Install PostgreSQL 18 server binaries" >&2; exit 1; }; fi
+    for bin in pg_ctl initdb createdb; do
+      [[ -x "$pg_dir/$bin" ]] || { echo "Missing $pg_dir/$bin" >&2; exit 1; }
+    done
+    "$pg_dir/initdb" --version | grep -Eq '^initdb \(PostgreSQL\) 18\.' || { echo "PostgreSQL 18 required" >&2; exit 1; }
+  fi
   if [[ -z "${FHIR_BASE_URL:-}" ]]; then
     jdk_prefix="${JAVA_HOME:+$JAVA_HOME/bin/}"
     command -v "${jdk_prefix}javac" >/dev/null && "${jdk_prefix}javac" -version 2>&1 | grep -Fqx 'javac 21.0.9' || {

@@ -2,7 +2,7 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
   @moduledoc false
   use Phoenix.Channel
 
-  alias MedFabric.Exam.Demo
+  alias MedFabric.Exam
   alias MedRTC.Preview
 
   @impl true
@@ -10,8 +10,15 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
       when is_binary(connection_id) and byte_size(connection_id) == 36 do
     with ^encounter_id <- socket.assigns.encounter_id,
          %{encounter_id: ^encounter_id} <- Application.get_env(:mf_exam, :lab) do
-      session_id = Demo.snapshot().session.id
-      {:ok, %{session_id: session_id}, assign(socket, :peer, nil)}
+      session_id = Exam.session_id(encounter_id)
+
+      {:ok, %{session_id: session_id},
+       assign(socket,
+         peer: nil,
+         subscribed: false,
+         epoch: System.monotonic_time(:millisecond),
+         last_tick: -1
+       )}
     else
       _ -> {:error, %{reason: "unauthorized_encounter"}}
     end
@@ -37,15 +44,24 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
   @impl true
   def handle_info(
         {:ex_webrtc, pid, {:connection_state_change, :connected}},
-        %{assigns: %{peer: %{pid: pid}, encounter_id: encounter_id}} = socket
+        %{assigns: %{peer: %{pid: pid}, subscribed: false, encounter_id: encounter_id}} = socket
       ) do
-    Phoenix.PubSub.subscribe(MedFabric.Exam.PubSub, Demo.preview_topic(encounter_id))
-    {:noreply, socket}
+    Phoenix.PubSub.subscribe(MedFabric.Exam.PubSub, "preview:" <> encounter_id)
+    {:noreply, assign(socket, :subscribed, true)}
   end
 
-  def handle_info({:preview_frame, index, frame}, socket) do
-    Preview.send_opus(socket.assigns.peer, frame, index)
-    {:noreply, socket}
+  def handle_info(
+        {:preview_frame, _index, frame},
+        %{assigns: %{peer: %Preview{} = peer}} = socket
+      ) do
+    tick =
+      max(
+        socket.assigns.last_tick + 1,
+        div(System.monotonic_time(:millisecond) - socket.assigns.epoch, 20)
+      )
+
+    Preview.send_opus(peer, frame, tick)
+    {:noreply, assign(socket, :last_tick, tick)}
   end
 
   def handle_info(
@@ -54,6 +70,8 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
       )
       when state in [:failed, :closed],
       do: {:stop, :normal, socket}
+
+  def handle_info({:preview_frame, _, _}, socket), do: {:noreply, socket}
 
   def handle_info({:ex_webrtc, _pid, _event}, socket), do: {:noreply, socket}
 

@@ -12,6 +12,7 @@ try {
   const page = await browser.newPage();
   const rejected = await page.request.get(path);
   assert.equal(rejected.status(), 403);
+  assert.equal((await page.request.get(path + "/recording")).status(), 403);
   await page.goto(url);
   await page.waitForSelector(".phx-connected");
   const preview = page.locator("#live-preview");
@@ -19,7 +20,19 @@ try {
   const recording = page.locator("#recording-audio");
   const fixtureDigest = "7c8c93ee4602072aa5c0e4c81a5a9e28d926b278f701218ea588bde9644efc66";
 
-  if (!process.argv.includes("--after-restart")) {
+  if (process.argv.includes("--capture")) {
+    const denied = await page.evaluate(async () => {
+      const { Socket } = await import("/assets/phoenix.mjs");
+      const token = document.querySelector("#live-preview").dataset.token;
+      const socket = new Socket("/socket", {params: {token}});
+      socket.connect();
+      try {
+        return await new Promise((resolve, reject) => socket.channel("signaling:unrelated", {connection_id: crypto.randomUUID()}).join()
+          .receive("error", resolve).receive("ok", () => reject(Error("unrelated encounter joined")))
+          .receive("timeout", () => reject(Error("authorization check timed out"))));
+      } finally { socket.disconnect(); }
+    });
+    assert.equal(denied.reason, "unauthorized_encounter");
     await page.locator("#preview-play").click();
     await page.waitForFunction(() => document.querySelector("#live-preview").dataset.state === "connected");
     const sessionId = await preview.getAttribute("data-session-id");
@@ -53,7 +66,7 @@ try {
 
     await recording.waitFor({ timeout: 32_000 });
     assert.equal(await page.locator("#recording-continuity").textContent(), "observed_continuous");
-    await page.locator("#accept-recording").click();
+
   }
 
   await recording.waitFor();
@@ -64,27 +77,32 @@ try {
   assert.equal(wav.toString("ascii", 36, 40), "data");
   assert.equal(wav.length, 188_844);
   assert.equal(createHash("sha256").update(wav.subarray(44)).digest("hex"), fixtureDigest);
-  await page.waitForFunction(id => document.querySelector("#observation-id")?.textContent === id, observationId);
+  if (process.argv.includes("--capture")) {
+    console.log("Verified ready WAV before acceptance");
+  } else {
+    if (!process.argv.includes("--after-restart")) await page.locator("#accept-recording").click();
+    await page.waitForFunction(id => document.querySelector("#observation-id")?.textContent === id, observationId);
 
-  if (!process.argv.includes("--after-restart")) {
-    await page.locator("#deliver-recording").click();
+    if (!process.argv.includes("--after-restart")) {
+      await page.locator("#deliver-recording").click();
+    }
+
+    await page.waitForFunction(() => document.querySelector("#outbox-status")?.textContent === "delivered");
+    const remote = await page.locator("#remote-reference").textContent();
+    const fhirUrl = process.env.FHIR_BASE_URL.replace(/\/$/, "");
+    const search = new URL(`${fhirUrl}/Observation`);
+    search.searchParams.set("identifier", `urn:med-fabric:observation|urn:med_fabric:observation:${observationId}`);
+    const response = await page.request.get(search.href, { headers: { Accept: "application/fhir+json" } });
+    assert.equal(response.status(), 200);
+    const bundle = await response.json();
+    assert.equal(bundle.total, 1);
+    const resource = bundle.entry[0].resource;
+    assert.equal(`${resource.resourceType}/${resource.id}`, remote);
+    assert.match(resource.subject.reference, /^Patient\//);
+    assert.match(resource.encounter.reference, /^Encounter\//);
+    assert.ok(resource.component.some(c => c.valueString === fixtureDigest));
+    console.log(`${observationId} -> ${remote} (one matching HAPI R4 resource)`);
   }
-
-  await page.waitForFunction(() => document.querySelector("#outbox-status")?.textContent === "delivered");
-  const remote = await page.locator("#remote-reference").textContent();
-  const fhirUrl = process.env.FHIR_BASE_URL.replace(/\/$/, "");
-  const search = new URL(`${fhirUrl}/Observation`);
-  search.searchParams.set("identifier", `urn:med-fabric:observation|urn:med_fabric:observation:${observationId}`);
-  const response = await page.request.get(search.href, { headers: { Accept: "application/fhir+json" } });
-  assert.equal(response.status(), 200);
-  const bundle = await response.json();
-  assert.equal(bundle.total, 1);
-  const resource = bundle.entry[0].resource;
-  assert.equal(`${resource.resourceType}/${resource.id}`, remote);
-  assert.match(resource.subject.reference, /^Patient\//);
-  assert.match(resource.encounter.reference, /^Encounter\//);
-  assert.match(resource.valueString, new RegExp(fixtureDigest));
-  console.log(`${observationId} -> ${remote} (one matching HAPI R4 resource)`);
 } finally {
   await browser.close();
 }

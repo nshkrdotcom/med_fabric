@@ -100,7 +100,10 @@ hapi_pid() {
   local pid
   [[ -f "$state/hapi.pid" ]] || return 1
   read -r pid <"$state/hapi.pid"
-  [[ "$pid" =~ ^[0-9]+$ ]] && ps -p "$pid" -o args= | grep -Fq -- "$hapi_archive" || return 1
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  local args
+  args="$(ps -p "$pid" -o args=)" || return 1
+  [[ "$args" == *"$hapi_archive"* && "$args" == *"--spring.datasource.url=jdbc:h2:file:$state/fhir "* ]] || return 1
   printf '%s\n' "$pid"
 }
 
@@ -136,7 +139,7 @@ start_hapi() {
     (
       cd "$state"
       nohup "$java" -Xms128m -Xmx1g -jar "$hapi_archive" \
-        --server.address=127.0.0.1 --server.port="$hapi_port" \
+        "--spring.datasource.url=jdbc:h2:file:$state/fhir" --server.address=127.0.0.1 --server.port="$hapi_port" \
         --hapi.fhir.fhir_version=R4 --hapi.fhir.allow_multiple_delete=false \
         </dev/null >"$state/hapi.log" 2>&1 &
       printf '%s\n' "$!" >"$state/hapi.pid"
@@ -149,6 +152,7 @@ print_env() {
   printf 'export FHIR_BASE_URL=%q\n' "${FHIR_BASE_URL:-$native_fhir_url}"
 }
 
+[[ $# == 1 ]] || die "Specify one service command"
 case "${1:-}" in
   start|postgres)
     for tool in curl jq shasum tar; do
@@ -168,6 +172,17 @@ case "${1:-}" in
     fi
     print_env
     ;;
+  restart-hapi)
+    pid="$(hapi_pid)" || die "No owned HAPI process in $state"
+    kill "$pid"
+    for ((attempt=0;attempt<60;attempt++)); do
+      hapi_pid >/dev/null || break
+      sleep 1
+    done
+    hapi_pid >/dev/null && die "HAPI failed to stop"
+    start_hapi
+    wait_hapi "$native_fhir_url"
+    ;;
   env)
     print_env
     ;;
@@ -183,6 +198,6 @@ case "${1:-}" in
     fi
     ;;
   *)
-    die 'Usage: ops/local_services.sh start|postgres|env|stop'
+    die 'Usage: ops/local_services.sh start|postgres|env|restart-hapi|stop'
     ;;
 esac

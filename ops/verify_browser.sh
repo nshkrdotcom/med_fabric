@@ -22,6 +22,8 @@ export MF_FIXTURE_DIR="${MF_FIXTURE_DIR:-$PWD/_build/circor}"
 export MF_ARTIFACT_DIR="$work/recordings"
 export MF_SERVICE_STATE="${MF_SERVICE_STATE:-$work/services}"
 
+owns_hapi=false
+[[ -n "${FHIR_BASE_URL:-}" ]] || owns_hapi=true
 pid=""
 stop_exam() {
   if [[ -n "$pid" ]]; then
@@ -48,7 +50,14 @@ curl -fsS --max-time 5 -H 'Accept: application/fhir+json' "${FHIR_BASE_URL%/}/me
   jq -e '.fhirVersion == "4.0.1"' >/dev/null
 
 
-bash apps/exam/deps/med_ex/priv/fixtures/prepare.sh "$MF_FIXTURE_DIR"
+(cd apps/exam && env -u MF_LAB mix run --no-start -e '
+  script = Application.app_dir(:med_ex, "priv/fixtures/prepare.sh")
+  {_, status} = System.cmd("bash", [script, System.fetch_env!("MF_FIXTURE_DIR")], into: IO.stream())
+  System.halt(status)
+')
+
+export MF_REFS_FILE="$work/refs.json"
+(cd apps/exam && env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs)
 
 if [[ "$mode" == "--release" ]]; then
   (cd apps/exam && env -u MF_LAB MIX_ENV=prod mix release --overwrite) >"$work/release.log" 2>&1 ||
@@ -74,8 +83,12 @@ start_exam() {
 }
 
 start_exam
+node ops/browser/check.mjs --capture
+stop_exam
+start_exam
 node ops/browser/check.mjs
 stop_exam
+if "$owns_hapi"; then ops/local_services.sh restart-hapi; fi
 start_exam
 node ops/browser/check.mjs --after-restart
 echo "Evidence directory $work"

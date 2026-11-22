@@ -1,14 +1,20 @@
 import Config
 
 if System.get_env("MF_LAB") == "1" do
+  refs = System.fetch_env!("MF_REFS_FILE") |> File.read!() |> Jason.decode!()
   lab = %{
     encounter_id: System.fetch_env!("MF_EXAM_ID"),
+    refs: refs,
     access_key: System.fetch_env!("MF_LAB_ACCESS_KEY"),
     database_url: System.fetch_env!("DATABASE_URL"),
     fhir_base_url: System.fetch_env!("FHIR_BASE_URL"),
     fixture_dir: Path.expand(System.fetch_env!("MF_FIXTURE_DIR")),
     artifact_dir: Path.expand(System.fetch_env!("MF_ARTIFACT_DIR"))
   }
+
+  unless refs["exam"] == lab.encounter_id and refs["destination"] == lab.fhir_base_url do
+    raise "Seed references for this encounter and FHIR destination"
+  end
 
   unless Regex.match?(~r/\A[a-zA-Z0-9-]{1,48}\z/, lab.encounter_id) do
     raise "MF_EXAM_ID must be 1–48 letters, digits, or dashes"
