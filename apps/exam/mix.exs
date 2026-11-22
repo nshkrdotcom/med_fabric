@@ -23,6 +23,11 @@ defmodule MedFabric.Exam.MixProject do
       {:mf_store, path: "../../core/store"},
       {:mf_interop, path: "../../core/interop"},
       workspace_dep({:med_ex, github: "nshkrdotcom/med_ex", ref: @med_ex_projection_ref}),
+      {:phoenix, "~> 1.7"},
+      {:phoenix_html, "~> 4.2"},
+      {:phoenix_live_view, "~> 1.0"},
+      {:bandit, "~> 1.6"},
+      {:lazy_html, ">= 0.1.0", only: :test},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
