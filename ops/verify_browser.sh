@@ -8,6 +8,7 @@ for tool in mix node uv openssl curl psql jq; do
 done
 [[ -d ops/browser/node_modules/playwright ]] || { echo "Run ./onboard.sh --integration." >&2; exit 1; }
 
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"
 mode="${1:-}"
 [[ -z "$mode" || "$mode" == "--release" ]] || { echo "Usage: $0 [--release]" >&2; exit 1; }
 
