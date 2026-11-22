@@ -42,6 +42,6 @@ mix deps.get --check-locked
 mix blitz.workspace deps_get -- --check-locked
 
 if [[ "${1:-}" == "--integration" ]]; then
-  export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"
+  export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$PWD/_build/playwright}"
   (cd ops/browser && npm ci --ignore-scripts && ./node_modules/.bin/playwright install chromium)
 fi
