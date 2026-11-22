@@ -25,7 +25,7 @@
         links: %{"GitHub" => "https://github.com/nshkrdotcom/med_fabric"}
       ],
       output: [
-        docs: ["README.md", "CHANGELOG.md", "LICENSE"],
+        docs: ["README.md", "CHANGELOG.md", "LICENSE", "docs/architecture/browser-to-record.md"],
         assets: ["assets/med_fabric.svg"]
       ],
       verify: [hex_build: false, hex_publish: false]
