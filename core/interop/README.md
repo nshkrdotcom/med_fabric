@@ -30,7 +30,7 @@ In `test/mf_interop_test.exs`, an offline `Req` adapter simulates HAPI FHIR R4:
 2. Second `POST /fhir/Observation` sends the identical `If-None-Exist` conditional create header and receives `200 OK` returning `Observation/hapi-1` (`created?: false`) without duplicating the remote resource.
 3. `fetch_by_identifier/2` confirms exactly 1 remote FHIR R4 `Observation` exists.
 
-Against a live HAPI FHIR R4 server (`docker compose -f ops/compose.yml up -d`), omit `:adapter` and pass `base_url: "http://localhost:8080/fhir"`.
+Against a live HAPI FHIR R4 server (see the native runbook), omit `:adapter` and pass `base_url: "http://127.0.0.1:18080/fhir"`.
 
 ---
 
@@ -53,6 +53,5 @@ mix dialyzer --force-check
 
 - [Med Fabric Workspace](../../README.md)
 - [Domain](../domain/README.md)
-- [Runtime](../runtime/README.md)
 - [Store](../store/README.md)
 - [Exam App](../../apps/exam/README.md)

@@ -4,7 +4,6 @@ defmodule MedFabric.Store.PostgresTest do
   alias MedFabric.Domain.Encounter
   alias MedFabric.Store.Postgres
 
-  @moduletag :integration
 
   setup do
     url = System.fetch_env!("DATABASE_URL")

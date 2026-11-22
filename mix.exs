@@ -5,7 +5,7 @@ defmodule MedFabric.Workspace.MixProject do
     [
       app: :med_fabric_workspace,
       version: "0.1.0",
-      elixir: "~> 1.18",
+      elixir: "~> 1.20",
       deps: [
         {:blitz, "~> 0.4.1", runtime: false},
         {:weld, "~> 0.10.0", only: [:dev, :test], runtime: false},

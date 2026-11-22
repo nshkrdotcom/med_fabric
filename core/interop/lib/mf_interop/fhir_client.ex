@@ -100,9 +100,8 @@ defmodule MedFabric.Interop.FhirClient do
         confirmed(resource, remote, first, status == 201)
 
       {:ok, %{status: status}} when status in [200, 201] ->
-        with {:ok, [remote]} <- search(type, system, value, opts) do
-          confirmed(resource, remote, first, status == 201)
-        else
+        case search(type, system, value, opts) do
+          {:ok, [remote]} -> confirmed(resource, remote, first, status == 201)
           {:ok, _} -> {:error, :unconfirmed_remote_record}
           {:error, _} = error -> error
         end

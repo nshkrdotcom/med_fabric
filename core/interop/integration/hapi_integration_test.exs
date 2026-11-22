@@ -3,7 +3,6 @@ defmodule MedFabric.Interop.HapiIntegrationTest do
 
   alias MedFabric.Interop.FhirClient
 
-  @moduletag :integration
 
   defmodule DropCreatedResponse do
     @moduledoc false

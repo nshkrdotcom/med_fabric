@@ -52,7 +52,6 @@ mix dialyzer --force-check
 ## Related Packages
 
 - [Med Fabric Workspace](../../README.md)
-- [Runtime](../runtime/README.md)
 - [Store](../store/README.md)
 - [Interop](../interop/README.md)
 - [Exam App](../../apps/exam/README.md)

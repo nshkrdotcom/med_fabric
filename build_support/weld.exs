@@ -12,7 +12,6 @@
       mode: :monolith,
       roots: [
         "core/domain",
-        "core/runtime",
         "core/store",
         "core/interop"
       ],
@@ -20,7 +19,7 @@
         name: "med_fabric",
         otp_app: :med_fabric,
         version: "0.1.0",
-        elixir: "~> 1.18",
+        elixir: "~> 1.20",
         description: "Reusable clinical encounter workflow libraries for Med Fabric",
         licenses: ["MIT"],
         links: %{"GitHub" => "https://github.com/nshkrdotcom/med_fabric"}

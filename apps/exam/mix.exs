@@ -3,13 +3,13 @@ if bootstrap = System.get_env("MIX_WORKSPACE_OPS_BOOTSTRAP"), do: Code.require_f
 defmodule MedFabric.Exam.MixProject do
   use Mix.Project
 
-  @med_ex_projection_ref "f069fe6c7612ddab729ba244a5f207963fc053b1"
+  @med_ex_projection_ref "33af32ed294e9f79b2ff0f36421c4c35562b6990"
 
   def project do
     [
       app: :mf_exam,
       version: "0.1.0",
-      elixir: "~> 1.18",
+      elixir: "~> 1.20",
       description: "Connected remote clinical examination",
       dialyzer: [plt_add_apps: [:mix]],
       aliases: [quality: ["credo --strict", "dialyzer --force-check"]],
@@ -17,9 +17,13 @@ defmodule MedFabric.Exam.MixProject do
     ]
   end
 
+  def application do
+    [mod: {MedFabric.Exam.Application, []}]
+  end
+
   defp deps do
     [
-      {:mf_runtime, path: "../../core/runtime"},
+      {:mf_domain, path: "../../core/domain"},
       {:mf_store, path: "../../core/store"},
       {:mf_interop, path: "../../core/interop"},
       workspace_dep({:med_ex, github: "nshkrdotcom/med_ex", ref: @med_ex_projection_ref}),

@@ -14,21 +14,32 @@ defmodule MedFabric.ExamWeb.Endpoint do
     signing_salt: "mf_exam_sess"
   ]
 
-  socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]]
+  socket("/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session_options]])
 
-  socket "/socket", MedFabric.ExamWeb.UserSocket,
+  socket("/socket", MedFabric.ExamWeb.UserSocket,
     websocket: true,
     longpoll: false
+  )
 
-  plug :serve_med_ex_hook
-  plug Plug.Parsers,
+  plug(Plug.Static, at: "/assets", from: :mf_exam, only: ~w(exam.js))
+  plug(Plug.Static, at: "/assets", from: {:phoenix, "priv/static"}, only: ~w(phoenix.mjs))
+
+  plug(Plug.Static,
+    at: "/assets",
+    from: {:phoenix_live_view, "priv/static"},
+    only: ~w(phoenix_live_view.esm.js)
+  )
+
+  plug(:serve_med_ex_hook)
+
+  plug(Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
     json_decoder: Jason
+  )
 
-  plug Plug.Session, @session_options
-  plug MedFabric.ExamWeb.Router
+  plug(Plug.Session, @session_options)
+  plug(MedFabric.ExamWeb.Router)
 
   defp serve_med_ex_hook(%Plug.Conn{request_path: "/med_ex/session_hook.js"} = conn, _opts) do
     path = MedWeb.Signaling.hook_asset_full_path()

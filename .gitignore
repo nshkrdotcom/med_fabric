@@ -7,3 +7,5 @@ dist/
 *.plt
 *.plt.hash
 erl_crash.dump
+
+/ops/browser/node_modules/

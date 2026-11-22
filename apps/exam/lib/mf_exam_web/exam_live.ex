@@ -1,129 +1,80 @@
 defmodule MedFabric.ExamWeb.ExamLive do
-  @moduledoc """
-  Minimal exam LiveView owned by `med_fabric/apps/exam`.
-
-  Renders the encounter screen, mounts `:med_ex`'s browser WebRTC hook inside a
-  `phx-update="ignore"` container so LiveView updates preserve the peer
-  connection, displays live preview status separately from finalized recording
-  continuity, and commits explicit clinician acceptance atomically via
-  `MedFabric.Store.OutboxStore`.
-  """
-
+  @moduledoc false
   use Phoenix.LiveView
 
-  alias MedFabric.Domain.Encounter
-  alias MedFabric.Exam
-  alias MedFabric.Store.OutboxStore
+  alias MedFabric.Exam.Demo
+  alias MedFabric.ExamWeb.Endpoint
 
   @impl true
-  def mount(%{"encounter_id" => encounter_id}, session, socket) do
-    {:ok, encounter} =
-      Encounter.new(encounter_id)
-      |> Encounter.request_acquisition(Map.get(session, "acquisition_id", "acq_1"))
-
-    store = Map.get(session, "store") || Application.get_env(:mf_exam, :outbox_store)
-
-    socket =
-      socket
-      |> assign(:encounter, encounter)
-      |> assign(:session_id, Map.get(session, "session_id", "sess_#{encounter_id}"))
-      |> assign(:clinician_id, Map.get(session, "clinician_id", "clin_1"))
-      |> assign(:store, store)
-      |> assign(:accepted_record, nil)
-      |> assign(:error_message, nil)
-
-    {:ok, socket}
+  def mount(%{"encounter_id" => id}, %{"lab_encounter" => id}, socket) do
+    if connected?(socket), do: Phoenix.PubSub.subscribe(MedFabric.Exam.PubSub, Demo.topic(id))
+    token = Phoenix.Token.sign(Endpoint, "exam-preview", id)
+    {:ok, socket |> assign(view: Demo.snapshot(), token: token, error: nil)}
   end
+
+  def mount(_params, _session, socket), do: {:ok, redirect(socket, to: "/")}
 
   @impl true
-  def handle_info({:med_ex_effects, effects}, socket) when is_list(effects) do
-    next_encounter = Exam.ingest_effects(socket.assigns.encounter, effects)
-    {:noreply, assign(socket, :encounter, next_encounter)}
-  end
+  def handle_info(:exam_changed, socket), do: {:noreply, assign(socket, :view, Demo.snapshot())}
 
   @impl true
-  def handle_event("accept_acquisition", %{"acquisition_id" => acq_id, "sha256" => sha}, socket) do
-    case Encounter.accept_acquisition(
-           socket.assigns.encounter,
-           acq_id,
-           sha,
-           socket.assigns.clinician_id
-         ) do
-      {:ok, next_encounter, acceptance} ->
-        record = maybe_commit(socket.assigns.store, acceptance)
+  def handle_event("capture", _params, socket), do: result(socket, Demo.capture())
+  def handle_event("deliver", _params, socket), do: result(socket, Demo.deliver())
 
-        {:noreply,
-         socket
-         |> assign(:encounter, next_encounter)
-         |> assign(:accepted_record, record || acceptance)
-         |> assign(:error_message, nil)}
-
-      {:error, reason} ->
-        {:noreply, assign(socket, :error_message, "Acceptance blocked: #{reason}")}
-    end
+  def handle_event("accept", %{"digest" => digest}, socket) do
+    result(socket, Demo.accept(digest, "lab-clinician"))
   end
+
+  defp result(socket, :ok), do: {:noreply, assign(socket, view: Demo.snapshot(), error: nil)}
+
+  defp result(socket, {:error, _reason}),
+    do: {:noreply, assign(socket, :error, "The action failed. Please retry.")}
 
   @impl true
   def render(assigns) do
     ~H"""
-    <main id="exam-screen" data-encounter-id={@encounter.id}>
-      <h1>Encounter <%= @encounter.id %></h1>
-
+    <main id="exam-screen">
+      <h1>Encounter {@view.encounter_id}</h1>
       <section
-        id="med-ex-webrtc-preview"
+        id="live-preview"
         phx-hook="MedExSessionHook"
         phx-update="ignore"
-        data-encounter-id={@encounter.id}
-        data-session-id={@session_id}
-        data-hook-src="/med_ex/session_hook.js"
+        data-encounter-id={@view.encounter_id}
+        data-session-id={@view.session.id}
+        data-token={@token}
       >
-        <audio id="med-ex-preview-audio" autoplay></audio>
+        <h2>Live preview</h2>
+        <audio autoplay></audio>
+        <button id="preview-play" type="button">Play preview</button>
+        <button id="preview-disconnect" type="button">Disconnect preview</button>
+        <button id="preview-reconnect" type="button">Reconnect preview</button>
       </section>
 
-      <section id="preview-status">
-        <%= for {{:preview_stream, stream_id}, report} <- @encounter.transient_preview_state do %>
-          <p data-preview-stream={stream_id}>
-            Preview (<%= stream_id %>): <%= report.continuity %>
-          </p>
-        <% end %>
+      <button :if={!@view.capture && !@view.artifact && !@view.record} id="start-capture" type="button" phx-click="capture">
+        Start capture
+      </button>
+      <p :if={@view.capture} id="capture-active">Recording in progress</p>
+      <p :if={@view.error} role="alert">Capture failed.</p>
+
+      <section :if={@view.artifact || @view.record} id="recording">
+        <h2>Recording</h2>
+        <audio id="recording-audio" controls src={"/encounters/#{@view.encounter_id}/recording"}></audio>
+        <p id="recording-continuity">{(@view.artifact || @view.record.observation).continuity}</p>
+        <button :if={@view.artifact && !@view.record} id="accept-recording"
+          type="button" phx-click="accept" phx-value-digest={@view.artifact.artifact_sha256}>
+          Accept recording
+        </button>
       </section>
 
-      <section id="review-candidates">
-        <%= for {acq_id, cand} <- @encounter.review_candidates do %>
-          <article data-candidate={acq_id}>
-            <span>Recording <%= acq_id %>: <%= cand.continuity %> (<%= cand.status %>)</span>
-            <%= if cand.status == :ready_for_review do %>
-              <button
-                type="button"
-                phx-click="accept_acquisition"
-                phx-value-acquisition_id={acq_id}
-                phx-value-sha256={cand.artifact_sha256}
-              >
-                Accept Recording
-              </button>
-            <% end %>
-          </article>
-        <% end %>
+      <section :if={@view.record} id="accepted-observation">
+        <p id="observation-id">{@view.record.observation.observation_id}</p>
+        <p id="outbox-status">{@view.record.outbox.status}</p>
+        <p id="remote-reference">{Map.get(@view.record.outbox, :remote_ref)}</p>
+        <button id="deliver-recording" type="button" phx-click="deliver">Verify FHIR delivery</button>
       </section>
 
-      <%= if @accepted_record do %>
-        <section id="accepted-observation">
-          Accepted: <%= @accepted_record.observation.observation_id %>
-        </section>
-      <% end %>
-
-      <%= if @error_message do %>
-        <p id="exam-error"><%= @error_message %></p>
-      <% end %>
+      <p :if={@error} role="alert">{@error}</p>
     </main>
     """
-  end
-
-  defp maybe_commit(nil, _acceptance), do: nil
-
-  defp maybe_commit(store, acceptance) do
-    provenance = %{source_kind: :exam_live, source_ref: "live_review"}
-    {:ok, _status, record} = OutboxStore.commit_acceptance(store, acceptance, provenance)
-    record
   end
 end

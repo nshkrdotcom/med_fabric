@@ -1,26 +1,21 @@
 defmodule MedFabric.ExamWeb.UserSocket do
-  @moduledoc """
-  Authenticated Phoenix socket for WebRTC SDP/ICE signaling in `apps/exam`.
-  """
-
+  @moduledoc false
   use Phoenix.Socket
 
-  channel "signaling:*", MedFabric.ExamWeb.SignalingChannel
+  alias MedFabric.ExamWeb.Endpoint
+
+  channel("signaling:*", MedFabric.ExamWeb.SignalingChannel)
 
   @impl true
-  def connect(%{"clinician_id" => clinician_id, "encounter_ref" => encounter_ref}, socket, _info)
-      when is_binary(clinician_id) and clinician_id != "" and
-             is_binary(encounter_ref) and encounter_ref != "" do
-    socket =
-      socket
-      |> assign(:clinician_id, clinician_id)
-      |> assign(:authorized_encounter_ref, encounter_ref)
-
-    {:ok, socket}
+  def connect(%{"token" => token}, socket, _info) when is_binary(token) do
+    case Phoenix.Token.verify(Endpoint, "exam-preview", token, max_age: 3600) do
+      {:ok, encounter_id} -> {:ok, assign(socket, :encounter_id, encounter_id)}
+      _ -> :error
+    end
   end
 
-  def connect(_params, _socket, _connect_info), do: :error
+  def connect(_params, _socket, _info), do: :error
 
   @impl true
-  def id(socket), do: "exam_clinician:#{socket.assigns.clinician_id}"
+  def id(_socket), do: nil
 end
