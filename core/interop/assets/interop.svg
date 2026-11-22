@@ -7,10 +7,10 @@
     <radialGradient id="field" cx=".37" cy=".28" r=".85"><stop stop-color="#365766"/><stop offset=".65" stop-color="#162f40"/><stop offset="1" stop-color="#091a26"/></radialGradient>
     <pattern id="etch" width="12" height="12" patternUnits="userSpaceOnUse"><path d="M0 12 12 0" stroke="#ffcd78" stroke-opacity=".08"/><circle cx="6" cy="6" r=".8" fill="#ffcd78" opacity=".3"/></pattern>
   </defs>
-  <path d="M100 1 198 51v98l-98 50-98-50V51Z" fill="url(#metal)"/>
+  <path d="M100 1 185.736515 50.5 185.736515 149.5 100 199 14.263485 149.5 14.263485 50.5Z" fill="url(#metal)"/>
   <g transform="translate(100 100) scale(.945) translate(-100 -100)">
-    <path d="M100 1 198 51v98l-98 50-98-50V51Z" fill="url(#field)"/><path d="M100 1 198 51v98l-98 50-98-50V51Z" fill="url(#etch)"/>
-    <path d="M10 65v-9l90-46 90 46v9M10 135v9l90 46 90-46v-9" fill="none" stroke="#ffcd78" opacity=".52"/>
+    <path d="M100 1 185.736515 50.5 185.736515 149.5 100 199 14.263485 149.5 14.263485 50.5Z" fill="url(#field)"/><path d="M100 1 185.736515 50.5 185.736515 149.5 100 199 14.263485 149.5 14.263485 50.5Z" fill="url(#etch)"/>
+    <path d="M100 10 177.942286 55 177.942286 145 100 190 22.0577137 145 22.0577137 55Z" fill="none" stroke="#ffcd78" opacity=".52"/>
   </g>
   <g fill="none" stroke-linejoin="round" stroke-linecap="round">
     <path d="M47 62h28l10 10v39h-38Z" fill="url(#metal)" stroke="#e1f6fd" stroke-width="1.5"/>
