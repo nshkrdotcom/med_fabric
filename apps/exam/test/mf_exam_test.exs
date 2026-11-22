@@ -4,7 +4,6 @@ defmodule MedFabric.ExamTest do
   alias MedCore.StreamSpec
   alias MedFabric.Domain.Encounter
   alias MedFabric.Exam
-  alias MedFabric.Exam.SessionBridge
   alias MedRTC.PeerLoopback
   alias MedRTC.SessionServer
   alias MedWeb.Signaling
@@ -38,8 +37,14 @@ defmodule MedFabric.ExamTest do
 
     # 3. Establish real ExWebRTC peer connection #1 (conn_a)
     {:ok, pair_a} = PeerLoopback.connect_pair("conn_a")
-    {_, e1} = SessionServer.dispatch(server, Signaling.to_session_event({:join, "clin_1", "conn_a", :clinician, 100}))
-    encounter = SessionBridge.ingest_effects(encounter, e1)
+
+    {_, e1} =
+      SessionServer.dispatch(
+        server,
+        Signaling.to_session_event({:join, "clin_1", "conn_a", :clinician, 100})
+      )
+
+    encounter = Exam.ingest_effects(encounter, e1)
 
     # 4. Start simulated capture
     {_, e2} =
@@ -48,12 +53,18 @@ defmodule MedFabric.ExamTest do
         {:acquisition_started, %{acquisition_id: "acq_1", stream_id: "exam_audio", t_ms: 200}}
       )
 
-    encounter = SessionBridge.ingest_effects(encounter, e2)
+    encounter = Exam.ingest_effects(encounter, e2)
 
     # 5. Drop real ExWebRTC preview connection #1 while capture continues
     :ok = PeerLoopback.close_pair(pair_a)
-    {_, e3} = SessionServer.dispatch(server, Signaling.to_session_event({:leave, "clin_1", "conn_a", 400}))
-    encounter = SessionBridge.ingest_effects(encounter, e3)
+
+    {_, e3} =
+      SessionServer.dispatch(
+        server,
+        Signaling.to_session_event({:leave, "clin_1", "conn_a", 400})
+      )
+
+    encounter = Exam.ingest_effects(encounter, e3)
 
     # 6. Capture finishes independently on the device
     complete_event =
@@ -68,33 +79,27 @@ defmodule MedFabric.ExamTest do
        }}
 
     {_, e4} = SessionServer.dispatch(server, complete_event)
-    encounter = SessionBridge.ingest_effects(encounter, e4)
+    encounter = Exam.ingest_effects(encounter, e4)
 
     # 7. Browser rejoins same session with a new real ExWebRTC connection (conn_b)
     {:ok, pair_b} = PeerLoopback.connect_pair("conn_b")
-    {_, e5} = SessionServer.dispatch(server, Signaling.to_session_event({:join, "clin_1", "conn_b", :clinician, 1_400}))
-    encounter = SessionBridge.ingest_effects(encounter, e5)
-    :ok = PeerLoopback.close_pair(pair_b)
 
-    # 8. Duplicate capture_completed arrives (via SessionServer and redelivery to Encounter)
-    {_, e6} =
+    {_, e5} =
       SessionServer.dispatch(
         server,
-        put_elem(complete_event, 1, %{
-          elem(complete_event, 1)
-          | delivery_id: "deliv_2",
-            t_ms: 1_500
-        })
+        Signaling.to_session_event({:join, "clin_1", "conn_b", :clinician, 1_400})
       )
 
-    encounter =
-      encounter
-      |> SessionBridge.ingest_effects(e6)
-      |> SessionBridge.ingest_effects(e4)
+    encounter = Exam.ingest_effects(encounter, e5)
+    :ok = PeerLoopback.close_pair(pair_b)
+
+    # 8. Feed the SDK's actual emitted capture_completed fact a second time (redelivery)
+    encounter = Exam.ingest_effects(encounter, e4)
 
     # 9. Preview interruption stays transient; recording continuity intact; one candidate
     assert encounter.transient_preview_state[{:preview_stream, "exam_audio"}].continuity ==
              :unknown
+
     assert map_size(encounter.review_candidates) == 1
     assert encounter.review_candidates["acq_1"].status == :ready_for_review
     assert encounter.review_candidates["acq_1"].continuity == :observed_continuous

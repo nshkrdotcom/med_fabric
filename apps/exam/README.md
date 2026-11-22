@@ -12,7 +12,7 @@
 First complete clinical product application in Med Fabric. Composes `mf_runtime`, `mf_store`, `mf_interop`, and the single `:med_ex` SDK (`workspace_dep/1`) to:
 
 - authorize encounter participants and declare product stream profiles;
-- bridge encounter correlation IDs (`encounter_ref`, `acquisition_id`) onto `:med_ex` via `MedFabric.Exam.SessionBridge`;
+- bridge encounter correlation IDs (`encounter_ref`, `acquisition_id`) directly onto `:med_ex` via `MedFabric.Exam.start_session/3` and `MedFabric.Exam.ingest_effects/2`;
 - coordinate simulated and real device acquisitions, link finalized recording artifacts and continuity verdicts into clinical review; and
 - commit clinician-accepted observations together with their FHIR export intent in one `mf_store` transaction before `mf_interop` dispatches delivery.
 
