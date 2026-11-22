@@ -3,7 +3,7 @@ if bootstrap = System.get_env("MIX_WORKSPACE_OPS_BOOTSTRAP"), do: Code.require_f
 defmodule MedFabric.Exam.MixProject do
   use Mix.Project
 
-  @med_ex_projection_ref "3ac1df64601024cd6e1361364d4a29957a1f33ff"
+  @med_ex_projection_ref "50a3d8777e37cf1ec34ff7a6c0bc54d137a5841a"
 
   def project do
     [
@@ -12,7 +12,7 @@ defmodule MedFabric.Exam.MixProject do
       elixir: "~> 1.18",
       description: "Connected remote clinical examination",
       dialyzer: [plt_add_apps: [:mix]],
-      aliases: [quality: ["credo --strict", "dialyzer"]],
+      aliases: [quality: ["credo --strict", "dialyzer --force-check"]],
       deps: deps()
     ]
   end

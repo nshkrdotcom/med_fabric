@@ -8,9 +8,10 @@ defmodule MedFabric.Interop.MixProject do
       elixir: "~> 1.18",
       description: "Healthcare record exchange",
       dialyzer: [plt_add_apps: [:mix]],
-      aliases: [quality: ["credo --strict", "dialyzer"]],
+      aliases: [quality: ["credo --strict", "dialyzer --force-check"]],
       deps: [
         {:mf_domain, path: "../domain"},
+        {:req, "~> 0.7.5"},
         {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
         {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
       ]
