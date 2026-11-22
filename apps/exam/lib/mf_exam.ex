@@ -9,8 +9,8 @@ defmodule MedFabric.Exam do
 
   alias MedFabric.Exam.SessionBridge
 
-  @spec start_session(String.t(), String.t(), MedCore.Profile.topology()) :: MedCore.Session.t()
-  def start_session(encounter_ref, session_id, topology \\ :server_terminated) do
-    SessionBridge.new_session(encounter_ref, session_id, topology)
+  @spec start_session(String.t(), String.t(), keyword()) :: MedCore.Session.t()
+  def start_session(encounter_ref, session_id, opts \\ []) do
+    SessionBridge.new_session(encounter_ref, session_id, opts)
   end
 end
