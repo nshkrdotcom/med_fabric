@@ -64,7 +64,7 @@ defmodule MedFabric.Exam.CaptureRunner do
 
   defp capture(config) do
     {enc, acq} = key = Exam.key(config)
-    generation = make_ref()
+    generation = System.unique_integer([:positive, :monotonic])
 
     with :ok <- File.mkdir_p(config.artifact_dir),
          {:ok, artifact} <-

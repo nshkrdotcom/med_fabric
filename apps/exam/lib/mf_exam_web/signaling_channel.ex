@@ -55,6 +55,9 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
         %{assigns: %{peer: %Preview{} = peer, media: media, sequence: sequence}} = socket
       ) do
     case media do
+      {active, _, _} when generation < active ->
+        {:noreply, socket}
+
       {^generation, previous, _tick} when index <= previous ->
         {:noreply, socket}
 
