@@ -34,17 +34,23 @@ defmodule MedFabric.Interop.FhirClient do
       "subject" => %{"reference" => patient_ref},
       "encounter" => %{"reference" => encounter_ref},
       "performer" => [%{"display" => observation.accepted_by}],
-      "valueString" =>
-        "sha256:#{observation.artifact_sha256} continuity:#{observation.continuity}",
-      "note" => [
-        %{
-          "text" =>
-            "provenance=#{Map.get(provenance, :source_kind, :unknown)}:" <>
-              "#{Map.get(provenance, :source_ref, "unspecified")} " <>
-              "interval_ms=#{start_ms}..#{end_ms} " <>
-              "sample_rate_hz=#{Map.get(provenance, :sample_rate_hz, 0)}"
-        }
-      ]
+      "component" =>
+        Enum.map(
+          [
+            {"pcm-sha256", "valueString", observation.artifact_sha256},
+            {"continuity", "valueString", to_string(observation.continuity)},
+            {"start-ms", "valueInteger", start_ms},
+            {"end-ms", "valueInteger", end_ms},
+            {"source", "valueString", to_string(Map.fetch!(provenance, :source_ref))},
+            {"sample-rate-hz", "valueInteger", Map.fetch!(provenance, :sample_rate_hz)}
+          ],
+          fn {key, type, value} ->
+            %{
+              "code" => %{"coding" => [%{"system" => @fixture_system, "code" => key}]},
+              type => value
+            }
+          end
+        )
     }
   end
 
@@ -113,10 +119,10 @@ defmodule MedFabric.Interop.FhirClient do
 
   defp confirmed(expected, %{"id" => id} = actual, identifier, created?)
        when is_binary(id) and byte_size(id) > 0 do
-    identity = ["resourceType", "subject", "encounter", "valueString"]
+    fields = Map.drop(expected, ["identifier"])
     remote_identifiers = Map.get(actual, "identifier", [])
 
-    if Map.take(expected, identity) == Map.take(actual, identity) and
+    if matches?(fields, actual) and
          Enum.any?(remote_identifiers, &(Map.take(&1, ["system", "value"]) == identifier)) do
       {:ok,
        %{remote_ref: "#{actual["resourceType"]}/#{id}", resource: actual, created?: created?}}
@@ -128,6 +134,17 @@ defmodule MedFabric.Interop.FhirClient do
   defp confirmed(_expected, _actual, _identifier, _created?),
     do: {:error, :unconfirmed_remote_record}
 
+  # HAPI can enrich reference objects and reorder repeated elements.
+  defp matches?(expected, actual) when is_map(expected) and is_map(actual),
+    do: Enum.all?(expected, fn {k, v} -> matches?(v, Map.get(actual, k)) end)
+
+  defp matches?(expected, actual) when is_list(expected) and is_list(actual),
+    do:
+      length(expected) == length(actual) and
+        Enum.all?(expected, fn item -> Enum.any?(actual, &matches?(item, &1)) end)
+
+  defp matches?(expected, actual), do: expected == actual
+
   defp search(type, system, value, opts) do
     case request(opts,
            method: :get,
@@ -136,7 +153,16 @@ defmodule MedFabric.Interop.FhirClient do
            headers: @headers
          ) do
       {:ok, %{status: 200, body: %{"resourceType" => "Bundle"} = bundle}} ->
-        {:ok, Enum.map(Map.get(bundle, "entry", []), &Map.fetch!(&1, "resource"))}
+        if Enum.any?(Map.get(bundle, "link", []), &(&1["relation"] == "next")) do
+          {:error, :ambiguous_search}
+        else
+          {:ok,
+           for(
+             %{"resource" => r} = entry <- Map.get(bundle, "entry", []),
+             get_in(entry, ["search", "mode"]) in [nil, "match"],
+             do: r
+           )}
+        end
 
       result ->
         response_error(result)

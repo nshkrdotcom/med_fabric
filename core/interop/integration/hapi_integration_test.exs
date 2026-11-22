@@ -36,7 +36,7 @@ defmodule MedFabric.Interop.HapiIntegrationTest do
       FhirClient.build_observation(
         observation,
         %{external_id: fixture_id},
-        %{source_kind: :fixture, source_ref: "clip.wav"},
+        %{source_kind: :fixture, source_ref: "clip.wav", sample_rate_hz: 4000},
         patient_ref: patient,
         encounter_ref: encounter
       )
@@ -49,10 +49,10 @@ defmodule MedFabric.Interop.HapiIntegrationTest do
     assert "Observation/" <> remote["id"] == remote_ref
     assert remote["subject"]["reference"] == patient
     assert remote["encounter"]["reference"] == encounter
-    assert remote["valueString"] == resource["valueString"]
+    assert remote["component"] == resource["component"]
     assert hd(remote["code"]["coding"])["code"] == "reviewed-auscultation-recording"
 
-    different_recording = Map.put(resource, "valueString", "different recording")
+    different_recording = Map.put(resource, "status", "entered-in-error")
     assert {:error, :conflicting_remote_record} = FhirClient.deliver(different_recording, opts)
     assert {:ok, [^remote]} = FhirClient.fetch_by_identifier(fixture_id, opts)
   end
