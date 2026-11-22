@@ -5,11 +5,11 @@ defmodule MedFabric.DomainTest do
 
   test "closed encounter rejects new acquisitions" do
     enc = Encounter.new("enc_closed") |> Encounter.close()
-    assert Encounter.request_acquisition(enc, "acq_1") == {:error, :encounter_closed}
+    assert Encounter.request_acquisition(enc, "acq_1", "s1") == {:error, :encounter_closed}
   end
 
   test "preview drop stays transient, duplicate capture yields one review candidate, and acceptance is idempotent" do
-    {:ok, enc0} = Encounter.new("enc_1") |> Encounter.request_acquisition("acq_1")
+    {:ok, enc0} = Encounter.new("enc_1") |> Encounter.request_acquisition("acq_1", "s1")
 
     enc1 =
       enc0
@@ -64,7 +64,7 @@ defmodule MedFabric.DomainTest do
   end
 
   test "unknown recording continuity is preserved faithfully and conflicting digests block acceptance" do
-    {:ok, enc0} = Encounter.new("enc_2") |> Encounter.request_acquisition("acq_u")
+    {:ok, enc0} = Encounter.new("enc_2") |> Encounter.request_acquisition("acq_u", "s2")
 
     enc1 =
       Encounter.apply_fact(
@@ -105,5 +105,56 @@ defmodule MedFabric.DomainTest do
 
     assert Encounter.accept_acquisition(enc2, "acq_u", "sha_u1", "clin_1") ==
              {:error, :conflict_blocks_acceptance}
+  end
+
+  test "review candidates require the requested encounter, session, and acquisition" do
+    {:ok, encounter} = Encounter.new("enc") |> Encounter.request_acquisition("acq", "session")
+
+    capture = %{
+      encounter_ref: "enc",
+      session_id: "session",
+      acquisition_id: "acq",
+      artifact_sha256: "digest",
+      interval_ms: {0, 5_000},
+      continuity: :observed_continuous
+    }
+
+    for key <- [:encounter_ref, :session_id, :acquisition_id] do
+      assert ^encounter =
+               Encounter.apply_fact(
+                 encounter,
+                 {:capture_completed, %{capture | key => "unrelated"}}
+               )
+    end
+
+    assert {:error, :acquisition_already_bound} =
+             Encounter.request_acquisition(encounter, "acq", "new-session")
+
+    ready = Encounter.apply_fact(encounter, {:capture_completed, capture})
+    closed = Encounter.close(ready)
+
+    assert {:error, :encounter_closed} =
+             Encounter.accept_acquisition(closed, "acq", "digest", "reviewer")
+
+    conflict = %{
+      encounter_ref: "enc",
+      session_id: "session",
+      acquisition_id: "acq",
+      incoming_sha256: "conflict"
+    }
+
+    held =
+      encounter
+      |> Encounter.apply_fact({:capture_conflict, conflict})
+      |> Encounter.apply_fact({:capture_completed, capture})
+
+    assert {:error, :conflict_blocks_acceptance} =
+             Encounter.accept_acquisition(held, "acq", "digest", "reviewer")
+
+    {:ok, accepted, original} = Encounter.accept_acquisition(ready, "acq", "digest", "reviewer")
+    accepted = Encounter.apply_fact(accepted, {:capture_conflict, conflict})
+
+    assert {:ok, _, ^original} =
+             Encounter.accept_acquisition(Encounter.close(accepted), "acq", "digest", "reviewer")
   end
 end

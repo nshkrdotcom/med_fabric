@@ -5,7 +5,7 @@ defmodule MedFabric.Domain.MixProject do
     [
       app: :mf_domain,
       version: "0.1.0",
-      elixir: "~> 1.18",
+      elixir: "~> 1.20",
       description: "Pure encounter decisions",
       dialyzer: [plt_add_apps: [:mix]],
       aliases: [quality: ["credo --strict", "dialyzer"]],

@@ -31,7 +31,7 @@ defmodule MedFabric.Domain.Encounter do
   @type t :: %__MODULE__{
           id: encounter_id(),
           status: :open | :closed,
-          requested_acquisitions: MapSet.t(acquisition_id()),
+          requested_acquisitions: %{acquisition_id() => map()},
           review_candidates: %{acquisition_id() => review_candidate()},
           accepted_observations: %{acquisition_id() => map()},
           transient_preview_state: map()
@@ -41,7 +41,7 @@ defmodule MedFabric.Domain.Encounter do
   defstruct [
     :id,
     status: :open,
-    requested_acquisitions: MapSet.new(),
+    requested_acquisitions: %{},
     review_candidates: %{},
     accepted_observations: %{},
     transient_preview_state: %{}
@@ -53,16 +53,24 @@ defmodule MedFabric.Domain.Encounter do
   @spec close(t()) :: t()
   def close(%__MODULE__{} = encounter), do: %{encounter | status: :closed}
 
-  @spec request_acquisition(t(), acquisition_id()) :: {:ok, t()} | {:error, :encounter_closed}
-  def request_acquisition(%__MODULE__{status: :closed}, _acq_id), do: {:error, :encounter_closed}
+  @spec request_acquisition(t(), acquisition_id(), String.t()) ::
+          {:ok, t()} | {:error, :encounter_closed | :acquisition_already_bound}
+  def request_acquisition(%__MODULE__{status: :closed}, _acq_id, _session_id),
+    do: {:error, :encounter_closed}
 
-  def request_acquisition(%__MODULE__{status: :open} = encounter, acq_id)
-      when is_binary(acq_id) do
-    {:ok,
-     %{
-       encounter
-       | requested_acquisitions: MapSet.put(encounter.requested_acquisitions, acq_id)
-     }}
+  def request_acquisition(%__MODULE__{} = encounter, acq_id, session_id)
+      when is_binary(acq_id) and is_binary(session_id) do
+    case Map.get(encounter.requested_acquisitions, acq_id) do
+      nil ->
+        requests = Map.put(encounter.requested_acquisitions, acq_id, %{session_id: session_id})
+        {:ok, %{encounter | requested_acquisitions: requests}}
+
+      %{session_id: ^session_id} ->
+        {:ok, encounter}
+
+      _ ->
+        {:error, :acquisition_already_bound}
+    end
   end
 
   @doc """
@@ -92,17 +100,21 @@ defmodule MedFabric.Domain.Encounter do
     encounter
   end
 
-  def apply_fact(%__MODULE__{} = encounter, {:capture_completed, payload}) do
-    %{
-      acquisition_id: acq_id,
-      session_id: session_id,
-      artifact_sha256: sha256,
-      interval_ms: interval_ms,
-      continuity: continuity
-    } = payload
-
-    case Map.get(encounter.review_candidates, acq_id) do
-      nil ->
+  def apply_fact(
+        %__MODULE__{id: encounter_id, status: :open} = encounter,
+        {:capture_completed,
+         %{
+           encounter_ref: encounter_id,
+           acquisition_id: acq_id,
+           session_id: session_id,
+           artifact_sha256: sha256,
+           interval_ms: interval_ms,
+           continuity: continuity
+         }}
+      ) do
+    case {Map.get(encounter.requested_acquisitions, acq_id),
+          Map.get(encounter.review_candidates, acq_id)} do
+      {%{session_id: ^session_id} = request, nil} ->
         candidate = %{
           acquisition_id: acq_id,
           session_id: session_id,
@@ -112,41 +124,69 @@ defmodule MedFabric.Domain.Encounter do
           status: :ready_for_review
         }
 
-        %{
-          encounter
-          | review_candidates: Map.put(encounter.review_candidates, acq_id, candidate)
-        }
+        candidate =
+          case request do
+            %{conflicting_sha256: digest} ->
+              Map.merge(candidate, %{status: :conflict, conflicting_sha256: digest})
 
-      %{artifact_sha256: ^sha256} ->
-        # Idempotent redelivery of the exact same finalized capture
+            _ ->
+              candidate
+          end
+
+        put_candidate(encounter, acq_id, candidate)
+
+      {%{session_id: ^session_id},
+       %{status: :ready_for_review, artifact_sha256: digest} = candidate}
+      when digest != sha256 ->
+        put_candidate(
+          encounter,
+          acq_id,
+          Map.merge(candidate, %{status: :conflict, conflicting_sha256: sha256})
+        )
+
+      _ ->
         encounter
-
-      existing ->
-        conflicted = Map.merge(existing, %{status: :conflict, conflicting_sha256: sha256})
-
-        %{
-          encounter
-          | review_candidates: Map.put(encounter.review_candidates, acq_id, conflicted)
-        }
     end
   end
 
-  def apply_fact(%__MODULE__{} = encounter, {:capture_conflict, payload}) do
-    %{acquisition_id: acq_id, incoming_sha256: incoming_sha256} = payload
+  def apply_fact(
+        %__MODULE__{id: encounter_id, status: :open} = encounter,
+        {:capture_conflict,
+         %{
+           encounter_ref: encounter_id,
+           session_id: session_id,
+           acquisition_id: acq_id,
+           incoming_sha256: digest
+         }}
+      ) do
+    case {Map.get(encounter.requested_acquisitions, acq_id),
+          Map.get(encounter.review_candidates, acq_id)} do
+      {%{session_id: ^session_id}, %{status: :ready_for_review} = candidate} ->
+        put_candidate(
+          encounter,
+          acq_id,
+          Map.merge(candidate, %{status: :conflict, conflicting_sha256: digest})
+        )
 
-    case Map.get(encounter.review_candidates, acq_id) do
-      nil ->
+      {%{session_id: ^session_id} = request, nil} ->
+        requests =
+          Map.put(
+            encounter.requested_acquisitions,
+            acq_id,
+            Map.put_new(request, :conflicting_sha256, digest)
+          )
+
+        %{encounter | requested_acquisitions: requests}
+
+      _ ->
         encounter
-
-      existing ->
-        conflicted =
-          Map.merge(existing, %{status: :conflict, conflicting_sha256: incoming_sha256})
-
-        %{
-          encounter
-          | review_candidates: Map.put(encounter.review_candidates, acq_id, conflicted)
-        }
     end
+  end
+
+  def apply_fact(%__MODULE__{} = encounter, _event), do: encounter
+
+  defp put_candidate(encounter, acq_id, candidate) do
+    %{encounter | review_candidates: Map.put(encounter.review_candidates, acq_id, candidate)}
   end
 
   @doc """
@@ -158,7 +198,8 @@ defmodule MedFabric.Domain.Encounter do
   """
   @spec accept_acquisition(t(), acquisition_id(), String.t(), String.t()) ::
           {:ok, t(), acceptance_result()}
-          | {:error, :not_found | :conflict_blocks_acceptance | :digest_mismatch}
+          | {:error,
+             :not_found | :conflict_blocks_acceptance | :digest_mismatch | :encounter_closed}
   def accept_acquisition(%__MODULE__{} = encounter, acq_id, artifact_sha256, clinician_id)
       when is_binary(acq_id) and is_binary(artifact_sha256) and is_binary(clinician_id) do
     case Map.get(encounter.review_candidates, acq_id) do
@@ -174,6 +215,9 @@ defmodule MedFabric.Domain.Encounter do
       %{status: :accepted} ->
         obs = Map.fetch!(encounter.accepted_observations, acq_id)
         {:ok, encounter, %{observation: obs, export_intent: export_intent_for(obs)}}
+
+      %{status: :ready_for_review} when encounter.status == :closed ->
+        {:error, :encounter_closed}
 
       %{status: :ready_for_review} = candidate ->
         observation = %{
