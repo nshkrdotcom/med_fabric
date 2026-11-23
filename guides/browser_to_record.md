@@ -156,8 +156,7 @@ With the compiled release (or `mix run --no-halt`) running from Section 2:
 
 ## 4. Verify a local `med_ex` workspace checkout (MWO)
 
-Until `:med_ex` `0.1.0` is published on Hex.pm, `apps/exam/mix.exs` pins a
-committed `med_ex` projection ref. To test against a local sibling `../med_ex`
+The exam uses MedEx from Hex. To test against a local sibling `../med_ex`
 checkout instead using `mix_workspace_ops` (optional developer-workspace flow):
 
 1. Run `mix weld.project` in `../med_ex`.
