@@ -7,7 +7,6 @@ defmodule MedFabric.Interop.FhirClient do
   """
 
   @identifier_system "urn:med-fabric:observation"
-  @fixture_system "urn:med-fabric:fixture"
   @default_base_url "http://127.0.0.1:18080/fhir"
   @headers [{"content-type", "application/fhir+json"}, {"accept", "application/fhir+json"}]
 
@@ -53,32 +52,6 @@ defmodule MedFabric.Interop.FhirClient do
     }
   end
 
-  def seed_exam(fixture_id, opts \\ []) do
-    patient = %{
-      "resourceType" => "Patient",
-      "identifier" => identifier(@fixture_system, fixture_id),
-      "active" => true,
-      "name" => [%{"family" => "Fixture", "given" => ["Exam"]}]
-    }
-
-    with {:ok, %{remote_ref: patient_ref}} <- conditional_create(patient, opts) do
-      encounter = %{
-        "resourceType" => "Encounter",
-        "identifier" => identifier(@fixture_system, fixture_id),
-        "status" => "finished",
-        "class" => %{
-          "system" => "http://terminology.hl7.org/CodeSystem/v3-ActCode",
-          "code" => "AMB"
-        },
-        "subject" => %{"reference" => patient_ref}
-      }
-
-      with {:ok, %{remote_ref: encounter_ref}} <- conditional_create(encounter, opts) do
-        {:ok, %{patient_ref: patient_ref, encounter_ref: encounter_ref}}
-      end
-    end
-  end
-
   @spec deliver(map(), keyword()) :: {:ok, map()} | {:error, term()}
   def deliver(%{"resourceType" => "Observation"} = resource, opts \\ []) do
     conditional_create(resource, opts)
@@ -89,7 +62,7 @@ defmodule MedFabric.Interop.FhirClient do
     search("Observation", @identifier_system, external_id, opts)
   end
 
-  defp conditional_create(%{"resourceType" => type, "identifier" => [first | _]} = resource, opts) do
+  def conditional_create(%{"resourceType" => type, "identifier" => [first | _]} = resource, opts) do
     %{"system" => system, "value" => value} = first
     condition = URI.encode_query(identifier: "#{system}|#{value}")
 
@@ -131,25 +104,10 @@ defmodule MedFabric.Interop.FhirClient do
   defp confirmed(_expected, _actual, _identifier, _created?),
     do: {:error, :unconfirmed_remote_record}
 
-  defp clinical_fields_match?(%{"resourceType" => "Observation"} = expected, actual) do
-    matches?(expected, actual) and
-      Enum.all?(Map.keys(actual), fn key ->
-        if String.starts_with?(key, "value") or
-             key in ~w(component dataAbsentReason interpretation modifierExtension) do
-          Map.has_key?(expected, key)
-        else
-          true
-        end
-      end)
-  end
+  defp clinical_fields_match?(%{"resourceType" => "Observation"} = expected, actual),
+    do: MedFabric.Interop.Observation.matches?(expected, actual)
 
   defp clinical_fields_match?(expected, actual), do: matches?(expected, actual)
-
-  defp matches?(%{"coding" => [expected]} = concept, %{"coding" => [actual]} = remote)
-       when is_map(expected) and is_map(actual) do
-    actual = if Map.has_key?(expected, "display"), do: actual, else: Map.delete(actual, "display")
-    expected == actual and matches?(Map.delete(concept, "coding"), remote)
-  end
 
   # HAPI can enrich reference objects and reorder repeated elements.
   defp matches?(expected, actual) when is_map(expected) and is_map(actual),

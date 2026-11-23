@@ -1,3 +1,5 @@
+Code.require_file("../../../ops/lab_fhir.exs", __DIR__)
+
 defmodule MedFabric.Interop.HapiIntegrationTest do
   use ExUnit.Case, async: false
 
@@ -21,9 +23,9 @@ defmodule MedFabric.Interop.HapiIntegrationTest do
              Req.get!("#{base_url}/metadata", headers: [{"accept", "application/fhir+json"}])
 
     assert {:ok, %{patient_ref: patient, encounter_ref: encounter} = refs} =
-             FhirClient.seed_exam(fixture_id, opts)
+             MedFabric.LabFHIR.seed_exam(fixture_id, opts)
 
-    assert {:ok, ^refs} = FhirClient.seed_exam(fixture_id, opts)
+    assert {:ok, ^refs} = MedFabric.LabFHIR.seed_exam(fixture_id, opts)
 
     resource =
       FhirClient.resource(
