@@ -54,7 +54,13 @@ clinical records.
 Use these steps to build and start the compiled OTP Mix release directly (for
 example for local operation or the manual headphone listening check).
 
-### Step A — Start services and seed FHIR references
+### Step A — Install dependencies, start services, and seed FHIR references
+
+From the repository root, install Mix dependencies on a fresh checkout:
+
+```bash
+./onboard.sh
+```
 
 Start local native PostgreSQL 18 and HAPI FHIR 7.6.0 (or export your own
 `DATABASE_URL` and `FHIR_BASE_URL`):
@@ -69,6 +75,7 @@ Seed the synthetic FHIR `Patient` and `Encounter` references before enabling
 ```bash
 export MF_EXAM_ID="exam-local-1"
 export MF_REFS_FILE="$PWD/_build/local-refs.json"
+mkdir -p "$(dirname "$MF_REFS_FILE")"
 (cd apps/exam && env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs)
 ```
 
