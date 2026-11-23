@@ -15,11 +15,11 @@ defmodule MedFabric.Domain.Evidence do
           continuity: :observed_continuous
         },
         actor,
-        settings,
+        %{} = settings,
         %DateTime{} = effective_at
       )
       when is_integer(count) and count > 0 and is_binary(actor) and byte_size(actor) > 0 and
-             is_map(settings) and is_binary(id) do
+             is_binary(id) do
     if Regex.match?(~r/\A[A-Za-z0-9_-]{1,64}\z/, id) and digest?(file) and digest?(pcm) and
          key == file <> ".wav" do
       {:ok,

@@ -1,5 +1,3 @@
-if bootstrap = System.get_env("MIX_WORKSPACE_OPS_BOOTSTRAP"), do: Code.require_file(bootstrap)
-
 defmodule MedFabric.Exam.MixProject do
   use Mix.Project
 
@@ -45,16 +43,10 @@ defmodule MedFabric.Exam.MixProject do
 
   defp med_ex_dep do
     case candidate_path() do
-      nil -> workspace_dep({:med_ex, "~> 0.2.0"})
+      nil -> {:med_ex, "~> 0.2.0"}
       path -> {:med_ex, path: path}
     end
   end
 
   defp candidate_path, do: System.get_env("MF_MED_EX_PATH")
-
-  defp workspace_dep(committed) do
-    if function_exported?(MixWorkspaceOpsBootstrap, :dep, 2),
-      do: apply(MixWorkspaceOpsBootstrap, :dep, [committed, __DIR__]),
-      else: committed
-  end
 end
