@@ -11,6 +11,7 @@ defmodule MedFabric.Exam.MixProject do
       description: "Connected remote clinical examination",
       dialyzer: [plt_add_apps: [:mix]],
       aliases: [quality: ["credo --strict", "dialyzer --force-check"]],
+      lockfile: if(candidate_path(), do: "_build/candidate.mix.lock", else: "mix.lock"),
       deps: deps()
     ]
   end
@@ -24,7 +25,7 @@ defmodule MedFabric.Exam.MixProject do
       {:mf_domain, path: "../../core/domain"},
       {:mf_store, path: "../../core/store"},
       {:mf_interop, path: "../../core/interop"},
-      workspace_dep({:med_ex, "~> 0.2.0"}),
+      med_ex_dep(),
       # Ratio PR 131 widens its optional Decimal constraint. Keep this pin in the
       # deployable application until Hex ships that change.
       {:ratio,
@@ -41,6 +42,15 @@ defmodule MedFabric.Exam.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]
   end
+
+  defp med_ex_dep do
+    case candidate_path() do
+      nil -> workspace_dep({:med_ex, "~> 0.2.0"})
+      path -> {:med_ex, path: path}
+    end
+  end
+
+  defp candidate_path, do: System.get_env("MF_MED_EX_PATH")
 
   defp workspace_dep(committed) do
     if function_exported?(MixWorkspaceOpsBootstrap, :dep, 2),

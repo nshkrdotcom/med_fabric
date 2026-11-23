@@ -29,7 +29,7 @@ manual listening check, and optional local workspace SDK testing.
 
 ## Verify the unpublished candidate
 
-Use sibling checkouts named `med_ex` and `med_fabric`. Supply the medical Mix Workspace Ops registry that maps `med_fabric.mf_exam` to the local provider `med_ex.med_ex` at `med_ex/dist/monolith/med_ex`. The script finds `mix_workspace_ops` on PATH or at `../mix_workspace_ops/mix_workspace_ops`. Set `MWO_BIN` and `MWO_REGISTRY` to use other locations. The default registry is `~/.config/mix_workspace_ops/medical/registry.json`.
+Use sibling checkouts named `med_ex` and `med_fabric`. The script projects MedEx and passes that local project path to Mix. Candidate dependency resolution uses a separate lockfile under `apps/exam/_build`.
 
 ```bash
 bash ops/qc_candidate.sh
@@ -56,21 +56,23 @@ export MF_CLINICIAN_ACCESS_KEY="$(openssl rand -hex 24)"
 export MF_RELEASE_DIR="$PWD/_build/exam-release"
 ```
 
-For the unpublished candidate, seed and build with the generated SDK in the exam's MWO context:
+For the unpublished candidate, use the generated SDK with ordinary Mix:
 
 ```bash
 (cd ../med_ex && mix weld.project)
-../mix_workspace_ops/mix_workspace_ops run --project med_fabric.mf_exam --mode local \
-  --registry "$HOME/.config/mix_workspace_ops/medical/registry.json" --checkout-root .. \
-  --timeout 20m -- bash -ec '
-    mix deps.get
-    env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs
-    env -u MF_LAB MIX_ENV=prod mix release --path "$MF_RELEASE_DIR" --overwrite
-  '
+export MF_MED_EX_PATH="$(cd ../med_ex/dist/monolith/med_ex && pwd)"
+(
+  cd apps/exam
+  mkdir -p _build
+  cp mix.lock _build/candidate.mix.lock
+  mix deps.get
+  env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs
+  env -u MF_LAB MIX_ENV=prod mix release --path "$MF_RELEASE_DIR" --overwrite
+)
 MF_LAB=1 "$MF_RELEASE_DIR/bin/mf_exam" start
 ```
 
-After MedEx 0.2 is installed from Hex, run the commands inside that `bash -ec` directly from `apps/exam`.
+For the published SDK, leave `MF_MED_EX_PATH` unset and use the standard Mix lockfile.
 
 Run the seed command sequentially for each synthetic encounter, changing the ID, actors and keys. It writes a private JSON array. Each entry carries its own patient/clinician actors, FHIR destination, Patient reference and Encounter reference. Boot binds those identifiers in PostgreSQL. Conflicting existing bindings fail startup. The lab seed marks its FHIR encounter in progress. To use existing resources, provision the file directly. Keep the file outside Git.
 
@@ -87,7 +89,7 @@ Set `MF_TURN_URLS` to comma-separated TURN URIs and `MF_TURN_SECRET` to the shar
 - `core/domain` runs pure evidence cases with `mix test`.
 - `core/store` runs native transaction and encounter-isolation cases with `mix test integration` and `DATABASE_URL`.
 - `core/interop` runs pure FHIR comparison cases with `mix test`. Run `mix test integration` with `FHIR_BASE_URL` for the native HAPI retry.
-- `apps/exam` runs artifact, range and proxy cases with `mix test`, and the interrupted recording scenarios with `env -u MF_LAB mix test integration` and `DATABASE_URL`. Use MWO local mode for the unpublished SDK.
+- `apps/exam` runs artifact, range and proxy cases with `mix test`, and the interrupted recording scenarios with `env -u MF_LAB mix test integration` and `DATABASE_URL`. Set `MF_MED_EX_PATH` for the unpublished SDK.
 - The deployable exam currently pins the single dependency-constraint change from Ratio PR 131 at commit `05191db`. The lock resolves Numbers 5.2.5 and Decimal 3.2.0. Run `mix hex.audit` in the exam and review the pinned Git change separately. Remove the Git pin when a Hex Ratio release admits Decimal 3. MedEx itself continues to declare Hex dependencies. [Ratio PR 131](https://github.com/qqwy/elixir-rational/pull/131)
 
 See [Architecture and roadmap](architecture_and_roadmap.md) for storage ownership and clinical invariants.

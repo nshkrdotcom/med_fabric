@@ -3,10 +3,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 fabric=$PWD
-registry=${MWO_REGISTRY:-"${XDG_CONFIG_HOME:-$HOME/.config}/mix_workspace_ops/medical/registry.json"}
-mwo=${MWO_BIN:-$(command -v mix_workspace_ops || true)}
-mwo=${mwo:-"$fabric/../mix_workspace_ops/mix_workspace_ops"}
-[[ -x "$mwo" && -f "$registry" ]] || { echo "Set MWO_BIN and MWO_REGISTRY (see guides/browser_to_record.md)" >&2; exit 1; }
 (
   cd ../med_ex
   ./onboard.sh
@@ -23,11 +19,14 @@ done
 mix docs --warnings-as-errors
 export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$fabric/_build/playwright}"
 (cd ops/browser && npm ci --ignore-scripts && ./node_modules/.bin/playwright install chromium)
-"$mwo" run --project med_fabric.mf_exam --mode local --registry "$registry" \
-  --checkout-root "$fabric/.." --timeout 45m -- bash -ec '
-    mix deps.get
-    mix hex.audit
-    mix test
-    mix quality
-    exec bash ../../ops/verify_browser.sh --release
-  '
+(
+  cd apps/exam
+  export MF_MED_EX_PATH="$fabric/../med_ex/dist/monolith/med_ex"
+  mkdir -p _build
+  cp mix.lock _build/candidate.mix.lock
+  mix deps.get
+  mix hex.audit
+  mix test
+  mix quality
+  bash ../../ops/verify_browser.sh --release
+)

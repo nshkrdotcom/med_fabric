@@ -60,12 +60,12 @@ export MF_ENCOUNTERS_FILE="$work/refs.json"
 # Core projects have their own dependency/build roots outside the exam overlay.
 for package in core/store core/interop; do
   (cd "$package" && env -u MIX_EXS -u MIX_DEPS_PATH -u MIX_BUILD_PATH -u MIX_LOCKFILE \
-    -u MIX_WORKSPACE_OPS_BOOTSTRAP -u MIX_ENV -u MF_LAB mix test integration)
+    -u MF_MED_EX_PATH -u MIX_ENV -u MF_LAB mix test integration)
 done
 (cd apps/exam && env -u MF_LAB MIX_ENV=test mix test integration)
 
 if [[ "$mode" == "--release" ]]; then
-  (cd apps/exam && env -u MF_LAB MIX_ENV=prod MIX_BUILD_PATH="$work/prod-build" mix release --path "$work/release" --overwrite) >"$work/release.log" 2>&1 ||
+  (cd apps/exam && env -u MF_LAB MIX_ENV=prod mix release --path "$work/release" --overwrite) >"$work/release.log" 2>&1 ||
     { cat "$work/release.log" >&2; exit 1; }
 fi
 
