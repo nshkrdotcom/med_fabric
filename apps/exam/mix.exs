@@ -25,6 +25,11 @@ defmodule MedFabric.Exam.MixProject do
       {:mf_store, path: "../../core/store"},
       {:mf_interop, path: "../../core/interop"},
       workspace_dep({:med_ex, "~> 0.1.0"}),
+      # Ratio PR 131 widens its optional Decimal constraint. Keep this pin in the
+      # deployable application until Hex ships that change.
+      {:ratio, git: "https://github.com/robertbenavidez/elixir-rational.git",
+       ref: "05191dbe8061b49a170352f3c35c21360bdbb328", override: true},
+      {:decimal, "~> 3.2"},
       {:phoenix, "~> 1.8"},
       {:phoenix_html, "~> 4.2"},
       {:phoenix_live_view, "~> 1.0"},
