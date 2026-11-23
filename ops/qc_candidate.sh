@@ -10,7 +10,8 @@ mwo=${mwo:-"$fabric/../mix_workspace_ops/mix_workspace_ops"}
 (
   cd ../med_ex
   ./onboard.sh
-  mix ci.full
+  mix ci
+  mix monorepo.dialyzer
   node --test core/med_web/test/*.mjs
   mix weld.release.prepare
   mix weld.project
