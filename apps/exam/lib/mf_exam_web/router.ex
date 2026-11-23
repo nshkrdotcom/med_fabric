@@ -69,7 +69,8 @@ defmodule MedFabric.ExamWeb.Router do
 
     def call(conn, :attempt) do
       with "patient" <- get_session(conn, :exam_role),
-           {:ok, state} <- Recordings.status(conn.path_params["encounter_id"], conn.path_params["acquisition"]) do
+           {:ok, state} <-
+             Recordings.status(conn.path_params["encounter_id"], conn.path_params["acquisition"]) do
         json(conn, %{status: state})
       else
         _ -> send_resp(conn, 404, "Attempt unavailable")
@@ -77,7 +78,9 @@ defmodule MedFabric.ExamWeb.Router do
     end
 
     defp json(conn, data) do
-      conn |> put_resp_header("cache-control", "no-store") |> put_resp_content_type("application/json")
+      conn
+      |> put_resp_header("cache-control", "no-store")
+      |> put_resp_content_type("application/json")
       |> send_resp(200, Jason.encode!(data))
     end
   end
@@ -101,14 +104,20 @@ defmodule MedFabric.ExamWeb.Router do
     local_session = get_session(conn, :lab_encounter) == id and member?(id, actor, role)
 
     cond do
-      lab.local? && local_session -> conn
+      lab.local? && local_session ->
+        conn
+
       lab.local? && valid_key?(key, entry["patient_key"]) ->
         grant(conn, id, entry["patient_actor"], "patient")
+
       lab.local? && valid_key?(key, entry["clinician_key"]) ->
         grant(conn, id, entry["clinician_actor"], "clinician")
+
       !lab.local? ->
         authorize_proxy(conn, id, entry, lab.proxy_secret, local_session)
-      true -> conn |> send_resp(403, "Exam access required") |> halt()
+
+      true ->
+        conn |> send_resp(403, "Exam access required") |> halt()
     end
   end
 
@@ -118,7 +127,8 @@ defmodule MedFabric.ExamWeb.Router do
            Enum.find(["patient", "clinician"], &(entry[&1 <> "_actor"] == actor)),
          true <- member?(id, actor, role) do
       if current_session and get_session(conn, :exam_actor) == actor,
-        do: conn, else: grant(conn, id, actor, role)
+        do: conn,
+        else: grant(conn, id, actor, role)
     else
       _ -> conn |> send_resp(403, "Exam access required") |> halt()
     end

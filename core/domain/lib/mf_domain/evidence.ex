@@ -18,8 +18,10 @@ defmodule MedFabric.Domain.Evidence do
         settings,
         %DateTime{} = effective_at
       )
-      when is_integer(count) and count > 0 and is_binary(actor) and byte_size(actor) > 0 and is_map(settings) and is_binary(id) do
-    if Regex.match?(~r/\A[A-Za-z0-9_-]{1,64}\z/, id) and digest?(file) and digest?(pcm) and key == file <> ".wav" do
+      when is_integer(count) and count > 0 and is_binary(actor) and byte_size(actor) > 0 and
+             is_map(settings) and is_binary(id) do
+    if Regex.match?(~r/\A[A-Za-z0-9_-]{1,64}\z/, id) and digest?(file) and digest?(pcm) and
+         key == file <> ".wav" do
       {:ok,
        %{
          "kind" => "audio_pcm16_wav",
@@ -31,8 +33,14 @@ defmodule MedFabric.Domain.Evidence do
          "sample_rate_hz" => 48_000,
          "continuity" => "observed_continuous",
          "provenance" => %{
-           "kind" => "browser_capture", "actor" => actor, "time_basis" => "server_first_frame",
-           "input" => Map.take(settings, ~w(label sampleRate channelCount contextSampleRate echoCancellation noiseSuppression autoGainControl))
+           "kind" => "browser_capture",
+           "actor" => actor,
+           "time_basis" => "server_first_frame",
+           "input" =>
+             Map.take(
+               settings,
+               ~w(label sampleRate channelCount contextSampleRate echoCancellation noiseSuppression autoGainControl)
+             )
          }
        }}
     else

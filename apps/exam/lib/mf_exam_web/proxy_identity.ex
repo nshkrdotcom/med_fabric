@@ -12,7 +12,9 @@ defmodule MedFabric.ExamWeb.ProxyIdentity do
   end
 
   def matches?(_headers, _actor, %{local?: true}), do: true
-  def matches?(headers, expected, %{proxy_secret: secret}), do: actor(headers, secret) == {:ok, expected}
+
+  def matches?(headers, expected, %{proxy_secret: secret}),
+    do: actor(headers, secret) == {:ok, expected}
 
   defp values(headers, key), do: for({^key, value} <- headers, do: value)
 end

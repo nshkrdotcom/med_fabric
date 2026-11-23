@@ -5,13 +5,19 @@ if System.get_env("MF_LAB") == "1" do
 
   entries =
     for entry <- encounters, into: %{} do
-      %{"exam" => id, "patient_actor" => patient, "clinician_actor" => clinician,
-        "patient_ref" => patient_ref, "encounter_ref" => encounter_ref,
-        "destination" => destination} = entry
+      %{
+        "exam" => id,
+        "patient_actor" => patient,
+        "clinician_actor" => clinician,
+        "patient_ref" => patient_ref,
+        "encounter_ref" => encounter_ref,
+        "destination" => destination
+      } = entry
 
       unless Regex.match?(~r/\A[a-zA-Z0-9-]{1,48}\z/, id) and
                Enum.all?([patient, clinician, destination], &(is_binary(&1) and &1 != "")) and
-               patient != clinician and Regex.match?(~r/\APatient\/[A-Za-z0-9.\-]{1,64}\z/, patient_ref) and
+               patient != clinician and
+               Regex.match?(~r/\APatient\/[A-Za-z0-9.\-]{1,64}\z/, patient_ref) and
                Regex.match?(~r/\AEncounter\/[A-Za-z0-9.\-]{1,64}\z/, encounter_ref) do
         raise "Invalid encounter configuration for #{inspect(id)}"
       end
@@ -27,29 +33,41 @@ if System.get_env("MF_LAB") == "1" do
   uri = URI.new!(origin)
   local? = uri.scheme == "http" and uri.host in ["localhost", "127.0.0.1"] and uri.port == port
 
-  unless uri.host && (local? or uri.scheme == "https") and
-           uri.path in [nil, "", "/"] and is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment),
-    do: raise("MF_PUBLIC_ORIGIN must be a localhost HTTP origin or a public HTTPS origin")
+  unless (uri.host && (local? or uri.scheme == "https")) and
+           uri.path in [nil, "", "/"] and is_nil(uri.userinfo) and is_nil(uri.query) and
+           is_nil(uri.fragment),
+         do: raise("MF_PUBLIC_ORIGIN must be a localhost HTTP origin or a public HTTPS origin")
 
   proxy_secret = System.get_env("MF_PROXY_SECRET")
 
   if local? do
     keys = Enum.flat_map(encounters, &[&1["patient_key"], &1["clinician_key"]])
+
     unless Enum.all?(keys, &(is_binary(&1) and byte_size(&1) >= 32)) and
              length(Enum.uniq(keys)) == length(keys),
-      do: raise("Local encounter access keys must be unique and at least 32 bytes long")
+           do: raise("Local encounter access keys must be unique and at least 32 bytes long")
   else
     unless is_binary(proxy_secret) and byte_size(proxy_secret) >= 32,
-      do: raise("HTTPS operation requires MF_PROXY_SECRET and an authenticating loopback reverse proxy")
+      do:
+        raise(
+          "HTTPS operation requires MF_PROXY_SECRET and an authenticating loopback reverse proxy"
+        )
   end
 
-  urls = System.get_env("MF_TURN_URLS", "") |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+  urls =
+    System.get_env("MF_TURN_URLS", "")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+
   unless Enum.all?(urls, &Regex.match?(~r/\Aturns?:[^\s,]+\z/, &1)),
     do: raise("MF_TURN_URLS must contain turn: or turns: URLs")
+
   turn_secret = System.get_env("MF_TURN_SECRET")
   relay? = System.get_env("MF_RELAY_ONLY") == "1"
-  if (relay? or urls != []) and (urls == [] or !is_binary(turn_secret) or byte_size(turn_secret) < 32),
-    do: raise("TURN requires MF_TURN_URLS and a 32-byte or longer MF_TURN_SECRET")
+
+  if (relay? or urls != []) and
+       (urls == [] or !is_binary(turn_secret) or byte_size(turn_secret) < 32),
+     do: raise("TURN requires MF_TURN_URLS and a 32-byte or longer MF_TURN_SECRET")
 
   config :mf_exam, :lab, %{
     encounters: entries,

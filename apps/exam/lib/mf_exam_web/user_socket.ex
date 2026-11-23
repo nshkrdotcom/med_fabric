@@ -12,7 +12,11 @@ defmodule MedFabric.ExamWeb.UserSocket do
   def connect(%{"token" => token}, socket, info) when is_binary(token) do
     case Phoenix.Token.verify(Endpoint, "exam-preview", token, max_age: 3600) do
       {:ok, {encounter_id, actor, role}} when role in [:patient, :clinician] ->
-        if MedFabric.ExamWeb.ProxyIdentity.matches?(info[:x_headers] || [], actor, MedFabric.Exam.lab()) and
+        if MedFabric.ExamWeb.ProxyIdentity.matches?(
+             info[:x_headers] || [],
+             actor,
+             MedFabric.Exam.lab()
+           ) and
              Records.member?(Postgres, encounter_id, actor, role) do
           {:ok, assign(socket, encounter_id: encounter_id, actor: actor, role: role)}
         else

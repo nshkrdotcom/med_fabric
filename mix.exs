@@ -43,7 +43,8 @@ defmodule MedFabric.Workspace.MixProject do
   end
 
   defp docs do
-    guides = ~w(guides/browser_to_record.md guides/media_verification.md guides/architecture_and_roadmap.md)
+    guides =
+      ~w(guides/browser_to_record.md guides/media_verification.md guides/architecture_and_roadmap.md)
 
     projects = [
       {"core/domain/README.md", filename: "domain", title: "Domain"},

@@ -15,8 +15,14 @@ defmodule MedFabric.ExamWeb.ExamLive do
       when role in ["patient", "clinician"] do
     role = if role == "patient", do: :patient, else: :clinician
 
-    trusted = !connected?(socket) or MedFabric.ExamWeb.ProxyIdentity.matches?(
-      get_connect_info(socket, :x_headers) || [], actor, Exam.lab())
+    trusted =
+      !connected?(socket) or
+        MedFabric.ExamWeb.ProxyIdentity.matches?(
+          get_connect_info(socket, :x_headers) || [],
+          actor,
+          Exam.lab()
+        )
+
     if trusted and Records.member?(Postgres, id, actor, role) do
       if connected?(socket), do: Phoenix.PubSub.subscribe(MedFabric.Exam.PubSub, "exam:" <> id)
       token = Phoenix.Token.sign(Endpoint, "exam-preview", {id, actor, role})
@@ -52,9 +58,17 @@ defmodule MedFabric.ExamWeb.ExamLive do
     end
   end
 
-  def handle_event("accept", %{"id" => id}, %{assigns: %{role: :clinician, accepting: nil} = a} = socket) do
+  def handle_event(
+        "accept",
+        %{"id" => id},
+        %{assigns: %{role: :clinician, accepting: nil} = a} = socket
+      ) do
     %{encounter: encounter, actor: actor} = a
-    {:noreply, socket |> assign(:accepting, id) |> start_async(:accept, fn -> Exam.accept(encounter, id, actor) end)}
+
+    {:noreply,
+     socket
+     |> assign(:accepting, id)
+     |> start_async(:accept, fn -> Exam.accept(encounter, id, actor) end)}
   end
 
   def handle_event(
@@ -71,8 +85,11 @@ defmodule MedFabric.ExamWeb.ExamLive do
   def handle_event(_, _, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_async(:accept, {:ok, outcome}, socket), do: result(assign(socket, :accepting, nil), outcome)
-  def handle_async(:accept, {:exit, _}, socket), do: result(assign(socket, :accepting, nil), {:error, :accept_failed})
+  def handle_async(:accept, {:ok, outcome}, socket),
+    do: result(assign(socket, :accepting, nil), outcome)
+
+  def handle_async(:accept, {:exit, _}, socket),
+    do: result(assign(socket, :accepting, nil), {:error, :accept_failed})
 
   def handle_async(:deliver, {:ok, outcome}, socket),
     do: result(assign(socket, :delivering, nil), outcome)

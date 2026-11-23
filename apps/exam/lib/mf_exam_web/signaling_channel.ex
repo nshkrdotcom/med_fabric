@@ -10,7 +10,13 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
       when is_binary(connection_id) and byte_size(connection_id) == 36 do
     with :clinician <- socket.assigns.role,
          ^encounter_id <- socket.assigns.encounter_id,
-         true <- MedFabric.Store.Records.member?(MedFabric.Store.Postgres, encounter_id, socket.assigns.actor, :clinician) do
+         true <-
+           MedFabric.Store.Records.member?(
+             MedFabric.Store.Postgres,
+             encounter_id,
+             socket.assigns.actor,
+             :clinician
+           ) do
       session_id = Exam.session_id(encounter_id)
 
       {:ok, %{session_id: session_id},
@@ -33,6 +39,7 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
       when is_binary(sdp) and byte_size(sdp) < 32_768 do
     ice = Exam.ICE.config(socket.assigns.actor, Exam.lab().turn)
     policy = if ice.iceTransportPolicy == "relay", do: :relay, else: :all
+
     case Preview.answer(sdp, ice_servers: ice.iceServers, ice_transport_policy: policy) do
       {:ok, peer, answer} ->
         {:reply, {:ok, %{sdp: answer}}, assign(socket, :peer, peer)}

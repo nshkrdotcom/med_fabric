@@ -14,7 +14,9 @@ defmodule MedFabric.ExamWeb.Endpoint do
     signing_salt: "mf_exam_sess"
   ]
 
-  socket("/live", Phoenix.LiveView.Socket, websocket: [connect_info: [:x_headers, session: @session_options]])
+  socket("/live", Phoenix.LiveView.Socket,
+    websocket: [connect_info: [:x_headers, session: @session_options]]
+  )
 
   socket("/socket", MedFabric.ExamWeb.UserSocket,
     websocket: [connect_info: [:x_headers]],
