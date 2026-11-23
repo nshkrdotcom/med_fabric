@@ -1,5 +1,6 @@
 # Pure encounter decisions changelog
 
-## Unreleased
+## 0.1.0
 
-- Established the initial workspace boundary and architecture plan.
+- Implemented `MedFabric.Domain.Evidence` constructors for validated 48 kHz mono
+  PCM16LE recording artifacts and manually entered pulse-rate measurements.
