@@ -4,16 +4,13 @@ The browser capture checkpoint sends a generated 997 Hz mono microphone signal t
 
 ## Local run
 
-From the Fabric checkout, provision the native dependencies and run the existing wrapper.
+For the unpublished MedEx candidate, run the following command from the Fabric checkout. It resolves the sibling SDK, builds the exam release and runs the browser checkpoints. [Prerequisites and workspace setup](browser_to_record.md)
 
 ```sh
-./onboard.sh --integration
-ops/verify_browser.sh
-# To exercise the OTP release, run a separate fresh scenario.
-ops/verify_browser.sh --release
+bash ops/qc_candidate.sh
 ```
 
-The wrapper controls PostgreSQL, HAPI and the exam across its three checkpoints. It prints the capture measurements as JSON, restarts the exam, accepts and exports both records, then checks remote identities and the WAV after restart. Both role contexts in the local scenario share one Chromium process. The operator must first resolve the exam dependency to the revised MedEx 0.2.x package.
+The wrapper controls the local PostgreSQL, HAPI and exam processes across three checkpoints. It prints the capture measurements as JSON, restarts the exam, accepts and exports both records, then checks remote identities and the WAV after restart. Both role contexts in the local scenario share one Chromium process.
 
 ## Relay run with separate network endpoints
 
