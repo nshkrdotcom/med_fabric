@@ -4,7 +4,7 @@ defmodule MedFabric.Interop.MixProject do
   def project do
     [
       app: :mf_interop,
-      version: "0.2.0",
+      version: __DIR__ |> Path.join("../../VERSION") |> File.read!() |> String.trim(),
       elixir: "~> 1.20",
       description: "Healthcare record exchange",
       dialyzer: [plt_add_apps: [:mix]],

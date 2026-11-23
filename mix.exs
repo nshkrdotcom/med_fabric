@@ -4,7 +4,7 @@ defmodule MedFabric.Workspace.MixProject do
   def project do
     [
       app: :med_fabric_workspace,
-      version: "0.2.0",
+      version: __DIR__ |> Path.join("VERSION") |> File.read!() |> String.trim(),
       elixir: "~> 1.20",
       name: "Med Fabric",
       docs: docs(),

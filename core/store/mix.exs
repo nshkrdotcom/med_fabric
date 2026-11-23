@@ -4,7 +4,7 @@ defmodule MedFabric.Store.MixProject do
   def project do
     [
       app: :mf_store,
-      version: "0.2.0",
+      version: __DIR__ |> Path.join("../../VERSION") |> File.read!() |> String.trim(),
       elixir: "~> 1.20",
       description: "Clinical persistence and audit",
       dialyzer: [plt_add_apps: [:mix]],

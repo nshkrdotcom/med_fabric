@@ -4,7 +4,7 @@ defmodule MedFabric.Exam.MixProject do
   def project do
     [
       app: :mf_exam,
-      version: "0.2.0",
+      version: __DIR__ |> Path.join("../../VERSION") |> File.read!() |> String.trim(),
       elixir: "~> 1.20",
       description: "Connected remote clinical examination",
       dialyzer: [plt_add_apps: [:mix]],

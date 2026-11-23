@@ -17,7 +17,7 @@ HL7 FHIR R4 delivery.
 
 The 0.2 candidate combines two-way conversation, independently selected diagnostic audio and clinician-entered pulse measurements. A patient can recover a recording outcome after reconnecting. Clinicians can seek in a verified WAV, review its source and time, and deliver the accepted observation to the encounter’s own FHIR destination.
 
-From this checkout, with sibling MedEx and Mix Workspace Ops checkouts and the medical registry installed, run the SDK and Fabric QC sequence:
+From this checkout, with MedEx checked out alongside it, run the SDK and Fabric QC sequence:
 
 ```bash
 bash ops/qc_candidate.sh
