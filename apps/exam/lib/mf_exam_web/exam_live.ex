@@ -28,6 +28,7 @@ defmodule MedFabric.ExamWeb.ExamLive do
          token: token,
          error: nil,
          delivering: nil,
+         accepting: nil,
          records: []
        )
        |> refresh()}
@@ -49,8 +50,10 @@ defmodule MedFabric.ExamWeb.ExamLive do
     end
   end
 
-  def handle_event("accept", %{"id" => id}, %{assigns: %{role: :clinician} = a} = socket),
-    do: result(socket, Exam.accept(a.encounter, id, a.actor))
+  def handle_event("accept", %{"id" => id}, %{assigns: %{role: :clinician, accepting: nil} = a} = socket) do
+    %{encounter: encounter, actor: actor} = a
+    {:noreply, socket |> assign(:accepting, id) |> start_async(:accept, fn -> Exam.accept(encounter, id, actor) end)}
+  end
 
   def handle_event(
         "deliver",
@@ -66,6 +69,9 @@ defmodule MedFabric.ExamWeb.ExamLive do
   def handle_event(_, _, socket), do: {:noreply, socket}
 
   @impl true
+  def handle_async(:accept, {:ok, outcome}, socket), do: result(assign(socket, :accepting, nil), outcome)
+  def handle_async(:accept, {:exit, _}, socket), do: result(assign(socket, :accepting, nil), {:error, :accept_failed})
+
   def handle_async(:deliver, {:ok, outcome}, socket),
     do: result(assign(socket, :delivering, nil), outcome)
 
@@ -94,13 +100,19 @@ defmodule MedFabric.ExamWeb.ExamLive do
       <section id="talkback" phx-update="ignore" phx-hook="Talkback"
         data-encounter={@encounter} data-role={@role} data-token={@token}>
         <h2>Conversation</h2>
+        <label>Conversation microphone
+          <select data-input><option value="">System default</option></select>
+        </label>
         <button type="button">Join conversation</button>
         <audio autoplay controls></audio>
         <p role="status"></p>
       </section>
 
-      <section :if={@role == :patient} id="capture" phx-hook="Capture" phx-update="ignore">
+      <section :if={@role == :patient} id="capture" data-encounter={@encounter} phx-hook="Capture" phx-update="ignore">
         <h2>Diagnostic capture</h2>
+        <label>Diagnostic input
+          <select data-input><option value="">System default</option></select>
+        </label>
         <button type="button" data-start>Start capture</button>
         <button type="button" data-finish disabled>Finish capture</button>
         <p role="status"></p>
@@ -127,10 +139,15 @@ defmodule MedFabric.ExamWeb.ExamLive do
       <section :for={row <- @records} id={"evidence-" <> row.id}>
         <h2>{if row.evidence["kind"] == "pulse_rate", do: "Pulse rate", else: "Recording"}</h2>
         <p :if={row.evidence["kind"] == "pulse_rate"}>{row.evidence["value"]} beats/minute</p>
+        <p :if={row.evidence["kind"] == "audio_pcm16_wav"}>
+          {get_in(row.evidence, ["provenance", "input", "label"]) || "Diagnostic input"}
+          · {Float.round(row.evidence["sample_count"] / row.evidence["sample_rate_hz"], 2)} s
+          · First frame received <time datetime={row.evidence["effective_at"]}>{row.evidence["effective_at"]}</time>
+        </p>
         <audio :if={row.evidence["kind"] == "audio_pcm16_wav"} controls
           src={"/encounters/#{@encounter}/recordings/#{row.id}"}></audio>
         <p :if={row.conflict} role="alert">Conflicting evidence</p>
-        <button :if={!row.actor && !row.conflict} phx-click="accept" phx-value-id={row.id}>Accept</button>
+        <button :if={!row.actor && !row.conflict} disabled={@accepting != nil} phx-click="accept" phx-value-id={row.id}>Accept</button>
         <button :if={row.actor && !row.remote} disabled={@delivering != nil}
           phx-click="deliver" phx-value-id={row.id}>Deliver to FHIR</button>
         <p :if={row.remote}>{row.remote}</p>

@@ -4,49 +4,105 @@ import { createMedExHook } from "/med_ex/session_hook.js";
 
 import { startPCM } from "/med_ex/pcm_capture.js";
 
+async function rtcConfig(element) {
+  const encounter = element.dataset.encounter || element.dataset.encounterId;
+  const response = await fetch(`/encounters/${encodeURIComponent(encounter)}/ice`, {
+    headers: {Accept: "application/json"}, cache: "no-store"
+  });
+  if (!response.ok) throw new Error("Media configuration unavailable");
+  return response.json();
+}
+
+async function listInputs(select) {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const selected = select.value;
+    select.replaceChildren(new Option("System default", ""));
+    for (const item of devices.filter(d => d.kind === "audioinput" && d.deviceId && d.deviceId !== "default")) {
+      select.add(new Option(item.label || `Input ${select.length}`, item.deviceId));
+    }
+    if ([...select.options].some(o => o.value === selected)) select.value = selected;
+  } catch {
+    // Default input remains available when the browser withholds the device list.
+  }
+}
+
 const Capture = {
   mounted() {
     const start = this.el.querySelector("[data-start]");
     const finish = this.el.querySelector("[data-finish]");
+    const input = this.el.querySelector("[data-input]");
     const status = this.el.querySelector('[role="status"]');
+    const base = `/encounters/${encodeURIComponent(this.el.dataset.encounter)}`;
+    const savedKey = `med-fabric-attempt${base}`;
+    let current;
+    this.cleanup = () => { const op = current; current = null; op?.controller?.abort(); op?.socket.close(); };
+    void listInputs(input);
+    input.onfocus = () => void listInputs(input);
+
+    const readOutcome = async (id, op) => {
+      try {
+        const res = await fetch(`${base}/attempts/${encodeURIComponent(id)}`, {headers: {Accept: "application/json"}, cache: "no-store"});
+        if (!res.ok) throw new Error();
+        const {status: saved} = await res.json();
+        if (current !== op || !this.el.isConnected) return;
+        status.textContent = saved;
+        if (saved !== "recording") sessionStorage.removeItem(savedKey);
+      } catch {
+        if (current === op && this.el.isConnected) status.textContent = "Recording outcome unavailable. Reload to retry.";
+      }
+    };
+    const prior = sessionStorage.getItem(savedKey);
+    if (prior) void readOutcome(prior, current);
+
     start.onclick = async () => {
       start.disabled = true;
+      input.disabled = true;
       status.textContent = "Starting microphone";
-      const url = new URL("/pcm", location.href);
+      const url = new URL(base + "/pcm", location.href);
       url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
       const socket = new WebSocket(url);
-      this.socket = socket;
-
-      const outcome = result => {
+      const op = current = {socket};
+      const outcome = (result, metrics) => {
+        if (current !== op) return;
+        if (metrics) this.el.dataset.transport = JSON.stringify(metrics);
         status.textContent = result;
-        start.disabled = false;
+        start.disabled = input.disabled = false;
         finish.disabled = true;
+        if (result === "ready") sessionStorage.removeItem(savedKey);
+        else if (op.id && result === "disconnected") void readOutcome(op.id, op);
       };
 
       try {
-        await new Promise((resolve, reject) => {
-          socket.onopen = resolve;
+        op.id = await new Promise((resolve, reject) => {
+          socket.onmessage = ({data}) => {
+            try {
+              const {acquisition_id: id} = JSON.parse(data);
+              if (typeof id !== "string" || !id) throw new Error("Missing recording ID");
+              resolve(id);
+            } catch (error) { reject(error); }
+          };
           socket.onerror = reject;
           socket.onclose = reject;
         });
-        this.capture = await startPCM(socket, "/med_ex/pcm_worklet.js", outcome, () => {
-          finish.disabled = false;
-          status.textContent = "Recording";
+        if (current !== op) return socket.close();
+        sessionStorage.setItem(savedKey, op.id);
+        const controller = await startPCM(socket, "/med_ex/pcm_worklet.js", outcome, () => {
+          if (current === op) { finish.disabled = false; status.textContent = "Recording"; }
+        }, {
+          deviceId: input.value,
+          onSource: settings => socket.send(JSON.stringify({source: settings}))
         });
+        if (current === op) op.controller = controller;
+        else controller.abort();
       } catch {
         socket.close();
-        outcome("Capture unavailable");
+        if (current === op && status.textContent === "Starting microphone") outcome("Capture unavailable");
       }
     };
-    finish.onclick = () => {
-      finish.disabled = true;
-      this.capture?.finish();
-    };
+    finish.onclick = () => { finish.disabled = true; current?.controller?.finish(); };
   },
-  destroyed() {
-    this.capture?.abort();
-    this.socket?.close();
-  }
+  destroyed() { this.cleanup(); }
 };
 
 async function localSDP(peer, description) {
@@ -76,11 +132,15 @@ const Talkback = {
     const audio = this.el.querySelector("audio");
     const status = this.el.querySelector('[role="status"]');
     const role = this.el.dataset.role;
+    const input = this.el.querySelector("[data-input]");
+    void listInputs(input);
+    input.onfocus = () => void listInputs(input);
 
     this.leave = (message = "disconnected") => {
       const call = this.call;
       this.call = null;
       call?.peer?.close();
+      this.el.medExPeer = null;
       call?.stream?.getTracks().forEach(track => track.stop());
       call?.socket?.disconnect();
       audio.srcObject = null;
@@ -94,7 +154,11 @@ const Talkback = {
       button.textContent = "Leave conversation";
 
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+        const config = await rtcConfig(this.el);
+        if (this.call !== call) return;
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: input.value ? {deviceId: {exact: input.value}} : true
+        });
         if (this.call !== call) {
           stream.getTracks().forEach(track => track.stop());
           return;
@@ -108,7 +172,8 @@ const Talkback = {
         const reset = () => {
           call.peer?.close();
           audio.srcObject = null;
-          const peer = call.peer = new RTCPeerConnection();
+          const peer = call.peer = new RTCPeerConnection(config);
+          this.el.medExPeer = peer;
           stream.getAudioTracks().forEach(track => peer.addTrack(track, stream));
           peer.ontrack = ({streams}) => { if (current(peer)) audio.srcObject = streams[0]; };
           peer.onconnectionstatechange = () => {
@@ -170,7 +235,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
     Capture,
     Talkback,
     MedExSessionHook: createMedExHook({
-      Socket,
+      Socket, rtcConfig,
       socketPath: "/socket",
       topic: el => "signaling:" + el.dataset.encounterId,
       play: "#preview-play",
