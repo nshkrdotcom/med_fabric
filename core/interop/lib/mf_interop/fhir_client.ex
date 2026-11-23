@@ -1,9 +1,9 @@
 defmodule MedFabric.Interop.FhirClient do
   @moduledoc """
-  Exports a reviewed recording to FHIR R4 using conditional create by identifier.
-
-  The test server receives synthetic clinical references. Fixture origin and
-  continuity describe the reviewed artifact independently of those references.
+  Maps accepted clinical observations (reviewed audio recordings and manually
+  entered pulse-rate measurements) to HL7 FHIR R4 `Observation` resources and
+  delivers them idempotently via conditional create (`If-None-Exist`) with
+  strict typed read-back confirmation.
   """
 
   @identifier_system "urn:med-fabric:observation"
