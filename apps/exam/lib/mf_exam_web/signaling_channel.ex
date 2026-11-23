@@ -10,7 +10,7 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
       when is_binary(connection_id) and byte_size(connection_id) == 36 do
     with :clinician <- socket.assigns.role,
          ^encounter_id <- socket.assigns.encounter_id,
-         %{encounter_id: ^encounter_id} <- Application.get_env(:mf_exam, :lab) do
+         true <- MedFabric.Store.Records.member?(MedFabric.Store.Postgres, encounter_id, socket.assigns.actor, :clinician) do
       session_id = Exam.session_id(encounter_id)
 
       {:ok, %{session_id: session_id},
@@ -31,7 +31,9 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
   @impl true
   def handle_in("offer", %{"sdp" => sdp}, %{assigns: %{peer: nil}} = socket)
       when is_binary(sdp) and byte_size(sdp) < 32_768 do
-    case Preview.answer(sdp) do
+    ice = Exam.ICE.config(socket.assigns.actor, Exam.lab().turn)
+    policy = if ice.iceTransportPolicy == "relay", do: :relay, else: :all
+    case Preview.answer(sdp, ice_servers: ice.iceServers, ice_transport_policy: policy) do
       {:ok, peer, answer} ->
         {:reply, {:ok, %{sdp: answer}}, assign(socket, :peer, peer)}
 
@@ -50,8 +52,8 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
       ) do
     Phoenix.PubSub.subscribe(MedFabric.Exam.PubSub, "preview:" <> encounter)
 
-    case Registry.lookup(MedFabric.Exam.ActiveCapture, encounter) do
-      [{_, capture}] when is_pid(capture) -> send(self(), {:capture_started, capture})
+    case Exam.Recordings.active(encounter) do
+      capture when is_pid(capture) -> send(self(), {:capture_started, capture})
       _ -> :ok
     end
 
@@ -79,6 +81,11 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
     Preview.send_opus(peer, frame, sequence, tick)
     Capture.demand(capture)
     {:noreply, assign(socket, sequence: sequence + 1, clock: {capture, index, tick})}
+  end
+
+  def handle_info({:med_ex_preview_replaced, capture}, %{assigns: %{capture: capture}} = socket) do
+    push(socket, "preview_replaced", %{})
+    {:noreply, assign(socket, :capture, nil)}
   end
 
   def handle_info({:med_ex_preview_failed, capture, _}, %{assigns: %{capture: capture}} = socket) do

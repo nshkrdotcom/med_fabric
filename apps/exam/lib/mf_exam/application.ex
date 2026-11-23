@@ -3,7 +3,7 @@ defmodule MedFabric.Exam.Application do
   use Application
 
   alias MedFabric.ExamWeb.Endpoint
-  alias MedFabric.Store.{Postgres, Records}
+  alias MedFabric.Store.{Encounters, Postgres}
 
   @impl true
   def start(_type, _args) do
@@ -18,7 +18,6 @@ defmodule MedFabric.Exam.Application do
           [
             {Postgres, url: lab.database_url, name: Postgres},
             %{id: :schema, start: {__MODULE__, :schema, []}},
-            {Registry, keys: :unique, name: MedFabric.Exam.ActiveCapture},
             {DynamicSupervisor, strategy: :one_for_one, name: MedFabric.Exam.Captures}
           ]
       end
@@ -33,10 +32,20 @@ defmodule MedFabric.Exam.Application do
     lab = MedFabric.Exam.lab()
 
     with {:ok, :ok} <- Postgres.migrate(),
-         :ok <- Records.open(Postgres, lab.encounter_id, lab.patient_actor, lab.clinician_actor) do
+         :ok <- open_encounters(lab.encounters),
+         :ok <- MedFabric.Exam.Recordings.recover() do
       :ignore
     else
       {:error, reason} -> {:error, {:schema_unavailable, reason}}
     end
+  end
+
+  defp open_encounters(encounters) do
+    Enum.reduce_while(encounters, :ok, fn {_id, entry}, :ok ->
+      case Encounters.open(Postgres, entry) do
+        {:ok, :ok} -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
   end
 end

@@ -16,7 +16,7 @@ defmodule MedFabric.Domain.EvidenceTest do
     at = ~U[2026-11-22 12:00:00Z]
 
     capture = %{
-      kind: :audio_pcm16_wav,
+      acquisition_id: "attempt-1", kind: :audio_pcm16_wav,
       artifact_key: digest <> ".wav",
       file_sha256: digest,
       pcm_sha256: digest,
@@ -27,12 +27,12 @@ defmodule MedFabric.Domain.EvidenceTest do
       continuity: :observed_continuous
     }
 
-    assert {:ok, %{"file_sha256" => ^digest}} = Evidence.recording(capture, "patient", at)
+    assert {:ok, %{"file_sha256" => ^digest}} = Evidence.recording(capture, "patient", %{"label" => "USB input"}, at)
 
     assert {:error, :invalid_recording} =
-             Evidence.recording(%{capture | artifact_key: "other.wav"}, "patient", at)
+             Evidence.recording(%{capture | artifact_key: "other.wav"}, "patient", %{"label" => "USB input"}, at)
 
     assert {:error, :invalid_recording} =
-             Evidence.recording(%{capture | end_sample: 961}, "patient", at)
+             Evidence.recording(%{capture | end_sample: 961}, "patient", %{"label" => "USB input"}, at)
   end
 end

@@ -53,7 +53,7 @@ curl -fsS --max-time 5 -H 'Accept: application/fhir+json' "${FHIR_BASE_URL%/}/me
   jq -e '.fhirVersion == "4.0.1"' >/dev/null
 
 
-export MF_REFS_FILE="$work/refs.json"
+export MF_ENCOUNTERS_FILE="$work/refs.json"
 (cd apps/exam && env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs)
 
 if [[ "$mode" == "--release" ]]; then
