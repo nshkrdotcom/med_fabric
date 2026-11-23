@@ -20,4 +20,6 @@
 | [core/interop](core/interop/README.md) | Deliver and confirm one reviewed observation over FHIR R4 |
 | [apps/exam](apps/exam/README.md) | Boot Phoenix, authorize the lab, and host the review and delivery UI |
 
-Follow the [native browser-to-record runbook](docs/architecture/browser-to-record.md) for Ubuntu 26.04 onboarding, diagrams, focused tests, and the listening check.
+Follow the [native browser-to-record runbook](guides/browser_to_record.md) for Ubuntu 26.04 onboarding, diagrams, focused tests, and the listening check.
+
+See the [architecture and roadmap](guides/architecture_and_roadmap.md) for ownership and planned capabilities.

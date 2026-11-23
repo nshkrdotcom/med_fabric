@@ -15,4 +15,4 @@
 
 PostgreSQL stores immutable ready metadata keyed by encounter and acquisition, flags conflicting redelivery, and records the original reviewer and export intent in one transaction. WAV files live in the exam artifact directory. Serving and acceptance read the file and verify its SHA-256. A failed delivery stays pending for manual retry.
 
-Run `mix test integration` with a dedicated `DATABASE_URL` for concurrent acceptance, artifact tampering, conflicts and reconnect. See the [native runbook](../../docs/architecture/browser-to-record.md).
+Run `mix test integration` with a dedicated `DATABASE_URL` for concurrent acceptance, artifact tampering, conflicts and reconnect. See the [native runbook](../../guides/browser_to_record.md).
