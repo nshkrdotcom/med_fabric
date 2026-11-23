@@ -37,7 +37,7 @@ try {
     await clinician.waitForFunction(() => document.querySelector("#live-preview").dataset.state === "connected");
     await patient.locator("[data-start]").click();
     const captureStatus = patient.locator("#capture [role=status]");
-    await patient.waitForFunction(() => document.querySelector("#capture [role=status]").textContent !== "");
+    await patient.waitForFunction(() => !["", "Starting microphone"].includes(document.querySelector("#capture [role=status]").textContent));
     assert.equal(await captureStatus.textContent(), "Recording");
     const audio = async () => {
       const deadline = Date.now() + 10000;

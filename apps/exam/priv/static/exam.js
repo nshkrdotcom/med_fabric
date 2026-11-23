@@ -11,6 +11,7 @@ const Capture = {
     const status = this.el.querySelector('[role="status"]');
     start.onclick = async () => {
       start.disabled = true;
+      status.textContent = "Starting microphone";
       const url = new URL("/pcm", location.href);
       url.protocol = location.protocol === "https:" ? "wss:" : "ws:";
       const socket = new WebSocket(url);
@@ -28,9 +29,10 @@ const Capture = {
           socket.onerror = reject;
           socket.onclose = reject;
         });
-        this.capture = await startPCM(socket, "/med_ex/pcm_worklet.js", outcome);
-        finish.disabled = false;
-        status.textContent = "Recording";
+        this.capture = await startPCM(socket, "/med_ex/pcm_worklet.js", outcome, () => {
+          finish.disabled = false;
+          status.textContent = "Recording";
+        });
       } catch {
         socket.close();
         outcome("Capture unavailable");
