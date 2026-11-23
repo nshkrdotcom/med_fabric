@@ -6,6 +6,8 @@ defmodule MedFabric.Interop.FhirClient do
   strict typed read-back confirmation.
   """
 
+  alias MedFabric.Interop.Observation
+
   @identifier_system "urn:med-fabric:observation"
   @default_base_url "http://127.0.0.1:18080/fhir"
   @headers [{"content-type", "application/fhir+json"}, {"accept", "application/fhir+json"}]
@@ -105,7 +107,7 @@ defmodule MedFabric.Interop.FhirClient do
     do: {:error, :unconfirmed_remote_record}
 
   defp clinical_fields_match?(%{"resourceType" => "Observation"} = expected, actual),
-    do: MedFabric.Interop.Observation.matches?(expected, actual)
+    do: Observation.matches?(expected, actual)
 
   defp clinical_fields_match?(expected, actual), do: matches?(expected, actual)
 
