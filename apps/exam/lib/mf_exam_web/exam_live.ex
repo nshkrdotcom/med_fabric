@@ -3,111 +3,138 @@ defmodule MedFabric.ExamWeb.ExamLive do
   use Phoenix.LiveView
 
   alias MedFabric.Exam
-  alias MedFabric.Exam.CaptureRunner
   alias MedFabric.ExamWeb.Endpoint
+  alias MedFabric.Store.{Postgres, Records}
 
   @impl true
-  def mount(%{"encounter_id" => id}, %{"lab_encounter" => id}, socket) do
-    if Exam.lab().encounter_id == id do
+  def mount(
+        %{"encounter_id" => id},
+        %{"lab_encounter" => id, "exam_actor" => actor, "exam_role" => role},
+        socket
+      )
+      when role in ["patient", "clinician"] do
+    role = if role == "patient", do: :patient, else: :clinician
+
+    if Records.member?(Postgres, id, actor, role) do
       if connected?(socket), do: Phoenix.PubSub.subscribe(MedFabric.Exam.PubSub, "exam:" <> id)
-      token = Phoenix.Token.sign(Endpoint, "exam-preview", id)
+      token = Phoenix.Token.sign(Endpoint, "exam-preview", {id, actor, role})
 
       {:ok,
        socket
        |> assign(
-         view: Exam.snapshot(Exam.lab()),
-         encounter_id: id,
+         encounter: id,
+         actor: actor,
+         role: role,
          token: token,
          error: nil,
-         delivering: false
-       )}
+         delivering: nil,
+         records: []
+       )
+       |> refresh()}
     else
       {:ok, redirect(socket, to: "/")}
     end
   end
 
-  def mount(_params, _session, socket), do: {:ok, redirect(socket, to: "/")}
+  def mount(_, _, socket), do: {:ok, redirect(socket, to: "/")}
 
   @impl true
-  def handle_info(:exam_changed, socket),
-    do: {:noreply, assign(socket, :view, Exam.snapshot(Exam.lab()))}
+  def handle_info(:exam_changed, socket), do: {:noreply, refresh(socket)}
 
   @impl true
-  def handle_event("capture", _params, socket), do: result(socket, CaptureRunner.start())
-
-  def handle_event("deliver", _params, %{assigns: %{delivering: true}} = socket),
-    do: {:noreply, socket}
-
-  def handle_event("deliver", _params, socket) do
-    socket = assign(socket, :delivering, true)
-    {:noreply, start_async(socket, :delivery, fn -> Exam.deliver(Exam.lab()) end)}
+  def handle_event("pulse", %{"value" => value}, %{assigns: %{role: :clinician} = a} = socket) do
+    case Integer.parse(value) do
+      {number, ""} -> result(socket, Exam.pulse(a.encounter, a.actor, number))
+      _ -> result(socket, {:error, :invalid_pulse_rate})
+    end
   end
 
-  def handle_event("accept", %{"digest" => digest}, socket) do
-    result(socket, Exam.accept(Exam.lab(), digest))
+  def handle_event("accept", %{"id" => id}, %{assigns: %{role: :clinician} = a} = socket),
+    do: result(socket, Exam.accept(a.encounter, id, a.actor))
+
+  def handle_event(
+        "deliver",
+        %{"id" => id},
+        %{assigns: %{role: :clinician, delivering: nil} = a} = socket
+      ) do
+    {:noreply,
+     socket
+     |> assign(:delivering, id)
+     |> start_async(:deliver, fn -> Exam.deliver(a.encounter, id, a.actor) end)}
   end
 
+  def handle_event(_, _, socket), do: {:noreply, socket}
+
   @impl true
-  def handle_async(:delivery, {:ok, result}, socket),
-    do: result(assign(socket, :delivering, false), result)
+  def handle_async(:deliver, {:ok, outcome}, socket),
+    do: result(assign(socket, :delivering, nil), outcome)
 
-  def handle_async(:delivery, {:exit, _}, socket),
-    do: result(assign(socket, :delivering, false), {:error, :delivery_failed})
+  def handle_async(:deliver, {:exit, _}, socket),
+    do: result(assign(socket, :delivering, nil), {:error, :delivery_failed})
 
-  defp result(socket, :ok),
-    do: {:noreply, assign(socket, view: Exam.snapshot(Exam.lab()), error: nil)}
+  defp result(socket, outcome) do
+    error = if outcome == :ok, do: nil, else: "The action failed."
+    {:noreply, socket |> refresh() |> assign(:error, error)}
+  end
 
-  defp result(socket, {:error, _reason}),
-    do:
-      {:noreply,
-       assign(socket, view: Exam.snapshot(Exam.lab()), error: "The action failed. Please retry.")}
+  defp refresh(%{assigns: %{role: :clinician, encounter: enc}} = socket) do
+    case Records.list(Postgres, enc) do
+      {:ok, records} -> assign(socket, :records, records)
+      {:error, _} -> assign(socket, :error, "Records unavailable.")
+    end
+  end
+
+  defp refresh(socket), do: socket
 
   @impl true
   def render(assigns) do
     ~H"""
-    <main id="exam-screen">
-      <h1>Encounter {@encounter_id}</h1>
-      <section
-        id="live-preview"
-        data-state="disconnected" phx-hook="MedExSessionHook"
-        phx-update="ignore"
-        data-encounter-id={@encounter_id}
-        data-session-id={Exam.session_id(@encounter_id)}
-        data-token={@token}
-      >
-        <h2>Live preview</h2>
-        <style>#live-preview::before {content: attr(data-state) " " attr(data-error);display:block}</style>
-        <audio autoplay></audio>
+    <main>
+      <h1>Encounter {@encounter}</h1>
+      <section id="talkback" phx-update="ignore" phx-hook="Talkback"
+        data-encounter={@encounter} data-role={@role} data-token={@token}>
+        <h2>Conversation</h2>
+        <button type="button">Join conversation</button>
+        <audio autoplay controls></audio>
+        <p role="status"></p>
+      </section>
+
+      <section :if={@role == :patient} id="capture" phx-hook="Capture" phx-update="ignore">
+        <h2>Diagnostic capture</h2>
+        <button type="button" data-start>Start capture</button>
+        <button type="button" data-finish disabled>Finish capture</button>
+        <p role="status"></p>
+      </section>
+
+      <section :if={@role == :clinician} id="live-preview" data-state="disconnected"
+        phx-hook="MedExSessionHook" phx-update="ignore" data-encounter-id={@encounter}
+        data-session-id={Exam.session_id(@encounter)} data-token={@token}>
+        <h2>Live diagnostic preview</h2>
+        <audio autoplay controls></audio>
         <button id="preview-play" type="button">Play preview</button>
         <button id="preview-disconnect" type="button">Disconnect preview</button>
         <button id="preview-reconnect" type="button">Reconnect preview</button>
       </section>
 
-      <button :if={!@view.capture && !@view.row} id="start-capture" type="button" phx-click="capture">
-        Start capture
-      </button>
-      <p :if={@view.capture} id="capture-active">Recording in progress</p>
-      <p :if={@view.error} role="alert">Capture failed.</p>
+      <form :if={@role == :clinician} phx-submit="pulse">
+        <label>Measured pulse rate (beats per minute)
+          <input type="number" name="value" min="1" required />
+        </label>
+        <button>Record pulse</button>
+      </form>
 
-      <section :if={@view.row} id="recording">
-        <h2>Recording</h2>
-        <p :if={@view.row.conflict} role="alert">Conflicting recording evidence</p>
-        <audio id="recording-audio" controls src={"/encounters/#{@encounter_id}/recording"}></audio>
-        <p id="recording-continuity">{@view.row.metadata["continuity"]}</p>
-        <button :if={!@view.row.accepted_by && !@view.row.conflict} id="accept-recording"
-          type="button" phx-click="accept" phx-value-digest={@view.row.metadata["file_sha256"]}>
-          Accept recording
-        </button>
+      <section :for={row <- @records} id={"evidence-" <> row.id}>
+        <h2>{if row.evidence["kind"] == "pulse_rate", do: "Pulse rate", else: "Recording"}</h2>
+        <p :if={row.evidence["kind"] == "pulse_rate"}>{row.evidence["value"]} beats/minute</p>
+        <audio :if={row.evidence["kind"] == "audio_pcm16_wav"} controls
+          src={"/encounters/#{@encounter}/recordings/#{row.id}"}></audio>
+        <p :if={row.conflict} role="alert">Conflicting evidence</p>
+        <button :if={!row.actor && !row.conflict} phx-click="accept" phx-value-id={row.id}>Accept</button>
+        <button :if={row.actor && !row.remote} disabled={@delivering != nil}
+          phx-click="deliver" phx-value-id={row.id}>Deliver to FHIR</button>
+        <p :if={row.remote}>{row.remote}</p>
+        <p :if={row.error} role="alert">Delivery failed. Retry when ready.</p>
       </section>
-
-      <section :if={@view.row && @view.row.accepted_by} id="accepted-observation">
-        <p id="observation-id">obs:{@encounter_id}:circor-1</p>
-        <p id="outbox-status">{if @view.row.remote_ref, do: "delivered", else: "pending"}</p>
-        <p id="remote-reference">{@view.row.remote_ref}</p>
-        <p :if={@view.row.last_error && !@view.row.remote_ref} role="status">Delivery failed. Retry when ready.</p>
-        <button :if={!@view.row.remote_ref} disabled={@delivering} id="deliver-recording" type="button" phx-click="deliver">Deliver to FHIR</button>
-      </section>
-
       <p :if={@error} role="alert">{@error}</p>
     </main>
     """

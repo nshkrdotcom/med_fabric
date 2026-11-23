@@ -1,115 +1,48 @@
 defmodule MedFabric.Store.PostgresTest do
   use ExUnit.Case
-  alias MedFabric.Store.Postgres
+  alias MedFabric.Domain.Evidence
+  alias MedFabric.Store.{Postgres, Records}
 
-  @moduletag :tmp_dir
-  setup %{tmp_dir: dir} do
-    url = System.fetch_env!("DATABASE_URL")
-    db = start_supervised!({Postgres, url: url, pool_size: 3})
+  setup do
+    db = start_supervised!({Postgres, url: System.fetch_env!("DATABASE_URL"), pool_size: 3})
     {:ok, :ok} = Postgres.migrate(db)
-    key = {"pg-" <> Base.encode16(:crypto.strong_rand_bytes(8)), "recording"}
-    pcm = <<123::little-16>>
-
-    wav =
-      <<"RIFF", 38::little-32, "WAVEfmt ", 16::little-32, 1::little-16, 1::little-16,
-        1000::little-32, 2000::little-32, 2::little-16, 16::little-16, "data", 2::little-32,
-        pcm::binary>>
-
-    digest = fn bytes -> Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) end
-
-    a = %{
-      acquisition_id: "recording",
-      interval_ms: {0, 1},
-      artifact_sha256: digest.(pcm),
-      file_sha256: digest.(wav),
-      continuity: :observed_continuous,
-      sample_count: 1,
-      sample_rate_hz: 1000
-    }
-
-    path = Path.join(dir, a.file_sha256 <> ".wav")
-    File.write!(path, wav)
-    assert :ok = Postgres.ready(db, key, "session", a, "source")
-    %{db: db, key: key, a: a, path: path, url: url}
+    encounter = "pg-" <> Base.encode16(:crypto.strong_rand_bytes(8))
+    :ok = Records.open(db, encounter, "patient", "clinician")
+    {:ok, evidence} = Evidence.pulse_rate(70, DateTime.utc_now(), "clinician")
+    :ok = Records.ready(db, encounter, "pulse", evidence)
+    %{db: db, encounter: encounter, evidence: evidence}
   end
 
-  test "metadata conflict with identical PCM survives redelivery and blocks acceptance", c do
-    assert :ok = Postgres.ready(c.db, c.key, "session", c.a, "source")
+  test "concurrent acceptance is atomic and late evidence cannot supersede it", c do
+    accept = fn ->
+      Records.accept(c.db, c.encounter, "pulse", "clinician", c.evidence, "fhir", c.encounter, %{})
+    end
 
-    assert {:error, :conflicting_recording} =
-             Postgres.ready(c.db, c.key, "session", %{c.a | continuity: :unknown}, "source")
+    first = Task.async(accept)
+    second = Task.async(accept)
+    assert {:ok, :ok} = Task.await(first)
+    assert {:ok, :ok} = Task.await(second)
+    assert {:ok, "fhir", %{}, nil} = Records.delivery(c.db, c.encounter, "pulse")
 
-    assert {:error, :conflicting_recording} =
-             Postgres.accept(c.db, c.key, c.tmp_dir, c.a.file_sha256, "actor")
+    assert {:error, :evidence_conflict} =
+             Records.ready(c.db, c.encounter, "pulse", Map.put(c.evidence, "value", 71))
+
+    evidence = c.evidence
+    assert {:ok, [%{conflict: false, actor: "clinician", evidence: ^evidence}]} =
+             Records.list(c.db, c.encounter)
   end
 
-  test "routing changes and late conflicting evidence preserve the accepted decision", c do
-    assert {:error, :destination_changed} =
-             Postgres.ready(c.db, c.key, "session", c.a, "source", %{"destination" => "other"})
+  test "rolling back acceptance rolls back its outbox", c do
+    assert {:error, :rollback_check} =
+             Postgrex.transaction(c.db, fn tx ->
+               assert {:ok, :ok} =
+                        Records.accept(tx, c.encounter, "pulse", "clinician", c.evidence,
+                          "fhir", c.encounter, %{})
 
-    assert {:ok, :ok} = Postgres.accept(c.db, c.key, c.tmp_dir, c.a.file_sha256, "actor")
+               Postgrex.rollback(tx, :rollback_check)
+             end)
 
-    assert {:error, :accepted_recording_conflict} =
-             Postgres.ready(c.db, c.key, "session", %{c.a | continuity: :unknown}, "source")
-
-    assert :ok = Postgres.delivery_result(c.db, c.key, {:ok, %{remote_ref: "Observation/1"}})
-    assert :ok = Postgres.delivery_result(c.db, c.key, {:error, :late_timeout})
-
-    assert {:ok, %{accepted_by: "actor", conflict: false, remote_ref: "Observation/1"}} =
-             Postgres.fetch(c.db, c.key)
-  end
-
-  test "changed artifact blocks acceptance and outbox creation", c do
-    File.write!(c.path, "changed")
-
-    assert {:error, :recording_changed} =
-             Postgres.accept(c.db, c.key, c.tmp_dir, c.a.file_sha256, "actor")
-
-    assert {:ok, %{accepted_by: nil}} = Postgres.fetch(c.db, c.key)
-
-    assert {:error, :delivery_state_changed} =
-             Postgres.delivery_result(c.db, c.key, {:ok, %{remote_ref: "Observation/1"}})
-  end
-
-  test "an outbox insertion failure rolls back the reviewer update", c do
-    DBConnection.run(c.db, fn conn ->
-      Postgrex.query!(
-        conn,
-        "CREATE TEMP TABLE exam_deliveries (LIKE public.exam_deliveries INCLUDING ALL, CHECK (false))",
-        []
-      )
-
-      try do
-        assert_raise Postgrex.Error, fn ->
-          Postgres.accept(conn, c.key, c.tmp_dir, c.a.file_sha256, "actor")
-        end
-
-        assert {:ok, %{accepted_by: nil, accepted_at: nil}} = Postgres.fetch(conn, c.key)
-      after
-        Postgrex.query!(conn, "DROP TABLE pg_temp.exam_deliveries", [])
-      end
-    end)
-  end
-
-  test "concurrent acceptance and manual retry preserve one decision and remote identity", c do
-    results =
-      for actor <- ["one", "two"] do
-        Task.async(fn -> Postgres.accept(c.db, c.key, c.tmp_dir, c.a.file_sha256, actor) end)
-      end
-
-    assert [{:ok, :ok}, {:ok, :ok}] = Task.await_many(results)
-    assert {:error, :timeout} = Postgres.delivery_result(c.db, c.key, {:error, :timeout})
-    assert :ok = Postgres.delivery_result(c.db, c.key, {:ok, %{remote_ref: "Observation/1"}})
-
-    assert {:error, :delivery_state_changed} =
-             Postgres.delivery_result(c.db, c.key, {:ok, %{remote_ref: "Observation/2"}})
-
-    stop_supervised!(Postgres)
-    db = start_supervised!({Postgres, url: c.url})
-
-    assert {:ok, %{accepted_by: actor, remote_ref: "Observation/1", last_error: nil}} =
-             Postgres.fetch(db, c.key)
-
-    assert actor in ["one", "two"]
+    assert {:ok, [%{actor: nil}]} = Records.list(c.db, c.encounter)
+    assert {:error, :review_required} = Records.delivery(c.db, c.encounter, "pulse")
   end
 end

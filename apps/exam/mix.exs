@@ -3,7 +3,7 @@ if bootstrap = System.get_env("MIX_WORKSPACE_OPS_BOOTSTRAP"), do: Code.require_f
 defmodule MedFabric.Exam.MixProject do
   use Mix.Project
 
-  @med_ex_projection_ref "c226d3ffe1087c20c80aaea506b6cff111712255"
+  @med_ex_projection_ref "8487c3306d02dc2a7bb68ffa4dea9ef1f172a7f6"
 
   def project do
     [
@@ -31,6 +31,7 @@ defmodule MedFabric.Exam.MixProject do
       {:phoenix_html, "~> 4.2"},
       {:phoenix_live_view, "~> 1.0"},
       {:bandit, "~> 1.6"},
+      {:websock_adapter, "~> 0.5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ]

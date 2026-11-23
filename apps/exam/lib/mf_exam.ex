@@ -1,87 +1,90 @@
 defmodule MedFabric.Exam do
-  @moduledoc "Composition of one authorized fixture exam."
-  alias MedFabric.Exam.CaptureRunner
+  @moduledoc "Composes evidence intake, clinician review and durable export."
+
+  alias MedFabric.Domain.Evidence
   alias MedFabric.Interop.FhirClient
-  alias MedFabric.Store.Postgres
+  alias MedFabric.Store.{Postgres, Records}
 
   def lab, do: Application.fetch_env!(:mf_exam, :lab)
-  def key(config), do: {config.encounter_id, "circor-1"}
   def session_id(enc), do: "preview-" <> enc
 
-  def announce(config),
-    do:
-      Phoenix.PubSub.broadcast(
-        MedFabric.Exam.PubSub,
-        "exam:" <> config.encounter_id,
-        :exam_changed
-      )
-
-  def snapshot(config) do
-    {active, failed} = CaptureRunner.status()
-
-    case Postgres.fetch(Postgres, key(config)) do
-      {:ok, row} -> %{capture: active, error: failed, row: row}
-      {:error, _} -> %{capture: active, error: true, row: nil}
-    end
+  def announce(config) do
+    Phoenix.PubSub.broadcast(MedFabric.Exam.PubSub, "exam:" <> config.encounter_id, :exam_changed)
   end
 
-  def accept(config, digest) do
-    with {:ok, :ok} <-
-           Postgres.accept(Postgres, key(config), config.artifact_dir, digest, "lab-clinician") do
-      announce(config)
-    end
-  end
-
-  def deliver(config) do
-    case Postgres.fetch(Postgres, key(config)) do
-      {:ok, %{remote_ref: ref}} when is_binary(ref) ->
-        :ok
-
-      {:ok, %{conflict: false, accepted_by: actor} = row} when is_binary(actor) ->
-        result = export(config, row)
-        status = Postgres.delivery_result(Postgres, key(config), result)
-        announce(config)
-        status
-
-      {:ok, _} ->
-        {:error, :review_required}
-
-      error ->
-        error
-    end
-  end
-
-  defp export(config, row) do
-    {enc, acq} = key(config)
-    m = row.metadata
-    opts = [base_url: config.fhir_base_url]
-
-    refs = m["delivery"]
-
-    if refs == config.refs do
-      observation = %{
-        interval_ms: {m["start_ms"], m["end_ms"]},
-        artifact_sha256: m["artifact_sha256"],
-        continuity: m["continuity"],
-        accepted_by: row.accepted_by
-      }
-
-      resource =
-        FhirClient.build_observation(
-          observation,
-          %{external_id: "urn:med_fabric:observation:obs:#{enc}:#{acq}"},
-          %{
-            source_kind: :physionet_circor,
-            source_ref: m["source_ref"],
-            sample_rate_hz: m["sample_rate_hz"]
-          },
-          patient_ref: refs["patient_ref"],
-          encounter_ref: refs["encounter_ref"]
-        )
-
-      FhirClient.deliver(resource, opts)
+  def pulse(encounter, actor, value) do
+    with true <- Records.member?(Postgres, encounter, actor, :clinician),
+         {:ok, evidence} <- Evidence.pulse_rate(value, DateTime.utc_now(), actor),
+         :ok <- Records.ready(Postgres, encounter, id(), evidence) do
+      announce(lab())
     else
-      {:error, :destination_changed}
+      false -> {:error, :unauthorized}
+      error -> error
     end
   end
+
+  def accept(encounter, acquisition, actor) do
+    config = lab()
+
+    with true <- Records.member?(Postgres, encounter, actor, :clinician),
+         {:ok, rows} <- Records.list(Postgres, encounter),
+         %{evidence: evidence} <- Enum.find(rows, &(&1.id == acquisition)),
+         :ok <- verify_evidence(config, evidence),
+         external = "#{encounter}:#{acquisition}",
+         resource = FhirClient.resource(evidence, external, actor, config.refs),
+         {:ok, :ok} <-
+           Records.accept(
+             Postgres,
+             encounter,
+             acquisition,
+             actor,
+             evidence,
+             config.fhir_base_url,
+             external,
+             resource
+           ) do
+      announce(config)
+    else
+      nil -> {:error, :not_found}
+      false -> {:error, :unauthorized}
+      error -> error
+    end
+  end
+
+  def deliver(encounter, acquisition, actor) do
+    with true <- Records.member?(Postgres, encounter, actor, :clinician),
+         {:ok, url, resource, nil} <- Records.delivery(Postgres, encounter, acquisition) do
+      result = FhirClient.deliver(resource, base_url: url)
+      status = Records.delivery_result(Postgres, encounter, acquisition, result)
+      announce(lab())
+      status
+    else
+      {:ok, _, _, remote} when is_binary(remote) -> :ok
+      false -> {:error, :unauthorized}
+      error -> error
+    end
+  end
+
+  def artifact(dir, %{"artifact_key" => key, "file_sha256" => digest}) do
+    with true <- Regex.match?(~r/\A[0-9a-f]{64}\z/, digest) and key == digest <> ".wav",
+         {:ok, bytes} <- File.read(Path.join(dir, key)),
+         true <- Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) == digest do
+      {:ok, bytes}
+    else
+      _ -> {:error, :recording_changed}
+    end
+  end
+
+  def artifact(_, _), do: {:error, :invalid_recording}
+
+  defp verify_evidence(config, %{"kind" => "audio_pcm16_wav"} = evidence) do
+    case artifact(config.artifact_dir, evidence) do
+      {:ok, _} -> :ok
+      error -> error
+    end
+  end
+
+  defp verify_evidence(_, %{"kind" => "pulse_rate"}), do: :ok
+
+  defp id, do: Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 end

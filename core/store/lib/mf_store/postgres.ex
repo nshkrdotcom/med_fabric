@@ -1,6 +1,5 @@
 defmodule MedFabric.Store.Postgres do
-  @moduledoc "Atomic recording intake, review and manual export."
-  alias MedFabric.Domain.Encounter
+  @moduledoc "Native PostgreSQL connection and schema setup."
 
   def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
 
@@ -44,7 +43,7 @@ defmodule MedFabric.Store.Postgres do
     sql =
       Application.app_dir(
         Application.get_application(__MODULE__),
-        "priv/sql/001_clinical_outbox.sql"
+        "priv/sql/002_evidence.sql"
       )
       |> File.read!()
 
@@ -57,128 +56,5 @@ defmodule MedFabric.Store.Postgres do
       |> Enum.reject(&(&1 == ""))
       |> Enum.each(&Postgrex.query!(conn, &1, []))
     end)
-  end
-
-  def ready(db, {enc, acq}, session, %{acquisition_id: acq} = capture, source, refs \\ %{}) do
-    with {:ok, metadata} <- Encounter.metadata(session, capture, source),
-         {:ok, %{rows: [[conflict, accepted_at, same_recording, same_destination]]}} <-
-           Postgrex.query(
-             db,
-             """
-             INSERT INTO exam_recordings AS r (encounter_id, acquisition_id, metadata) VALUES ($1,$2,$3)
-             ON CONFLICT (encounter_id, acquisition_id) DO UPDATE
-               SET conflict = r.conflict OR (
-                 r.accepted_at IS NULL AND (r.metadata - 'delivery') <> (EXCLUDED.metadata - 'delivery')
-               )
-             RETURNING conflict, accepted_at, (r.metadata - 'delivery') = ($3::jsonb - 'delivery'),
-               r.metadata->'delivery' = $3::jsonb->'delivery'
-             """,
-             [enc, acq, Map.put(metadata, "delivery", refs)]
-           ) do
-      cond do
-        accepted_at && !same_recording -> {:error, :accepted_recording_conflict}
-        conflict -> {:error, :conflicting_recording}
-        !same_destination -> {:error, :destination_changed}
-        true -> :ok
-      end
-    end
-  end
-
-  def fetch(db, {enc, acq}) do
-    case Postgrex.query(
-           db,
-           """
-           SELECT r.metadata, r.conflict, r.accepted_by, r.accepted_at, d.remote_ref, d.last_error
-           FROM exam_recordings r LEFT JOIN exam_deliveries d USING (encounter_id, acquisition_id)
-           WHERE encounter_id=$1 AND acquisition_id=$2
-           """,
-           [enc, acq]
-         ) do
-      {:ok, %{rows: []}} ->
-        {:ok, nil}
-
-      {:ok, %{rows: [[m, conflict, actor, time, remote, error]]}} ->
-        {:ok,
-         %{
-           metadata: m,
-           conflict: conflict,
-           accepted_by: actor,
-           accepted_at: time,
-           remote_ref: remote,
-           last_error: error
-         }}
-
-      error ->
-        error
-    end
-  end
-
-  def bytes(dir, %{"file_sha256" => digest}) do
-    with {:ok, bytes} <- File.read(Path.join(dir, digest <> ".wav")) do
-      if Base.encode16(:crypto.hash(:sha256, bytes), case: :lower) == digest,
-        do: {:ok, bytes},
-        else: {:error, :recording_changed}
-    end
-  end
-
-  def accept(db, {enc, acq}, dir, digest, actor) when is_binary(actor) and byte_size(actor) > 0 do
-    Postgrex.transaction(db, &accept_locked(&1, enc, acq, dir, digest, actor))
-  end
-
-  defp accept_locked(conn, enc, acq, dir, digest, actor) do
-    case Postgrex.query!(
-           conn,
-           "SELECT metadata, conflict FROM exam_recordings WHERE encounter_id=$1 AND acquisition_id=$2 FOR UPDATE",
-           [enc, acq]
-         ).rows do
-      [[m, conflict]] ->
-        with :ok <- Encounter.review(m, digest, conflict), {:ok, _} <- bytes(dir, m) do
-          Postgrex.query!(
-            conn,
-            "UPDATE exam_recordings SET accepted_by=$3, accepted_at=now() WHERE encounter_id=$1 AND acquisition_id=$2 AND accepted_at IS NULL",
-            [enc, acq, actor]
-          )
-
-          Postgrex.query!(
-            conn,
-            "INSERT INTO exam_deliveries (encounter_id, acquisition_id) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-            [enc, acq]
-          )
-
-          :ok
-        else
-          {:error, reason} -> Postgrex.rollback(conn, reason)
-        end
-
-      [] ->
-        Postgrex.rollback(conn, :not_found)
-    end
-  end
-
-  def delivery_result(db, {enc, acq}, result) do
-    {remote, error} =
-      case result do
-        {:ok, %{remote_ref: ref}} ->
-          {ref, nil}
-
-        {:error, _reason} ->
-          {nil, "delivery_failed"}
-      end
-
-    case Postgrex.query(
-           db,
-           """
-           UPDATE exam_deliveries SET remote_ref=coalesce(remote_ref,$3), attempts=attempts+1,
-             last_error=CASE WHEN remote_ref IS NULL THEN $4 ELSE NULL END
-           WHERE encounter_id=$1 AND acquisition_id=$2 AND (remote_ref IS NULL OR remote_ref=$3 OR $3 IS NULL)
-           RETURNING remote_ref
-           """,
-           [enc, acq, remote, error]
-         ) do
-      {:ok, %{rows: [[nil]]}} -> result
-      {:ok, %{rows: [[stored]]}} when remote == nil or remote == stored -> :ok
-      {:ok, %{rows: []}} -> {:error, :delivery_state_changed}
-      error -> error
-    end
   end
 end

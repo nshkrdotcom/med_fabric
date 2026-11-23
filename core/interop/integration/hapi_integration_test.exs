@@ -25,20 +25,12 @@ defmodule MedFabric.Interop.HapiIntegrationTest do
 
     assert {:ok, ^refs} = FhirClient.seed_exam(fixture_id, opts)
 
-    observation = %{
-      artifact_sha256: "recording-digest",
-      interval_ms: {0, 1_000},
-      continuity: :observed_continuous,
-      accepted_by: "Integration test reviewer"
-    }
-
     resource =
-      FhirClient.build_observation(
-        observation,
-        %{external_id: fixture_id},
-        %{source_kind: :fixture, source_ref: "clip.wav", sample_rate_hz: 4000},
-        patient_ref: patient,
-        encounter_ref: encounter
+      FhirClient.resource(
+        %{"kind" => "audio_pcm16_wav", "file_sha256" => String.duplicate("a", 64),
+          "effective_at" => DateTime.utc_now() |> DateTime.to_iso8601()},
+        fixture_id, "Integration test reviewer",
+        %{"patient_ref" => patient, "encounter_ref" => encounter}
       )
 
     assert {:error, %RuntimeError{message: "discarded response after HAPI accepted the write"}} =
@@ -49,7 +41,7 @@ defmodule MedFabric.Interop.HapiIntegrationTest do
     assert "Observation/" <> remote["id"] == remote_ref
     assert remote["subject"]["reference"] == patient
     assert remote["encounter"]["reference"] == encounter
-    assert remote["component"] == resource["component"]
+    assert remote["valueString"] == resource["valueString"]
     assert hd(remote["code"]["coding"])["code"] == "reviewed-auscultation-recording"
 
     different_recording = Map.put(resource, "status", "entered-in-error")

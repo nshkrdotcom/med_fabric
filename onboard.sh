@@ -13,7 +13,7 @@ elixir -e 'unless System.version() == "1.20.5" and
   do: System.halt("Activate the Erlang and Elixir versions in .tool-versions")'
 
 if [[ "${1:-}" == "--integration" ]]; then
-  for tool in node npm uv jq openssl psql shasum; do
+  for tool in node npm jq openssl psql shasum; do
     command -v "$tool" >/dev/null || { echo "Missing integration prerequisite: $tool" >&2; exit 1; }
   done
   if [[ -z "${DATABASE_URL:-}" ]]; then

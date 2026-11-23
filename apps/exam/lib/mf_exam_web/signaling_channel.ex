@@ -2,22 +2,24 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
   @moduledoc false
   use Phoenix.Channel
 
+  alias MedEx.{Capture, Preview}
   alias MedFabric.Exam
-  alias MedRTC.Preview
 
   @impl true
   def join("signaling:" <> encounter_id, %{"connection_id" => connection_id}, socket)
       when is_binary(connection_id) and byte_size(connection_id) == 36 do
-    with ^encounter_id <- socket.assigns.encounter_id,
+    with :clinician <- socket.assigns.role,
+         ^encounter_id <- socket.assigns.encounter_id,
          %{encounter_id: ^encounter_id} <- Application.get_env(:mf_exam, :lab) do
       session_id = Exam.session_id(encounter_id)
 
       {:ok, %{session_id: session_id},
        assign(socket,
          peer: nil,
-         subscribed: false,
+         capture: nil,
          sequence: 0,
-         media: nil
+         clock: nil,
+         connected: false
        )}
     else
       _ -> {:error, %{reason: "unauthorized_encounter"}}
@@ -44,28 +46,40 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
   @impl true
   def handle_info(
         {:ex_webrtc, pid, {:connection_state_change, :connected}},
-        %{assigns: %{peer: %{pid: pid}, subscribed: false, encounter_id: encounter_id}} = socket
+        %{assigns: %{peer: %{pid: pid}, encounter_id: encounter}} = socket
       ) do
-    Phoenix.PubSub.subscribe(MedFabric.Exam.PubSub, "preview:" <> encounter_id)
-    {:noreply, assign(socket, :subscribed, true)}
+    Phoenix.PubSub.subscribe(MedFabric.Exam.PubSub, "preview:" <> encounter)
+
+    case Registry.lookup(MedFabric.Exam.ActiveCapture, encounter) do
+      [{_, capture}] when is_pid(capture) -> send(self(), {:capture_started, capture})
+      _ -> :ok
+    end
+
+    {:noreply, assign(socket, :connected, true)}
+  end
+
+  def handle_info({:capture_started, capture}, %{assigns: %{connected: true}} = socket) do
+    case Capture.subscribe(capture) do
+      :ok -> {:noreply, assign(socket, :capture, capture)}
+      {:error, _} -> {:noreply, socket}
+    end
+  catch
+    :exit, _ -> {:noreply, socket}
   end
 
   def handle_info(
-        {:preview_frame, generation, index, frame},
-        %{assigns: %{peer: %Preview{} = peer, media: media, sequence: sequence}} = socket
+        {:med_ex_preview, capture, index, frame},
+        %{assigns: %{capture: capture, peer: peer, sequence: sequence}} = socket
       ) do
-    case media do
-      {active, _, _} when generation < active ->
-        {:noreply, socket}
+    tick = tick(socket.assigns.clock, capture, index)
+    Preview.send_opus(peer, frame, sequence, tick)
+    Capture.demand(capture)
+    {:noreply, assign(socket, sequence: sequence + 1, clock: {capture, index, tick})}
+  end
 
-      {^generation, previous, _tick} when index <= previous ->
-        {:noreply, socket}
-
-      _ ->
-        tick = media_tick(media, generation, index)
-        Preview.send_opus(peer, frame, sequence, tick)
-        {:noreply, assign(socket, sequence: sequence + 1, media: {generation, index, tick})}
-    end
+  def handle_info({:med_ex_preview_failed, capture, _}, %{assigns: %{capture: capture}} = socket) do
+    push(socket, "preview_failed", %{})
+    {:noreply, assign(socket, :capture, nil)}
   end
 
   def handle_info(
@@ -75,13 +89,11 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
       when state in [:failed, :closed],
       do: {:stop, :normal, socket}
 
-  def handle_info({:preview_frame, _, _, _}, socket), do: {:noreply, socket}
+  def handle_info(_, socket), do: {:noreply, socket}
 
-  def handle_info({:ex_webrtc, _pid, _event}, socket), do: {:noreply, socket}
-
-  defp media_tick(nil, _generation, _index), do: 0
-  defp media_tick({generation, previous, tick}, generation, index), do: tick + index - previous
-  defp media_tick({_previous_generation, _previous, tick}, _generation, _index), do: tick + 1
+  defp tick(nil, _, index), do: index
+  defp tick({capture, last, tick}, capture, index), do: tick + index - last
+  defp tick({_, _, tick}, _, _), do: tick + 960
 
   @impl true
   def terminate(_reason, socket) do

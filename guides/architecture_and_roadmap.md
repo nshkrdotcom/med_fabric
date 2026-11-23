@@ -4,7 +4,7 @@ Med Fabric owns clinical encounters, authorization, review, durable observations
 
 ## Exam composition
 
-The current lab rehearses WAV replay with a replaceable WebRTC preview. The 0.1.0 target adds live diagnostic intake, a separate patient–clinician call and a fileless pulse-rate observation in the same encounter.
+The exam composes live diagnostic intake, a separate patient–clinician call and a fileless pulse-rate observation in a single authorized encounter.
 
 ```mermaid
 flowchart LR

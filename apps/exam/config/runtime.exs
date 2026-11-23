@@ -5,10 +5,12 @@ if System.get_env("MF_LAB") == "1" do
   lab = %{
     encounter_id: System.fetch_env!("MF_EXAM_ID"),
     refs: refs,
-    access_key: System.fetch_env!("MF_LAB_ACCESS_KEY"),
+    patient_key: System.fetch_env!("MF_PATIENT_ACCESS_KEY"),
+    clinician_key: System.fetch_env!("MF_CLINICIAN_ACCESS_KEY"),
+    patient_actor: System.fetch_env!("MF_PATIENT_ACTOR"),
+    clinician_actor: System.fetch_env!("MF_CLINICIAN_ACTOR"),
     database_url: System.fetch_env!("DATABASE_URL"),
     fhir_base_url: System.fetch_env!("FHIR_BASE_URL"),
-    fixture_dir: Path.expand(System.fetch_env!("MF_FIXTURE_DIR")),
     artifact_dir: Path.expand(System.fetch_env!("MF_ARTIFACT_DIR"))
   }
 
@@ -20,7 +22,11 @@ if System.get_env("MF_LAB") == "1" do
     raise "MF_EXAM_ID must be 1–48 letters, digits, or dashes"
   end
 
-  if byte_size(lab.access_key) < 32, do: raise("MF_LAB_ACCESS_KEY must contain at least 32 bytes")
+  unless byte_size(lab.patient_key) >= 32 and byte_size(lab.clinician_key) >= 32 and
+           lab.patient_key != lab.clinician_key and lab.patient_actor != lab.clinician_actor and
+           lab.patient_actor != "" and lab.clinician_actor != "" do
+    raise "Configure distinct patient and clinician actors and access keys of at least 32 bytes"
+  end
 
   port = String.to_integer(System.get_env("MF_HTTP_PORT", "4000"))
 

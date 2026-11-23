@@ -13,6 +13,6 @@
 
 ## Browser-to-record path
 
-The Phoenix app starts its own endpoint and PubSub. An explicitly enabled local lab uses one synthetic encounter. The browser negotiates a receive-only peer through an authorized channel. The SDK finalizes the fixture recording independently of preview, and the clinician reviews that exact recording. PostgreSQL persists acceptance. A separate action sends the stored observation to HAPI.
+The Phoenix app starts its own endpoint and PubSub. An explicitly enabled local lab uses one synthetic encounter. The browser negotiates a receive-only peer through an authorized channel. The patient browser supplies live PCM. The SDK finalizes the recording independently of preview, and the clinician reviews that exact recording alongside manually entered pulse measurements. PostgreSQL persists acceptance. A separate action sends the stored observation to HAPI.
 
 See the [native runbook](../../guides/browser_to_record.md) for prerequisites, exact commands, and the listening check.

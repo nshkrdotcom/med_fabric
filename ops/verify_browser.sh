@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 umask 077
 
-for tool in mix node uv openssl curl psql jq; do
+for tool in mix node openssl curl psql jq; do
   command -v "$tool" >/dev/null || { echo "Missing prerequisite: $tool. Run ./onboard.sh --integration." >&2; exit 1; }
 done
 [[ -d ops/browser/node_modules/playwright ]] || { echo "Run ./onboard.sh --integration." >&2; exit 1; }
@@ -17,9 +17,11 @@ work="$(mktemp -d "$PWD/_build/browser.XXXXXXXX")"
 export MF_EXAM_ID="exam-$(openssl rand -hex 8)"
 export MF_LAB=1
 export MF_HTTP_PORT="${MF_HTTP_PORT:-14000}"
-export MF_LAB_ACCESS_KEY="$(openssl rand -hex 24)"
+export MF_PATIENT_ACCESS_KEY="$(openssl rand -hex 24)"
+export MF_CLINICIAN_ACCESS_KEY="$(openssl rand -hex 24)"
+export MF_PATIENT_ACTOR="patient"
+export MF_CLINICIAN_ACTOR="clinician"
 export MF_SECRET_KEY_BASE="$(openssl rand -hex 48)"
-export MF_FIXTURE_DIR="${MF_FIXTURE_DIR:-$PWD/_build/circor}"
 export MF_ARTIFACT_DIR="$work/recordings"
 export MF_SERVICE_STATE="${MF_SERVICE_STATE:-$work/services}"
 
@@ -50,8 +52,6 @@ psql -Xq "$DATABASE_URL" -c 'SELECT 1' >/dev/null
 curl -fsS --max-time 5 -H 'Accept: application/fhir+json' "${FHIR_BASE_URL%/}/metadata" |
   jq -e '.fhirVersion == "4.0.1"' >/dev/null
 
-
-bash ops/fixtures/circor/prepare.sh "$MF_FIXTURE_DIR"
 
 export MF_REFS_FILE="$work/refs.json"
 (cd apps/exam && env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs)

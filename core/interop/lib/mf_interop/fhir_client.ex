@@ -11,51 +11,48 @@ defmodule MedFabric.Interop.FhirClient do
   @default_base_url "http://127.0.0.1:18080/fhir"
   @headers [{"content-type", "application/fhir+json"}, {"accept", "application/fhir+json"}]
 
-  @spec build_observation(map(), map(), map(), keyword()) :: map()
-  def build_observation(observation, outbox, provenance, opts) do
-    patient_ref = Keyword.fetch!(opts, :patient_ref)
-    encounter_ref = Keyword.fetch!(opts, :encounter_ref)
-    {start_ms, end_ms} = observation.interval_ms
-
-    %{
+  def resource(evidence, external, actor, refs) do
+    base = %{
       "resourceType" => "Observation",
-      "identifier" => identifier(@identifier_system, outbox.external_id),
+      "identifier" => identifier(@identifier_system, external),
       "status" => "final",
+      "subject" => %{"reference" => refs["patient_ref"]},
+      "encounter" => %{"reference" => refs["encounter_ref"]},
+      "effectiveDateTime" => evidence["effective_at"],
+      "performer" => [%{"display" => actor}]
+    }
+
+    Map.merge(base, observation_value(evidence))
+  end
+
+  defp observation_value(%{"kind" => "pulse_rate", "value" => value}) do
+    %{
+      "code" => %{"coding" => [%{"system" => "http://loinc.org", "code" => "8867-4"}]},
+      "valueQuantity" => %{
+        "value" => value,
+        "unit" => "beats/minute",
+        "system" => "http://unitsofmeasure.org",
+        "code" => "/min"
+      },
+      "method" => %{"text" => "Manually entered measurement"}
+    }
+  end
+
+  defp observation_value(%{"kind" => "audio_pcm16_wav"} = evidence) do
+    %{
       "code" => %{
         "coding" => [
           %{
             "system" => "https://med-fabric.local/fhir/CodeSystem/exam-observation",
-            "code" => "reviewed-auscultation-recording",
-            "display" => "Reviewed auscultation recording"
+            "code" => "reviewed-auscultation-recording"
           }
-        ],
-        "text" => "Reviewed auscultation recording"
+        ]
       },
-      "subject" => %{"reference" => patient_ref},
-      "encounter" => %{"reference" => encounter_ref},
-      "performer" => [%{"display" => observation.accepted_by}],
-      "component" =>
-        Enum.map(
-          [
-            {"pcm-sha256", "valueString", observation.artifact_sha256},
-            {"continuity", "valueString", to_string(observation.continuity)},
-            {"start-ms", "valueInteger", start_ms},
-            {"end-ms", "valueInteger", end_ms},
-            {"source", "valueString", to_string(Map.fetch!(provenance, :source_ref))},
-            {"sample-rate-hz", "valueInteger", Map.fetch!(provenance, :sample_rate_hz)}
-          ],
-          fn {key, type, value} ->
-            %{
-              "code" => %{"coding" => [%{"system" => @fixture_system, "code" => key}]},
-              type => value
-            }
-          end
-        )
+      "valueString" => evidence["file_sha256"],
+      "method" => %{"text" => "Reviewed diagnostic audio recording"}
     }
   end
 
-  @doc "Seeds a synthetic patient and encounter using stable identifiers on the receiving server."
-  @spec seed_exam(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def seed_exam(fixture_id, opts \\ []) do
     patient = %{
       "resourceType" => "Patient",
@@ -135,13 +132,14 @@ defmodule MedFabric.Interop.FhirClient do
     do: {:error, :unconfirmed_remote_record}
 
   defp clinical_fields_match?(%{"resourceType" => "Observation"} = expected, actual) do
-    {components, fields} = Map.pop!(expected, "component")
-
-    matches?(fields, actual) and
-      Enum.sort(components) == Enum.sort(List.wrap(actual["component"])) and
+    matches?(expected, actual) and
       Enum.all?(Map.keys(actual), fn key ->
-        not String.starts_with?(key, "value") and
-          key not in ["dataAbsentReason", "interpretation", "modifierExtension"]
+        if String.starts_with?(key, "value") or
+             key in ~w(component dataAbsentReason interpretation modifierExtension) do
+          Map.has_key?(expected, key)
+        else
+          true
+        end
       end)
   end
 
@@ -152,9 +150,7 @@ defmodule MedFabric.Interop.FhirClient do
     do: Enum.all?(expected, fn {k, v} -> matches?(v, Map.get(actual, k)) end)
 
   defp matches?(expected, actual) when is_list(expected) and is_list(actual),
-    do:
-      length(expected) == length(actual) and
-        Enum.all?(expected, fn item -> Enum.any?(actual, &matches?(item, &1)) end)
+    do: Enum.sort(expected) == Enum.sort(actual)
 
   defp matches?(expected, actual), do: expected == actual
 

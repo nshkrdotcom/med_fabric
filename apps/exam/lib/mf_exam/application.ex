@@ -2,9 +2,8 @@ defmodule MedFabric.Exam.Application do
   @moduledoc false
   use Application
 
-  alias MedFabric.Exam.CaptureRunner
   alias MedFabric.ExamWeb.Endpoint
-  alias MedFabric.Store.Postgres
+  alias MedFabric.Store.{Postgres, Records}
 
   @impl true
   def start(_type, _args) do
@@ -19,7 +18,8 @@ defmodule MedFabric.Exam.Application do
           [
             {Postgres, url: lab.database_url, name: Postgres},
             %{id: :schema, start: {__MODULE__, :schema, []}},
-            {CaptureRunner, lab}
+            {Registry, keys: :unique, name: MedFabric.Exam.ActiveCapture},
+            {DynamicSupervisor, strategy: :one_for_one, name: MedFabric.Exam.Captures}
           ]
       end
 
@@ -30,8 +30,12 @@ defmodule MedFabric.Exam.Application do
   end
 
   def schema do
-    case Postgres.migrate() do
-      {:ok, :ok} -> :ignore
+    lab = MedFabric.Exam.lab()
+
+    with {:ok, :ok} <- Postgres.migrate(),
+         :ok <- Records.open(Postgres, lab.encounter_id, lab.patient_actor, lab.clinician_actor) do
+      :ignore
+    else
       {:error, reason} -> {:error, {:schema_unavailable, reason}}
     end
   end

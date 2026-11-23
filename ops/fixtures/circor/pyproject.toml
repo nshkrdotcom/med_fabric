@@ -1,5 +1,0 @@
-[project]
-name = "med-ex-circor-fixture"
-version = "0.1.0"
-requires-python = "==3.12.14"
-dependencies = ["imageio-ffmpeg==0.6.0"]

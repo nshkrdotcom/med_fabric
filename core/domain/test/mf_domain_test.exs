@@ -1,33 +1,38 @@
-defmodule MedFabric.Domain.EncounterTest do
+defmodule MedFabric.Domain.EvidenceTest do
   use ExUnit.Case, async: true
-  alias MedFabric.Domain.Encounter
+  alias MedFabric.Domain.Evidence
 
-  test "replay metadata requires identified input and a valid sample interval" do
+  test "manual pulse evidence has a measurement and provenance independent of any file" do
+    at = ~U[2026-11-22 12:00:00Z]
+
+    assert {:ok, %{"value" => 70, "unit" => "/min", "provenance" => %{"actor" => "clinician"}}} =
+             Evidence.pulse_rate(70, at, "clinician")
+
+    assert {:error, :invalid_pulse_rate} = Evidence.pulse_rate(0, at, "clinician")
+  end
+
+  test "recording evidence binds the artifact key and sample interval" do
     digest = String.duplicate("a", 64)
+    at = ~U[2026-11-22 12:00:00Z]
 
     capture = %{
+      kind: :audio_pcm16_wav,
+      artifact_key: digest <> ".wav",
       file_sha256: digest,
-      artifact_sha256: digest,
-      sample_count: 4000,
-      sample_rate_hz: 4000,
-      interval_ms: {0, 1000},
+      pcm_sha256: digest,
+      sample_rate_hz: 48_000,
+      first_sample: 0,
+      end_sample: 960,
+      sample_count: 960,
       continuity: :observed_continuous
     }
 
-    assert {:ok, _} = Encounter.metadata("session", capture, "fixture")
-    assert {:error, :invalid_recording} = Encounter.metadata("", capture, nil)
+    assert {:ok, %{"file_sha256" => ^digest}} = Evidence.recording(capture, "patient", at)
 
     assert {:error, :invalid_recording} =
-             Encounter.metadata("session", %{capture | interval_ms: nil}, "fixture")
+             Evidence.recording(%{capture | artifact_key: "other.wav"}, "patient", at)
 
     assert {:error, :invalid_recording} =
-             Encounter.metadata("session", %{capture | continuity: :observed_gap}, "fixture")
-  end
-
-  test "review binds the complete file and blocks conflicting evidence" do
-    m = %{"file_sha256" => "first"}
-    assert :ok = Encounter.review(m, "first", false)
-    assert {:error, :recording_changed} = Encounter.review(m, "different", false)
-    assert {:error, :conflicting_recording} = Encounter.review(m, "first", true)
+             Evidence.recording(%{capture | end_sample: 961}, "patient", at)
   end
 end

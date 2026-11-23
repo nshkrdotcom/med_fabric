@@ -41,8 +41,9 @@ defmodule MedFabric.ExamWeb.Endpoint do
   plug(Plug.Session, @session_options)
   plug(MedFabric.ExamWeb.Router)
 
-  defp serve_med_ex_hook(%Plug.Conn{request_path: "/med_ex/session_hook.js"} = conn, _opts) do
-    path = MedWeb.Signaling.hook_asset_full_path()
+  defp serve_med_ex_hook(%Plug.Conn{path_info: ["med_ex", name]} = conn, _opts)
+       when name in ~w(session_hook.js pcm_capture.js pcm_worklet.js) do
+    path = MedEx.Web.asset_path(name)
 
     conn
     |> Plug.Conn.put_resp_content_type("application/javascript")
