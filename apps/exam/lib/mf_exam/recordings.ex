@@ -18,33 +18,37 @@ defmodule MedFabric.Exam.Recordings do
       with true <- Exam.member?(encounter, actor, :patient, context.db),
            nil <- active(encounter),
            :ok <- reconcile(encounter, context) do
-        id = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
-        root = context.artifact_dir
-
-        with :ok <- Artifact.create_directory(root, id),
-             :ok <- Records.reserve(context.db, encounter, id, actor),
-             {:ok, pid} <-
-               DynamicSupervisor.start_child(
-                 context.captures,
-                 {MedEx.Capture,
-                  owner: self(), acquisition_id: id, artifact_dir: Path.join(root, id)}
-               ) do
-          # Name the writer itself. If the socket dies during finish, the name stays
-          # occupied until the writer has finished installing (or aborting) the file.
-          :yes = :global.register_name({__MODULE__, encounter}, pid)
-          Phoenix.PubSub.broadcast(
-            context.pubsub,
-            "preview:" <> encounter,
-            {:capture_started, pid}
-          )
-
-          {:ok, id, pid}
-        end
+        start_capture(encounter, actor, context)
       else
         {:error, _} = error -> error
         _ -> {:error, :capture_unavailable}
       end
     end)
+  end
+
+  defp start_capture(encounter, actor, context) do
+    id = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+    root = context.artifact_dir
+
+    with :ok <- Artifact.create_directory(root, id),
+         :ok <- Records.reserve(context.db, encounter, id, actor),
+         {:ok, pid} <-
+           DynamicSupervisor.start_child(
+             context.captures,
+             {MedEx.Capture, owner: self(), acquisition_id: id, artifact_dir: Path.join(root, id)}
+           ) do
+      # Name the writer itself. If the socket dies during finish, the name stays
+      # occupied until the writer has finished installing (or aborting) the file.
+      :yes = :global.register_name({__MODULE__, encounter}, pid)
+
+      Phoenix.PubSub.broadcast(
+        context.pubsub,
+        "preview:" <> encounter,
+        {:capture_started, pid}
+      )
+
+      {:ok, id, pid}
+    end
   end
 
   def finish(encounter, id, actor, pid, context \\ Exam.context()) do
@@ -64,26 +68,34 @@ defmodule MedFabric.Exam.Recordings do
   def recover(context \\ Exam.context()) do
     with {:ok, encounters} <- Records.pending_encounters(context.db, context.encounter_ids) do
       Enum.reduce_while(encounters, :ok, fn encounter, :ok ->
-        case locked(encounter, fn -> reconcile(encounter, context) end) do
-          :ok -> {:cont, :ok}
-          error -> {:halt, error}
-        end
+        recover_encounter(encounter, context)
       end)
+    end
+  end
+
+  defp recover_encounter(encounter, context) do
+    case locked(encounter, fn -> reconcile(encounter, context) end) do
+      :ok -> {:cont, :ok}
+      error -> {:halt, error}
     end
   end
 
   def status(encounter, id, context \\ Exam.context()) do
     case Records.recording_status(context.db, encounter, id) do
       {:ok, "recording"} ->
-        locked(encounter, fn ->
-          with :ok <- reconcile(encounter, context) do
-            Records.recording_status(context.db, encounter, id)
-          end
-        end)
+        refresh_status(encounter, id, context)
 
       result ->
         result
     end
+  end
+
+  defp refresh_status(encounter, id, context) do
+    locked(encounter, fn ->
+      with :ok <- reconcile(encounter, context) do
+        Records.recording_status(context.db, encounter, id)
+      end
+    end)
   end
 
   defp locked(encounter, fun) do

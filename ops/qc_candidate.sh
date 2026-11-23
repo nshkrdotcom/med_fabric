@@ -45,7 +45,7 @@ mix deps.get --check-locked
 mix format --check-formatted
 mix compile --warnings-as-errors
 mix credo --strict
-mix dialyzer --force-check
+# The workspace has no application BEAM files. Each project's quality gate runs Dialyzer.
 for project in core/domain core/store core/interop; do
   (
     cd "$project"

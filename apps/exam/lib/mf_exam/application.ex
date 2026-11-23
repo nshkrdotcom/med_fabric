@@ -2,6 +2,8 @@ defmodule MedFabric.Exam.Application do
   @moduledoc false
   use Application
 
+  alias MedFabric.Exam
+  alias MedFabric.Exam.Recordings
   alias MedFabric.ExamWeb.Endpoint
   alias MedFabric.Store.{Encounters, Postgres}
 
@@ -29,11 +31,11 @@ defmodule MedFabric.Exam.Application do
   end
 
   def schema do
-    lab = MedFabric.Exam.lab()
+    lab = Exam.lab()
 
     with {:ok, :ok} <- Postgres.migrate(),
          :ok <- open_encounters(lab.encounters),
-         :ok <- MedFabric.Exam.Recordings.recover() do
+         :ok <- Recordings.recover() do
       :ignore
     else
       {:error, reason} -> {:error, {:schema_unavailable, reason}}

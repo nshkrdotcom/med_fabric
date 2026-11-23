@@ -31,15 +31,17 @@ defmodule MedFabric.Exam.Artifact do
          {:ok, names} <- File.ls(dir) do
       names
       |> Enum.filter(&Regex.match?(~r/\A\.capture-[A-Za-z0-9_-]{24}\.part\z/, &1))
-      |> Enum.reduce_while(:ok, fn name, :ok ->
-        case File.rm(Path.join(dir, name)) do
-          :ok -> {:cont, :ok}
-          error -> {:halt, error}
-        end
-      end)
+      |> Enum.reduce_while(:ok, fn name, :ok -> remove_partial(dir, name) end)
     else
       false -> {:error, :invalid_recording}
       error -> error
+    end
+  end
+
+  defp remove_partial(dir, name) do
+    case File.rm(Path.join(dir, name)) do
+      :ok -> {:cont, :ok}
+      error -> {:halt, error}
     end
   end
 
@@ -48,24 +50,23 @@ defmodule MedFabric.Exam.Artifact do
     with true <- Regex.match?(@attempt, id),
          dir = Path.join(root, id),
          {:ok, names} <- File.ls(dir) do
-      case Enum.filter(names, &String.ends_with?(&1, ".wav")) do
-        [] ->
-          {:error, :unfinished}
-
-        [name] ->
-          with {:ok, artifact} <- inspect_file(dir, name, fn _, _, data -> {:ok, data} end),
-               :ok <- sync_directory(dir) do
-            {:ok, artifact}
-          end
-
-        _ ->
-          {:error, :invalid_recording}
-      end
+      inspect_finalized(dir, Enum.filter(names, &String.ends_with?(&1, ".wav")))
     else
       false -> {:error, :invalid_recording}
       error -> error
     end
   end
+
+  defp inspect_finalized(_dir, []), do: {:error, :unfinished}
+
+  defp inspect_finalized(dir, [name]) do
+    with {:ok, artifact} <- inspect_file(dir, name, fn _, _, data -> {:ok, data} end),
+         :ok <- sync_directory(dir) do
+      {:ok, artifact}
+    end
+  end
+
+  defp inspect_finalized(_dir, _names), do: {:error, :invalid_recording}
 
   def verify(root, id, evidence), do: with_verified(root, id, evidence, fn _, _ -> :ok end)
 
@@ -81,21 +82,25 @@ defmodule MedFabric.Exam.Artifact do
     name = digest <> ".wav"
 
     if Regex.match?(@attempt, id) and key == id <> "/" <> name do
-      inspect_file(Path.join(root, id), name, fn fd, size, artifact ->
-        if evidence["pcm_sha256"] == artifact.pcm_sha256 and
-             evidence["sample_count"] == artifact.sample_count and
-             evidence["sample_rate_hz"] == artifact.sample_rate_hz do
-          fun.(fd, size)
-        else
-          {:error, :recording_changed}
-        end
-      end)
+      inspect_file(Path.join(root, id), name, verify_evidence(evidence, fun))
     else
       {:error, :invalid_recording}
     end
   end
 
   defp with_verified(_, _, _, _), do: {:error, :invalid_recording}
+
+  defp verify_evidence(evidence, fun) do
+    fn fd, size, artifact ->
+      if evidence["pcm_sha256"] == artifact.pcm_sha256 and
+           evidence["sample_count"] == artifact.sample_count and
+           evidence["sample_rate_hz"] == artifact.sample_rate_hz do
+        fun.(fd, size)
+      else
+        {:error, :recording_changed}
+      end
+    end
+  end
 
   defp inspect_file(dir, name, fun) do
     with [_, digest] <- Regex.run(@filename, name),

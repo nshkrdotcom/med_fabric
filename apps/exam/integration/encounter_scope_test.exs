@@ -44,19 +44,23 @@ defmodule MedFabric.Exam.EncounterScopeTest do
       refute Exam.member?(id, entry["clinician_actor"], "unknown", db)
       assert {:error, :unauthorized} = Exam.pulse(id, entry["patient_actor"], 75, context)
       assert {:ok, [%{id: acquisition}]} = Records.list(db, id)
+
       assert {:error, :unauthorized} =
                Exam.accept(id, acquisition, other["clinician_actor"], context)
+
       assert :ok = Exam.accept(id, acquisition, entry["clinician_actor"], context)
       assert {:ok, destination, resource, nil} = Records.delivery(db, id, acquisition)
       assert destination == entry["destination"]
       assert resource["subject"]["reference"] == entry["patient_ref"]
       assert resource["encounter"]["reference"] == entry["encounter_ref"]
       assert {:error, :review_required} = Records.delivery(db, other["exam"], acquisition)
+
       assert {:error, :unauthorized} =
                Exam.deliver(id, acquisition, other["clinician_actor"], context)
 
       Postgrex.query!(db, "UPDATE encounters SET closed_at=now() WHERE id=$1", [id])
       refute Exam.member?(id, entry["clinician_actor"], :clinician, db)
+
       assert {:error, :unauthorized} =
                Exam.accept(id, acquisition, entry["clinician_actor"], context)
     end

@@ -4,7 +4,8 @@ defmodule MedFabric.ExamWeb.Router do
   import Phoenix.LiveView.Router
 
   alias MedFabric.Exam
-  alias MedFabric.Exam.{Artifact, Recordings, ICE}
+  alias MedFabric.Exam.{Artifact, ICE, Recordings}
+  alias MedFabric.ExamWeb.ProxyIdentity
   alias MedFabric.Store.{Postgres, Records}
 
   pipeline :session do
@@ -64,20 +65,20 @@ defmodule MedFabric.ExamWeb.Router do
     def init(action), do: action
 
     def call(conn, :ice) do
-      json(conn, ICE.config(get_session(conn, :exam_actor), Exam.lab().turn))
+      private_json(conn, ICE.config(get_session(conn, :exam_actor), Exam.lab().turn))
     end
 
     def call(conn, :attempt) do
       with "patient" <- get_session(conn, :exam_role),
            {:ok, state} <-
              Recordings.status(conn.path_params["encounter_id"], conn.path_params["acquisition"]) do
-        json(conn, %{status: state})
+        private_json(conn, %{status: state})
       else
         _ -> send_resp(conn, 404, "Attempt unavailable")
       end
     end
 
-    defp json(conn, data) do
+    defp private_json(conn, data) do
       conn
       |> put_resp_header("cache-control", "no-store")
       |> put_resp_content_type("application/json")
@@ -100,21 +101,26 @@ defmodule MedFabric.ExamWeb.Router do
   defp authorize_member(conn, id, entry, lab) do
     actor = get_session(conn, :exam_actor)
     role = get_session(conn, :exam_role)
+    current_session = get_session(conn, :lab_encounter) == id and Exam.member?(id, actor, role)
+
+    if lab.local? do
+      authorize_local(conn, id, entry, current_session)
+    else
+      authorize_proxy(conn, id, entry, lab.proxy_secret, current_session)
+    end
+  end
+
+  defp authorize_local(conn, _id, _entry, true), do: conn
+
+  defp authorize_local(conn, id, entry, false) do
     key = conn.query_params["key"]
-    local_session = get_session(conn, :lab_encounter) == id and Exam.member?(id, actor, role)
 
     cond do
-      lab.local? && local_session ->
-        conn
-
-      lab.local? && valid_key?(key, entry["patient_key"]) ->
+      valid_key?(key, entry["patient_key"]) ->
         grant(conn, id, entry["patient_actor"], "patient")
 
-      lab.local? && valid_key?(key, entry["clinician_key"]) ->
+      valid_key?(key, entry["clinician_key"]) ->
         grant(conn, id, entry["clinician_actor"], "clinician")
-
-      !lab.local? ->
-        authorize_proxy(conn, id, entry, lab.proxy_secret, local_session)
 
       true ->
         conn |> send_resp(403, "Exam access required") |> halt()
@@ -122,7 +128,7 @@ defmodule MedFabric.ExamWeb.Router do
   end
 
   defp authorize_proxy(conn, id, entry, secret, current_session) do
-    with {:ok, actor} <- MedFabric.ExamWeb.ProxyIdentity.actor(conn.req_headers, secret),
+    with {:ok, actor} <- ProxyIdentity.actor(conn.req_headers, secret),
          role when role in ["patient", "clinician"] <-
            Enum.find(["patient", "clinician"], &(entry[&1 <> "_actor"] == actor)),
          true <- Exam.member?(id, actor, role) do

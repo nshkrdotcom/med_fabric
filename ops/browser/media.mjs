@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {createHash} from "node:crypto";
+import {setTimeout as delay} from "node:timers/promises";
 import {toneHz} from "./microphone.mjs";
 
 // Sample on the receiving browser's monotonic clock across peer replacement.
@@ -39,27 +40,16 @@ export async function mediaGap(page, id) {
 }
 
 export async function rtpStats(page, id, relay) {
-  const stats = await page.waitForFunction(id => (async () => {
-    const pc = document.querySelector(id).medExPeer;
-    if (pc?.connectionState !== "connected") return false;
-    const report = await pc.getStats();
-    const stats = [...report.values()];
-    const audio = stats.find(s => s.type === "inbound-rtp" && s.kind === "audio");
-    if (!(audio?.packetsReceived > 10 && audio.totalSamplesReceived > 0)) return false;
-    const pair = report.get(report.get(audio.transportId)?.selectedCandidatePairId);
-    if (pair?.state !== "succeeded") return false;
-    const describe = candidate => candidate && ({
-      candidateType: candidate.candidateType, protocol: candidate.protocol,
-      relayProtocol: candidate.relayProtocol
-    });
-    return {policy: pc.getConfiguration().iceTransportPolicy, local: describe(report.get(pair.localCandidateId)),
-      remote: describe(report.get(pair.remoteCandidateId)), roundTripSeconds: pair.currentRoundTripTime,
-      received: audio.packetsReceived, lost: audio.packetsLost, jitterSeconds: audio.jitter,
-      decodedSamples: audio.totalSamplesReceived};
-  })(), id);
-  const result = await stats.jsonValue();
-  await stats.dispose();
-  assert.ok(result.local?.candidateType && result.remote?.candidateType, id + " candidate details");
+  // Poll in Node so each async getStats() result is resolved before testing readiness.
+  const deadline = performance.now() + 30_000;
+  let result;
+  do {
+    result = await page.evaluate(readRtpStats, id);
+    if (result) break;
+    await delay(50);
+  } while (performance.now() < deadline);
+
+  assert.ok(result, id + " decoded RTP and selected ICE pair");
   assert.ok(Number.isFinite(result.jitterSeconds) && Number.isFinite(result.lost), id + " loss and jitter");
   if (relay) {
     assert.equal(result.policy, "relay", id + " policy");
@@ -67,6 +57,28 @@ export async function rtpStats(page, id, relay) {
     assert.equal(result.remote.candidateType, "relay", id + " remote pair member");
   }
   return result;
+}
+
+async function readRtpStats(id) {
+  const pc = document.querySelector(id).medExPeer;
+  if (pc?.connectionState !== "connected") return false;
+  const report = await pc.getStats();
+  const stats = [...report.values()];
+  const audio = stats.find(s => s.type === "inbound-rtp" && s.kind === "audio");
+  if (!(audio?.packetsReceived > 10 && audio.totalSamplesReceived > 0)) return false;
+  const pair = report.get(report.get(audio.transportId)?.selectedCandidatePairId);
+  if (pair?.state !== "succeeded") return false;
+  const describe = candidate => candidate && ({
+    candidateType: candidate.candidateType, protocol: candidate.protocol,
+    relayProtocol: candidate.relayProtocol
+  });
+  const local = describe(report.get(pair.localCandidateId));
+  const remote = describe(report.get(pair.remoteCandidateId));
+  if (!local?.candidateType || !remote?.candidateType) return false;
+  return {policy: pc.getConfiguration().iceTransportPolicy, local, remote,
+    roundTripSeconds: pair.currentRoundTripTime,
+    received: audio.packetsReceived, lost: audio.packetsLost, jitterSeconds: audio.jitter,
+    decodedSamples: audio.totalSamplesReceived};
 }
 
 export async function previewSignal(page) {

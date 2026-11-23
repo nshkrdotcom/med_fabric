@@ -3,7 +3,7 @@ defmodule MedFabric.ExamWeb.UserSocket do
   use Phoenix.Socket
 
   alias MedFabric.Exam
-  alias MedFabric.ExamWeb.Endpoint
+  alias MedFabric.ExamWeb.{Endpoint, ProxyIdentity}
 
   channel("signaling:*", MedFabric.ExamWeb.SignalingChannel)
   channel("talkback:*", MedFabric.ExamWeb.TalkbackChannel)
@@ -12,7 +12,7 @@ defmodule MedFabric.ExamWeb.UserSocket do
   def connect(%{"token" => token}, socket, info) when is_binary(token) do
     case Phoenix.Token.verify(Endpoint, "exam-preview", token, max_age: 3600) do
       {:ok, {encounter_id, actor, role}} when role in [:patient, :clinician] ->
-        if MedFabric.ExamWeb.ProxyIdentity.matches?(
+        if ProxyIdentity.matches?(
              info[:x_headers] || [],
              actor,
              Exam.lab()

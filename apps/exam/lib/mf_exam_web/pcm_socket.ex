@@ -4,7 +4,7 @@ defmodule MedFabric.ExamWeb.PCMSocket do
 
   alias MedFabric.Exam
   alias MedFabric.Exam.Recordings
-  alias MedFabric.ExamWeb.Endpoint
+  alias MedFabric.ExamWeb.{Endpoint, ProxyIdentity}
   alias MedFabric.Store.Records
 
   def upgrade(conn, _opts) do
@@ -27,7 +27,7 @@ defmodule MedFabric.ExamWeb.PCMSocket do
          ^encounter <- conn.path_params["encounter_id"],
          actor when is_binary(actor) <- get_session(conn, :exam_actor),
          true <-
-           MedFabric.ExamWeb.ProxyIdentity.matches?(conn.req_headers, actor, Exam.lab()),
+           ProxyIdentity.matches?(conn.req_headers, actor, Exam.lab()),
          true <- Exam.member?(encounter, actor, :patient) do
       WebSockAdapter.upgrade(conn, __MODULE__, %{encounter: encounter, actor: actor},
         max_frame_size: 1936,
