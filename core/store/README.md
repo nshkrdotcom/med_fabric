@@ -16,11 +16,10 @@ clinician-accepted observations, and transactional FHIR export outbox intents in
 ## Persistence
 
 `MedFabric.Store.Postgres` runs the SQL files in `priv/sql/` in filename order
-under an advisory transaction lock. On a populated 0.1.0 database the
-recording migration marks existing acquisitions ready and preserves their
-evidence, observations and outbox rows. Their WAV keys still resolve directly
-under the existing artifact root. New recordings use an acquisition-specific
-directory on the same volume. Keep that volume mounted across exam restarts.
+under an advisory transaction lock. Use a dedicated candidate database and
+volume. Each recording has an acquisition-specific directory on that volume.
+Keep both stores across exam restarts. Existing 0.1.0 recordings retain
+their original flat file layout and database records in the 0.1.0 deployment.
 
 Admission reserves an encounter, acquisition ID and producer before the writer
 receives PCM. The first accepted frame persists the browser source settings

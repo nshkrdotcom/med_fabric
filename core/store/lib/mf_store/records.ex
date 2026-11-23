@@ -96,10 +96,14 @@ defmodule MedFabric.Store.Records do
   end
 
   def pending_encounters(db, configured_ids) do
-    case Postgrex.query(db, """
+    case Postgrex.query(
+           db,
+           """
            SELECT encounter_id FROM acquisitions
            WHERE state='recording' AND encounter_id=ANY($1::text[])
-           """, [configured_ids]) do
+           """,
+           [configured_ids]
+         ) do
       {:ok, %{rows: rows}} -> {:ok, Enum.map(rows, fn [id] -> id end)}
       error -> error
     end
@@ -117,8 +121,11 @@ defmodule MedFabric.Store.Records do
       {:ok, %{rows: [[id, actor, source, at]]}} ->
         {:ok, %{id: id, producer: actor, source: source, first_received_at: at}}
 
-      {:ok, %{rows: []}} -> {:ok, nil}
-      error -> error
+      {:ok, %{rows: []}} ->
+        {:ok, nil}
+
+      error ->
+        error
     end
   end
 
