@@ -8,11 +8,10 @@ defmodule MedFabric.Workspace.MixProject do
       elixir: "~> 1.20",
       deps: [
         {:blitz, "~> 0.4.1", runtime: false},
-        {:weld, "~> 0.10.0", only: [:dev, :test], runtime: false},
         {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
         {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
       ],
-      dialyzer: [plt_add_apps: [:mix, :blitz, :weld]],
+      dialyzer: [plt_add_apps: [:mix, :blitz]],
       aliases: [
         setup: ["blitz.workspace deps_get --"],
         test: ["blitz.workspace test --"],

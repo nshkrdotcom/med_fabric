@@ -39,7 +39,7 @@ mix_workspace_ops run --project med_fabric.mf_exam --mode local \
 - `cd core/domain && mix test` checks the reviewed file identity and conflict gate.
 - `cd core/store && mix test integration` exercises PostgreSQL rollback, concurrent duplicates, reconnect, and delivery state. Set `DATABASE_URL` first.
 - `cd core/interop && mix test integration` proves one real HAPI resource after the response to an accepted write is discarded. Set `FHIR_BASE_URL` first.
-- `mix test`, `mix quality`, and `mix weld.verify` from the root cover ordinary child checks and the library projection. The browser runner exercises the actual exam path.
+- `mix test` and `mix quality` from the root cover child checks. The browser runner exercises the actual exam path.
 
 ## Manual listening check
 
