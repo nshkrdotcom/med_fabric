@@ -70,48 +70,94 @@ async function localSDP(peer, description) {
 
 const Talkback = {
   mounted() {
-    this.el.querySelector("button").onclick = async event => {
-      event.target.disabled = true;
-      const status = this.el.querySelector('[role="status"]');
-      const role = this.el.dataset.role;
+    const button = this.el.querySelector("button");
+    const audio = this.el.querySelector("audio");
+    const status = this.el.querySelector('[role="status"]');
+    const role = this.el.dataset.role;
+
+    this.leave = (message = "disconnected") => {
+      const call = this.call;
+      this.call = null;
+      call?.peer?.close();
+      call?.stream?.getTracks().forEach(track => track.stop());
+      call?.socket?.disconnect();
+      audio.srcObject = null;
+      status.textContent = message;
+      button.textContent = "Join conversation";
+    };
+
+    button.onclick = async () => {
+      if (this.call) return this.leave();
+      const call = this.call = {id: crypto.randomUUID()};
+      button.textContent = "Leave conversation";
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({audio: true});
-        this.stream = stream;
-        const peer = this.peer = new RTCPeerConnection();
-        stream.getAudioTracks().forEach(track => peer.addTrack(track, stream));
-        peer.ontrack = ({streams}) => { this.el.querySelector("audio").srcObject = streams[0]; };
-        peer.onconnectionstatechange = () => { status.textContent = peer.connectionState; };
-        const socket = this.socket = new Socket("/socket", {params: {token: this.el.dataset.token}});
+        if (this.call !== call) {
+          stream.getTracks().forEach(track => track.stop());
+          return;
+        }
+        call.stream = stream;
+        const socket = call.socket = new Socket("/socket", {params: {token: this.el.dataset.token}});
         socket.connect();
         const channel = socket.channel("talkback:" + this.el.dataset.encounter, {});
-        const send = (type, sdp) => channel.push("signal", {type, sdp});
-        let offered = false;
+        const send = (type, fields = {}) => channel.push("signal", {type, id: call.id, ...fields});
+        const current = peer => this.call === call && call.peer === peer;
+        const reset = () => {
+          call.peer?.close();
+          audio.srcObject = null;
+          const peer = call.peer = new RTCPeerConnection();
+          stream.getAudioTracks().forEach(track => peer.addTrack(track, stream));
+          peer.ontrack = ({streams}) => { if (current(peer)) audio.srcObject = streams[0]; };
+          peer.onconnectionstatechange = () => {
+            if (current(peer)) status.textContent = peer.connectionState;
+          };
+          return peer;
+        };
+
         channel.on("signal", async signal => {
-          if (signal.role === role) return;
+          if (this.call !== call || signal.role === role) return;
+          let peer;
           try {
             if (signal.type === "ready" && role === "patient") send("ready");
-            if (signal.type === "ready" && role === "clinician" && !offered) {
-              offered = true;
-              send("offer", await localSDP(peer, await peer.createOffer()));
+            if (signal.type === "ready" && role === "clinician" && call.remote !== signal.id) {
+              call.remote = signal.id;
+              const offer = call.offer = crypto.randomUUID();
+              peer = reset();
+              const sdp = await localSDP(peer, await peer.createOffer());
+              if (current(peer)) send("offer", {offer, target: signal.id, sdp});
             }
-            if (signal.type === "offer" && role === "patient") {
+            if (signal.type === "offer" && role === "patient" && signal.target === call.id && signal.offer !== call.offer) {
+              call.offer = signal.offer;
+              peer = reset();
               await peer.setRemoteDescription({type: "offer", sdp: signal.sdp});
-              send("answer", await localSDP(peer, await peer.createAnswer()));
+              if (!current(peer)) return;
+              const sdp = await localSDP(peer, await peer.createAnswer());
+              if (current(peer)) send("answer", {offer: signal.offer, target: signal.id, sdp});
             }
-            if (signal.type === "answer" && role === "clinician") {
-              await peer.setRemoteDescription({type: "answer", sdp: signal.sdp});
+            if (signal.type === "answer" && role === "clinician" && signal.target === call.id &&
+                signal.offer === call.offer && signal.id === call.remote) {
+              peer = call.peer;
+              if (peer.signalingState === "have-local-offer") {
+                await peer.setRemoteDescription({type: "answer", sdp: signal.sdp});
+              }
             }
-          } catch { status.textContent = "Conversation negotiation failed"; }
+          } catch {
+            if (peer && current(peer)) this.leave("Conversation negotiation failed");
+          }
         });
+        const unavailable = () => { if (this.call === call) this.leave("Conversation unavailable"); };
+        channel.onError(unavailable);
+        channel.onClose(unavailable);
         channel.join().receive("ok", () => send("ready"))
-          .receive("error", () => { status.textContent = "Conversation unavailable"; });
-      } catch { status.textContent = "Microphone unavailable"; }
+          .receive("error", unavailable).receive("timeout", unavailable);
+      } catch {
+        if (this.call === call) this.leave("Microphone unavailable");
+      }
     };
   },
   destroyed() {
-    this.stream?.getTracks().forEach(track => track.stop());
-    this.peer?.close();
-    this.socket?.disconnect();
+    this.leave();
   }
 };
 

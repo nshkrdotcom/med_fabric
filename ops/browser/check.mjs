@@ -22,13 +22,17 @@ try {
     const patient = await enter(process.env.MF_PATIENT_ACCESS_KEY);
     await clinician.locator("#talkback button").click();
     await patient.locator("#talkback button").click();
-    for (const page of [patient, clinician]) {
-      await page.waitForFunction(() => {
-        const section = document.querySelector("#talkback");
-        return section.querySelector("audio").currentTime > 0.15 &&
-          section.querySelector('[role="status"]').textContent === "connected";
-      });
-    }
+    const requireTalkback = async () => {
+      for (const page of [patient, clinician]) {
+        await page.waitForFunction(() => {
+          const section = document.querySelector("#talkback");
+          const audio = section.querySelector("audio");
+          return audio.srcObject?.active && audio.currentTime > 0.15 &&
+            section.querySelector('[role="status"]').textContent === "connected";
+        });
+      }
+    };
+    await requireTalkback();
     await clinician.locator("#preview-play").click();
     await clinician.waitForFunction(() => document.querySelector("#live-preview").dataset.state === "connected");
     await patient.locator("[data-start]").click();
@@ -61,6 +65,10 @@ try {
       "Recording", "Capture stopped during preview replacement");
     await patient.locator("[data-finish]").click({timeout: 5000});
     await patient.waitForFunction(() => document.querySelector("#capture [role=status]").textContent === "ready");
+    await patient.reload();
+    await patient.waitForSelector(".phx-connected");
+    await patient.locator("#talkback button").click();
+    await requireTalkback();
     await clinician.getByRole("spinbutton").fill("70");
     await clinician.getByRole("button", {name: "Record pulse"}).click();
     await clinician.getByText("70 beats/minute").waitFor();

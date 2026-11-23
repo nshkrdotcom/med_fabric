@@ -46,7 +46,7 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
   @impl true
   def handle_info(
         {:ex_webrtc, pid, {:connection_state_change, :connected}},
-        %{assigns: %{peer: %{pid: pid}, encounter_id: encounter}} = socket
+        %{assigns: %{peer: %{pid: pid}, encounter_id: encounter, connected: false}} = socket
       ) do
     Phoenix.PubSub.subscribe(MedFabric.Exam.PubSub, "preview:" <> encounter)
 
@@ -60,8 +60,12 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
 
   def handle_info({:capture_started, capture}, %{assigns: %{connected: true}} = socket) do
     case Capture.subscribe(capture) do
-      :ok -> {:noreply, assign(socket, :capture, capture)}
-      {:error, _} -> {:noreply, socket}
+      :ok ->
+        {:noreply, assign(socket, :capture, capture)}
+
+      {:error, _} ->
+        push(socket, "preview_failed", %{})
+        {:noreply, socket}
     end
   catch
     :exit, _ -> {:noreply, socket}

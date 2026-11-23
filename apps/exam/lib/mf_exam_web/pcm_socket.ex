@@ -44,7 +44,7 @@ defmodule MedFabric.ExamWeb.PCMSocket do
          {:ok, pid} <-
            DynamicSupervisor.start_child(
              MedFabric.Exam.Captures,
-             {MedEx.Capture, acquisition_id: id, artifact_dir: config.artifact_dir}
+             {MedEx.Capture, owner: self(), acquisition_id: id, artifact_dir: config.artifact_dir}
            ) do
       Registry.update_value(MedFabric.Exam.ActiveCapture, encounter, fn _ -> pid end)
 
@@ -64,7 +64,7 @@ defmodule MedFabric.ExamWeb.PCMSocket do
   def handle_in({<<index::unsigned-big-64, pcm::binary>>, [opcode: :binary]}, state) do
     case MedEx.Capture.push(state.capture, index, pcm) do
       :ok -> {:push, {:text, "ack"}, state}
-      {:error, _} -> {:stop, :invalid_capture, state}
+      {:error, _} -> {:stop, :normal, 1008, {:text, "invalid_capture"}, state}
     end
   end
 
@@ -76,11 +76,11 @@ defmodule MedFabric.ExamWeb.PCMSocket do
       Exam.announce(Exam.lab())
       {:stop, :normal, 1000, {:text, "ready"}, state}
     else
-      _ -> {:stop, :capture_failed, state}
+      _ -> {:stop, :normal, 1011, {:text, "capture_failed"}, state}
     end
   end
 
-  def handle_in(_, state), do: {:stop, :invalid_capture, state}
+  def handle_in(_, state), do: {:stop, :normal, 1008, {:text, "invalid_capture"}, state}
 
   @impl true
   def handle_info(_, state), do: {:ok, state}

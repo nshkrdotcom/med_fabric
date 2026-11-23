@@ -14,7 +14,7 @@ bash ops/verify_browser.sh --release
 ```
 
 The runner uses separate patient and clinician browser contexts. It exercises
-a direct WebRTC conversation, captures live Chromium microphone samples through
+a direct WebRTC conversation, verifies rejoin after a patient reload, captures live Chromium microphone samples through
 the AudioWorklet, replaces the clinician preview peer mid-capture, and recovers
 the WAV and a manually entered pulse rate after an exam restart. It delivers
 each accepted item separately and reads it back from HAPI. When the runner owns

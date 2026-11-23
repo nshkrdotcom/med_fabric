@@ -27,9 +27,13 @@ defmodule MedFabric.Interop.HapiIntegrationTest do
 
     resource =
       FhirClient.resource(
-        %{"kind" => "audio_pcm16_wav", "file_sha256" => String.duplicate("a", 64),
-          "effective_at" => DateTime.utc_now() |> DateTime.to_iso8601()},
-        fixture_id, "Integration test reviewer",
+        %{
+          "kind" => "audio_pcm16_wav",
+          "file_sha256" => String.duplicate("a", 64),
+          "effective_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+        },
+        fixture_id,
+        "Integration test reviewer",
         %{"patient_ref" => patient, "encounter_ref" => encounter}
       )
 
@@ -44,8 +48,23 @@ defmodule MedFabric.Interop.HapiIntegrationTest do
     assert remote["valueString"] == resource["valueString"]
     assert hd(remote["code"]["coding"])["code"] == "reviewed-auscultation-recording"
 
+    [coding] = remote["code"]["coding"]
+    enriched = put_in(remote, ["code", "coding"], [Map.put(coding, "display", "Reviewed audio")])
+
+    assert %{status: 200} =
+             Req.put!("#{base_url}/#{remote_ref}",
+               headers: [{"content-type", "application/fhir+json"}],
+               json: enriched
+             )
+
+    assert {:ok, %{created?: false, remote_ref: ^remote_ref}} = FhirClient.deliver(resource, opts)
+
+    assert {:error, :conflicting_remote_record} =
+             FhirClient.deliver(Map.put(resource, "valueString", String.duplicate("b", 64)), opts)
+
     different_recording = Map.put(resource, "status", "entered-in-error")
     assert {:error, :conflicting_remote_record} = FhirClient.deliver(different_recording, opts)
-    assert {:ok, [^remote]} = FhirClient.fetch_by_identifier(fixture_id, opts)
+    assert {:ok, [confirmed]} = FhirClient.fetch_by_identifier(fixture_id, opts)
+    assert confirmed["code"] == enriched["code"]
   end
 end

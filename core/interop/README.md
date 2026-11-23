@@ -13,6 +13,4 @@
 
 ## Delivery
 
-`MedFabric.Interop.FhirClient` maps reviewed auscultation recordings to FHIR R4 and uses conditional create with a stable observation identifier. It confirms the remote identity, including the subject, encounter, and recording value.
-
-Use `FHIR_BASE_URL` for a dedicated HAPI R4 test server. Run `mix test integration` from this directory to exercise real delivery after losing a successful response. See the [native runbook](../../guides/browser_to_record.md).
+`MedFabric.Interop.FhirClient` maps reviewed recording digests and manually entered pulse rate into distinct FHIR R4 Observation payloads. It uses conditional create and confirms remote identity and clinical values. Use `FHIR_BASE_URL` and `mix test integration` to exercise retry against native HAPI. See the [native runbook](../../guides/browser_to_record.md).

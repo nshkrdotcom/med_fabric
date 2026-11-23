@@ -110,6 +110,7 @@ defmodule MedFabric.ExamWeb.ExamLive do
         phx-hook="MedExSessionHook" phx-update="ignore" data-encounter-id={@encounter}
         data-session-id={Exam.session_id(@encounter)} data-token={@token}>
         <h2>Live diagnostic preview</h2>
+        <p role="status">Disconnected</p>
         <audio autoplay controls></audio>
         <button id="preview-play" type="button">Play preview</button>
         <button id="preview-disconnect" type="button">Disconnect preview</button>

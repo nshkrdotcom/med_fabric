@@ -7,4 +7,4 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
 </p>
 
-The pure encounter rules validate recording digests, sample rate, duration and continuity. Review requires the exact file selected by the clinician and rejects conflicting metadata. The store applies these rules while holding the recording row lock. Run `mix test` in this directory.
+Evidence constructors validate recording digests, sample counts and continuity, and encode operator-entered pulse rate with manual provenance. PostgreSQL owns review and concurrent acceptance. Run `mix test` here.

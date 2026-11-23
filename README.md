@@ -7,7 +7,9 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
 </p>
 
-`Med Fabric` is an Elixir poncho for durable remote clinical encounters, atomic clinician observation acceptance, and HL7 FHIR R4 delivery. The exam uses one Welded `:med_ex` SDK for WebRTC preview and recording.
+Med Fabric is a deployable Elixir reference exam that brings together two-way
+WebRTC talkback, live diagnostic audio capture with MedEx, and clinician review.
+PostgreSQL records acceptance and queues HL7 FHIR R4 delivery.
 
 ## Run the connected exam
 
@@ -18,7 +20,6 @@ independent preview, and clinician review of recordings and pulse-rate entries.
 
 Read the [architecture and roadmap](guides/architecture_and_roadmap.md) for the
 clinical ownership boundaries and planned capabilities.
-
 
 ## Projects
 

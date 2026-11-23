@@ -145,6 +145,12 @@ defmodule MedFabric.Interop.FhirClient do
 
   defp clinical_fields_match?(expected, actual), do: matches?(expected, actual)
 
+  defp matches?(%{"coding" => [expected]} = concept, %{"coding" => [actual]} = remote)
+       when is_map(expected) and is_map(actual) do
+    actual = if Map.has_key?(expected, "display"), do: actual, else: Map.delete(actual, "display")
+    expected == actual and matches?(Map.delete(concept, "coding"), remote)
+  end
+
   # HAPI can enrich reference objects and reorder repeated elements.
   defp matches?(expected, actual) when is_map(expected) and is_map(actual),
     do: Enum.all?(expected, fn {k, v} -> matches?(v, Map.get(actual, k)) end)
