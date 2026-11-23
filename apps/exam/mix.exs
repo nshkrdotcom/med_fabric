@@ -3,7 +3,7 @@ if bootstrap = System.get_env("MIX_WORKSPACE_OPS_BOOTSTRAP"), do: Code.require_f
 defmodule MedFabric.Exam.MixProject do
   use Mix.Project
 
-  @med_ex_projection_ref "8487c3306d02dc2a7bb68ffa4dea9ef1f172a7f6"
+  @med_ex_projection_ref "45c334e8debaa8bab027d16f7baf9f68c12d731c"
 
   def project do
     [

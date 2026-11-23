@@ -19,6 +19,21 @@ flowchart LR
 
 An encounter outlives its peer connections. A diagnostic acquisition owns its own capture lifetime. A browser disconnect changes live preview availability. A capture outcome establishes recording completeness. After evidence is ready, PostgreSQL owns review, acceptance and export status across application restarts. Acceptance and its delivery intent commit together. FHIR HTTP runs outside that transaction.
 
+## State and effects review
+
+| Owner | State and reason |
+| --- | --- |
+| Capture | Temporary WAV writer, next source sample, running PCM digest and one preview demand. These bind byte order, detect input loss and keep preview bounded. |
+| PCM socket and capture registry | The socket owns one admitted input connection. Its registry entry supplies exclusive admission and lets a returning clinician locate the same capture. Neither owns ready evidence. |
+| Preview channel | One peer, packet sequence and last capture sample clock. A new peer starts a fresh transport sequence. |
+| PostgreSQL | Encounter membership, typed evidence and its provenance, accepted observation and export intent. SQL locks serialize review and acceptance. The app verifies artifact bytes before entering that transaction. |
+| LiveView and browser | Display state, user interaction and ephemeral media handles. FHIR HTTP runs in an async delivery action. PostgreSQL owns its outcome. |
+
+The release verifier uses one configured test encounter with distinct,
+server-bound actor identities and role keys. Authentication must be integrated
+with the deployment's identity provider before offering this beyond the lab.
+The vendor-native microphone experience is a separate manual listening check.
+
 ## Capability families
 
 | Family | Shared requirements | Use cases |
