@@ -91,16 +91,15 @@ try {
     metrics.talkback = await talkback(patient, clinician);
     metrics.talkbackJoinToMediaMs = Math.round(performance.now() - joinedAt);
 
-    const previewAt = performance.now();
-    await clinician.locator("#preview-play").click();
-    await clinician.waitForFunction(() => document.querySelector("#live-preview").dataset.state === "connected");
-    metrics.previewConnectMs = Math.round(performance.now() - previewAt);
-
     const input = patient.locator("#capture [data-input]");
     await patient.waitForFunction(() => document.querySelector("#capture [data-input]").options.length > 1);
     await input.selectOption({index: 1});
     await patient.locator("[data-start]").click();
     await patient.waitForFunction(() => document.querySelector("#capture [role=status]").textContent === "Recording");
+    const previewAt = performance.now();
+    await clinician.locator("#preview-play").click();
+    await clinician.waitForFunction(() => document.querySelector("#live-preview").dataset.state === "connected");
+    metrics.previewConnectMs = Math.round(performance.now() - previewAt);
     metrics.preview = await rtpStats(clinician, "#live-preview", remote);
     metrics.previewSignal = await previewSignal(clinician);
     const first = await clinician.locator("#live-preview").getAttribute("data-connection-id");
