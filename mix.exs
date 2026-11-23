@@ -54,14 +54,44 @@ defmodule MedFabric.Workspace.MixProject do
 
     [
       main: "readme",
+      before_closing_body_tag: &docs_diagrams/1,
       logo: "assets/med_fabric.svg",
       assets: %{"assets" => "assets"},
-      extras: ~w(README.md CHANGELOG.md LICENSE) ++ guides ++ projects,
+      extras:
+        [
+          {"README.md", filename: "readme", title: "Overview"},
+          {"CHANGELOG.md", filename: "changelog", title: "Changelog"},
+          {"LICENSE", filename: "license", title: "License"}
+        ] ++ guides ++ projects,
       groups_for_extras: [
-        Overview: ~w(README.md CHANGELOG.md LICENSE),
+        Overview: ["README.md"],
         Guides: guides,
-        Projects: Enum.map(projects, &elem(&1, 0))
+        Projects: Enum.map(projects, &elem(&1, 0)),
+        Release: ~w(CHANGELOG.md LICENSE)
       ]
     ]
   end
+
+  defp docs_diagrams(:html) do
+    """
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js"></script>
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        const codeBlocks = document.querySelectorAll("pre code.mermaid");
+        if (!codeBlocks.length || !window.mermaid) return;
+        mermaid.initialize({startOnLoad: false, securityLevel: "strict"});
+        const nodes = Array.from(codeBlocks, code => {
+          const diagram = document.createElement("div");
+          diagram.className = "mermaid";
+          diagram.textContent = code.textContent;
+          code.parentElement.replaceWith(diagram);
+          return diagram;
+        });
+        mermaid.run({nodes});
+      });
+    </script>
+    """
+  end
+
+  defp docs_diagrams(_format), do: ""
 end
