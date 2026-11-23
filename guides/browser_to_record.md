@@ -41,15 +41,7 @@ Use a fresh dedicated test database and artifact directory for the candidate. Th
 
 ## Operate the exam
 
-For the unpublished SDK, project it once with `(cd ../med_ex && mix weld.project)` and run the following Mix build/seed commands under the same MWO local-mode exam context used in `ops/qc_candidate.sh`. For example, start a shell at `apps/exam` using:
-
-```bash
-../mix_workspace_ops/mix_workspace_ops run --project med_fabric.mf_exam --mode local \
-  --registry "$HOME/.config/mix_workspace_ops/medical/registry.json" --checkout-root .. \
-  --timeout 45m -- bash
-```
-
-For noninteractive installations, pass `bash -ec '...'` with the desired commands as in the QC script. The following commands assume the working directory is `apps/exam` and build the release at an explicit location.
+From the Fabric root, create the dedicated volume, start the services and set the encounter identity in your shell:
 
 ```bash
 umask 077
@@ -57,19 +49,32 @@ export MF_ENCOUNTERS_FILE="$PWD/_build/encounters.json"
 export MF_ARTIFACT_DIR="$PWD/_build/capture-volume"
 export MF_SECRET_KEY_BASE="$(openssl rand -hex 48)"
 mkdir -p "$(dirname "$MF_ENCOUNTERS_FILE")" "$MF_ARTIFACT_DIR"
-eval "$(bash ../../ops/local_services.sh start)"
+eval "$(bash ops/local_services.sh start)"
 export MF_EXAM_ID=exam-a MF_PATIENT_ACTOR=patient-a MF_CLINICIAN_ACTOR=clinician-a
 export MF_PATIENT_ACCESS_KEY="$(openssl rand -hex 24)"
 export MF_CLINICIAN_ACCESS_KEY="$(openssl rand -hex 24)"
-mix deps.get
-env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs
-env -u MF_LAB MIX_ENV=prod mix release --path "$PWD/_build/exam-release" --overwrite
-MF_LAB=1 "$PWD/_build/exam-release/bin/mf_exam" start
+export MF_RELEASE_DIR="$PWD/_build/exam-release"
 ```
+
+For the unpublished candidate, seed and build with the generated SDK in the exam's MWO context:
+
+```bash
+(cd ../med_ex && mix weld.project)
+../mix_workspace_ops/mix_workspace_ops run --project med_fabric.mf_exam --mode local \
+  --registry "$HOME/.config/mix_workspace_ops/medical/registry.json" --checkout-root .. \
+  --timeout 20m -- bash -ec '
+    mix deps.get
+    env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs
+    env -u MF_LAB MIX_ENV=prod mix release --path "$MF_RELEASE_DIR" --overwrite
+  '
+MF_LAB=1 "$MF_RELEASE_DIR/bin/mf_exam" start
+```
+
+After MedEx 0.2 is installed from Hex, run the commands inside that `bash -ec` directly from `apps/exam`.
 
 Run the seed command sequentially for each synthetic encounter, changing the ID, actors and keys. It writes a private JSON array. Each entry carries its own patient/clinician actors, FHIR destination, Patient reference and Encounter reference. Boot binds those identifiers in PostgreSQL. Conflicting existing bindings fail startup. The lab seed marks its FHIR encounter in progress. To use existing resources, provision the file directly. Keep the file outside Git.
 
-The local endpoint listens on `127.0.0.1` at `MF_HTTP_PORT` (default 4000). In separate browser profiles open the encounter with the relevant key, for example `http://localhost:4000/encounters/exam-a?key=YOUR_PATIENT_KEY`. The server exchanges it for a session and redirects. Select conversation microphones independently on each side. On the patient page select the diagnostic input, start capture, and finish. If the reply is lost, reload the same tab or select **Check recording outcome**. The clinician sees recording duration, source label and first-frame receipt time, can seek during playback and explicitly accept and deliver either evidence kind. Stop the release with Ctrl-C and stop owned services with `bash ../../ops/local_services.sh stop`.
+The local endpoint listens on `127.0.0.1` at `MF_HTTP_PORT` (default 4000). In separate browser profiles open the encounter with the relevant key, for example `http://localhost:4000/encounters/exam-a?key=YOUR_PATIENT_KEY`. The server exchanges it for a session and redirects. Select conversation microphones independently on each side. On the patient page select the diagnostic input, start capture, and finish. If the reply is lost, reload the same tab or select **Check recording outcome**. The clinician sees recording duration, source label and first-frame receipt time, can seek during playback and explicitly accept and deliver either evidence kind. Stop the release with Ctrl-C and stop owned services with `bash ops/local_services.sh stop`.
 
 ## HTTPS and relay
 
