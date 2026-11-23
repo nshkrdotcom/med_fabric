@@ -45,11 +45,23 @@ and outside LiveView.
 | --- | --- |
 | `MedEx.Capture` | Temporary `.part` WAV writer, next expected sample index, running PCM SHA-256, and single-frame preview demand. Enforces byte order, detects source loss, and keeps preview bounded. |
 | `PCMSocket` and the temporary writer | A reserved attempt binds the acquisition ID and patient before PCM. Per-encounter admission serializes writer creation, finish and recovery. The live writer owns the name used by preview discovery. |
-| `SignalingChannel` | One `MedEx.Preview` peer, per-peer RTP packet sequence, and monotonic 48 kHz media clock. A replacement peer starts a fresh transport sequence. |
+| `SignalingChannel` | One `MedEx.Preview` peer and its RTP sequence and clock state. `MedEx.Preview.Clock` owns media-clock arithmetic and `send_opus/4` owns RTP wrapping. A replacement peer starts a fresh transport sequence. |
 | PostgreSQL (`core/store`) | Encounter membership, typed evidence + provenance, accepted observations, and FHIR outbox intents. Row locks serialize review and acceptance. The exam verifies immutable WAV bytes before entering the acceptance transaction. |
 | LiveView & browser | Presentation state, user actions, and ephemeral media handles. FHIR HTTP runs in an async delivery action; PostgreSQL owns the delivery outcome. |
 
 The deployment supports one BEAM instance with its own persistent artifact volume and database. It can host multiple encounters concurrently. An authenticated reverse proxy supplies identity for HTTPS deployments. The exam enforces membership, destination and session scope. Localhost has a separate role-key entry flow.
+
+`MedFabric.Exam.member?/4` centralizes patient/clinician membership checks used
+at transport entry. Exam workflows accept an optional `Exam.Context` carrying
+the concrete Postgrex connection, capture supervisor, PubSub name, artifact
+directory, and configured encounter IDs. Production defaults resolve at service
+entry; integration tests supply isolated resources without replacing application
+configuration. The context excludes ingress credentials and TURN secrets.
+
+Admission, finish, recovery, and status reconciliation retain the per-encounter
+`:global.trans` lock on the local node. The database reservation constraint
+continues to enforce one recording per encounter. Acceptance still rechecks
+clinical authorization and evidence inside its transaction.
 
 ## PostgreSQL schema and invariants
 
@@ -67,6 +79,14 @@ The store applies the scripts under `core/store/priv/sql/` in filename order und
 `File.read/1` calls and no HTTP calls.
 
 The socket reports an acquisition ID before the browser sends audio. A finalized canonical WAV lives at `<artifact_dir>/<acquisition_id>/<sha256>.wav`. On startup, next admission or an outcome lookup, recovery validates bytes and restores reviewable evidence or marks the abandoned partial interrupted. A live writer retains ownership. Acceptance checks the named evidence off the LiveView process. Authorized playback verifies and streams the same descriptor in bounded chunks with byte ranges. Use a fresh database and volume for this greenfield release. Retain any 0.1 artifacts with their corresponding release.
+
+Artifact verification uses `MedEx.Wav.parse_header/2` and retains both complete
+WAV and PCM SHA-256 checks, including every playback request. Verified file
+metadata alone carries no continuity claim. The locked recovery coordinator
+combines it with a reserved attempt and the contract that only Capture installs
+finalized WAVs in its managed directory. Range and If-Range handling remain in
+the HTTP artifact layer. The first PCM acknowledgement still waits for the
+database's first-frame receipt update as well as the writer call.
 
 ## HL7 FHIR R4 mapping and confirmation
 

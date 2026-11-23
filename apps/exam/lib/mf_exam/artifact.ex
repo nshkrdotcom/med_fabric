@@ -2,8 +2,9 @@ defmodule MedFabric.Exam.Artifact do
   @moduledoc "Verifies and serves the canonical, write-once PCM WAV on the exam volume."
   import Plug.Conn
 
+  alias MedEx.Wav
+
   @chunk 65_536
-  @max_pcm_bytes 48_000 * 2 * 60 * 30
   @filename ~r/\A([0-9a-f]{64})\.wav\z/
   @attempt ~r/\A[A-Za-z0-9_-]{24}\z/
 
@@ -42,6 +43,7 @@ defmodule MedFabric.Exam.Artifact do
     end
   end
 
+  @doc "Returns verified file metadata for recovery of a managed recording attempt."
   def finalized(root, id) do
     with true <- Regex.match?(@attempt, id),
          dir = Path.join(root, id),
@@ -51,7 +53,7 @@ defmodule MedFabric.Exam.Artifact do
           {:error, :unfinished}
 
         [name] ->
-          with {:ok, artifact} <- inspect_file(dir, name, id, fn _, data -> {:ok, data} end),
+          with {:ok, artifact} <- inspect_file(dir, name, fn _, _, data -> {:ok, data} end),
                :ok <- sync_directory(dir) do
             {:ok, artifact}
           end
@@ -79,11 +81,11 @@ defmodule MedFabric.Exam.Artifact do
     name = digest <> ".wav"
 
     if Regex.match?(@attempt, id) and key == id <> "/" <> name do
-      inspect_file(Path.join(root, id), name, id, fn fd, artifact ->
+      inspect_file(Path.join(root, id), name, fn fd, size, artifact ->
         if evidence["pcm_sha256"] == artifact.pcm_sha256 and
              evidence["sample_count"] == artifact.sample_count and
              evidence["sample_rate_hz"] == artifact.sample_rate_hz do
-          fun.(fd, 44 + 2 * artifact.sample_count)
+          fun.(fd, size)
         else
           {:error, :recording_changed}
         end
@@ -95,25 +97,22 @@ defmodule MedFabric.Exam.Artifact do
 
   defp with_verified(_, _, _, _), do: {:error, :invalid_recording}
 
-  defp inspect_file(dir, name, id, fun) do
+  defp inspect_file(dir, name, fun) do
     with [_, digest] <- Regex.run(@filename, name),
          path = Path.join(dir, name),
          {:ok, %File.Stat{type: :regular}} <- File.lstat(path),
          {:ok, fd} <- :file.open(path, [:raw, :binary, :read]) do
       try do
-        with {:ok, pcm_size, header} <- read_header(fd),
+        with {:ok, header, size, layout} <- read_header(fd),
              file_hash = :crypto.hash_update(:crypto.hash_init(:sha256), header),
              {:ok, ^digest, pcm_hash} <-
-               hashes(fd, pcm_size, file_hash, :crypto.hash_init(:sha256)) do
-          count = div(pcm_size, 2)
-
-          fun.(fd, %MedEx.Evidence{
-            acquisition_id: id,
+               hashes(fd, layout.pcm_bytes, file_hash, :crypto.hash_init(:sha256)) do
+          fun.(fd, size, %{
             artifact_key: name,
             file_sha256: digest,
             pcm_sha256: pcm_hash,
-            sample_count: count,
-            end_sample: count
+            sample_count: layout.sample_count,
+            sample_rate_hz: layout.sample_rate_hz
           })
         else
           {:error, _} = error -> error
@@ -131,15 +130,11 @@ defmodule MedFabric.Exam.Artifact do
   defp read_header(fd) do
     with {:ok, size} <- :file.position(fd, :eof),
          {:ok, 0} <- :file.position(fd, 0),
-         {:ok, header} <- :file.read(fd, 44),
-         <<"RIFF", riff::little-32, "WAVEfmt ", 16::little-32, 1::little-16, 1::little-16,
-           48_000::little-32, 96_000::little-32, 2::little-16, 16::little-16, "data",
-           bytes::little-32>> <- header,
-         true <-
-           bytes in 2..@max_pcm_bytes and rem(bytes, 2) == 0 and
-             riff == bytes + 36 and size == bytes + 44 do
-      {:ok, bytes, header}
+         {:ok, header} <- :file.read(fd, Wav.header_size()),
+         {:ok, layout} <- Wav.parse_header(header, size) do
+      {:ok, header, size, layout}
     else
+      {:error, :invalid_wav} -> {:error, :invalid_recording}
       {:error, _} = error -> error
       _ -> {:error, :invalid_recording}
     end

@@ -2,7 +2,7 @@ defmodule MedFabric.ExamWeb.TalkbackChannel do
   @moduledoc false
   use Phoenix.Channel
 
-  alias MedFabric.Store.{Postgres, Records}
+  alias MedFabric.Exam
 
   @impl true
   def join(
@@ -10,7 +10,7 @@ defmodule MedFabric.ExamWeb.TalkbackChannel do
         _,
         %{assigns: %{encounter_id: id, actor: actor, role: role}} = socket
       ) do
-    if Records.member?(Postgres, id, actor, role),
+    if Exam.member?(id, actor, role),
       do: {:ok, socket},
       else: {:error, %{reason: "unauthorized"}}
   end
@@ -22,7 +22,7 @@ defmodule MedFabric.ExamWeb.TalkbackChannel do
       when type in ["ready", "offer", "answer"] do
     %{encounter_id: id, actor: actor, role: role} = socket.assigns
 
-    if byte_size(Jason.encode!(payload)) <= 32_768 and Records.member?(Postgres, id, actor, role) do
+    if byte_size(Jason.encode!(payload)) <= 32_768 and Exam.member?(id, actor, role) do
       broadcast_from!(socket, "signal", Map.put(payload, "role", Atom.to_string(role)))
       {:noreply, socket}
     else

@@ -2,39 +2,56 @@ defmodule MedFabric.Exam do
   @moduledoc "Composes evidence intake, clinician review and durable export."
 
   alias MedFabric.Domain.Evidence
+  alias MedFabric.Exam.{Artifact, Context}
   alias MedFabric.Interop.FhirClient
   alias MedFabric.Store.{Encounters, Postgres, Records}
-  alias MedFabric.Exam.Artifact
 
   def lab, do: Application.fetch_env!(:mf_exam, :lab)
   def session_id(enc), do: "preview-" <> enc
 
-  def announce(encounter) do
-    Phoenix.PubSub.broadcast(MedFabric.Exam.PubSub, "exam:" <> encounter, :exam_changed)
+  def context do
+    lab = Application.get_env(:mf_exam, :lab, %{})
+
+    %Context{
+      artifact_dir: lab[:artifact_dir],
+      encounter_ids: Map.keys(lab[:encounters] || %{})
+    }
   end
 
-  def pulse(encounter, actor, value) do
-    with true <- Records.member?(Postgres, encounter, actor, :clinician),
+  def member?(encounter, actor, role, db \\ Postgres)
+
+  def member?(encounter, actor, role, db) when role in [:patient, "patient"],
+    do: Records.member?(db, encounter, actor, :patient)
+
+  def member?(encounter, actor, role, db) when role in [:clinician, "clinician"],
+    do: Records.member?(db, encounter, actor, :clinician)
+
+  def member?(_, _, _, _), do: false
+
+  def announce(encounter, context \\ context()) do
+    Phoenix.PubSub.broadcast(context.pubsub, "exam:" <> encounter, :exam_changed)
+  end
+
+  def pulse(encounter, actor, value, context \\ context()) do
+    with true <- member?(encounter, actor, :clinician, context.db),
          {:ok, evidence} <- Evidence.pulse_rate(value, DateTime.utc_now(), actor),
-         :ok <- Records.ready(Postgres, encounter, id(), evidence) do
-      announce(encounter)
+         :ok <- Records.ready(context.db, encounter, id(), evidence) do
+      announce(encounter, context)
     else
       false -> {:error, :unauthorized}
       error -> error
     end
   end
 
-  def accept(encounter, acquisition, actor) do
-    config = lab()
-
-    with {:ok, url, refs} <- Encounters.export(Postgres, encounter, actor),
-         {:ok, %{evidence: evidence}} <- Records.get(Postgres, encounter, acquisition),
-         :ok <- verify_evidence(config.artifact_dir, acquisition, evidence),
+  def accept(encounter, acquisition, actor, context \\ context()) do
+    with {:ok, url, refs} <- Encounters.export(context.db, encounter, actor),
+         {:ok, %{evidence: evidence}} <- Records.get(context.db, encounter, acquisition),
+         :ok <- verify_evidence(context.artifact_dir, acquisition, evidence),
          external = "#{encounter}:#{acquisition}",
          resource = FhirClient.resource(evidence, external, actor, refs),
          {:ok, :ok} <-
            Records.accept(
-             Postgres,
+             context.db,
              encounter,
              acquisition,
              actor,
@@ -43,16 +60,16 @@ defmodule MedFabric.Exam do
              external,
              resource
            ) do
-      announce(encounter)
+      announce(encounter, context)
     end
   end
 
-  def deliver(encounter, acquisition, actor) do
-    with true <- Records.member?(Postgres, encounter, actor, :clinician),
-         {:ok, url, resource, nil} <- Records.delivery(Postgres, encounter, acquisition) do
+  def deliver(encounter, acquisition, actor, context \\ context()) do
+    with true <- member?(encounter, actor, :clinician, context.db),
+         {:ok, url, resource, nil} <- Records.delivery(context.db, encounter, acquisition) do
       result = FhirClient.deliver(resource, base_url: url)
-      status = Records.delivery_result(Postgres, encounter, acquisition, result)
-      announce(encounter)
+      status = Records.delivery_result(context.db, encounter, acquisition, result)
+      announce(encounter, context)
       status
     else
       {:ok, _, _, remote} when is_binary(remote) -> :ok

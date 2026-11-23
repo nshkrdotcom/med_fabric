@@ -23,7 +23,15 @@ From this checkout, with MedEx checked out alongside it, run the SDK and Fabric 
 bash ops/qc_candidate.sh
 ```
 
-The command builds the unpublished SDK from source and runs the exam release with that SDK. Allow time for native dependencies, Dialyzer, PostgreSQL, HAPI and Chromium. For a live exam, follow the operator setup. For an actual TURN demonstration use the two-endpoint media procedure. [Browser-to-record guide](guides/browser_to_record.md) · [Remote media verification](guides/media_verification.md) · [Architecture and roadmap](guides/architecture_and_roadmap.md)
+The command prepares the SDK's Weld release bundle, checks its browser assets,
+and runs the exam release against that exact bundle's `project/` directory.
+Commit SDK source changes first: Weld requires a clean source revision. The
+candidate dependency lock stays under `apps/exam/_build/`. Allow time for native
+dependencies, Dialyzer, PostgreSQL, HAPI and Chromium. For a live exam, follow the
+operator setup. For an actual TURN demonstration use the two-endpoint media
+procedure. [Browser-to-record guide](guides/browser_to_record.md) ·
+[Remote media verification](guides/media_verification.md) ·
+[Architecture and roadmap](guides/architecture_and_roadmap.md)
 
 ## Projects
 

@@ -23,7 +23,7 @@ defmodule MedFabric.ExamWeb.ExamLive do
           Exam.lab()
         )
 
-    if trusted and Records.member?(Postgres, id, actor, role) do
+    if trusted and Exam.member?(id, actor, role) do
       if connected?(socket), do: Phoenix.PubSub.subscribe(MedFabric.Exam.PubSub, "exam:" <> id)
       token = Phoenix.Token.sign(Endpoint, "exam-preview", {id, actor, role})
 

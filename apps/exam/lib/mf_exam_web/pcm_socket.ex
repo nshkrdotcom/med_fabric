@@ -2,9 +2,10 @@ defmodule MedFabric.ExamWeb.PCMSocket do
   @moduledoc false
   @behaviour WebSock
 
+  alias MedFabric.Exam
   alias MedFabric.Exam.Recordings
   alias MedFabric.ExamWeb.Endpoint
-  alias MedFabric.Store.{Postgres, Records}
+  alias MedFabric.Store.Records
 
   def upgrade(conn, _opts) do
     import Plug.Conn
@@ -26,8 +27,8 @@ defmodule MedFabric.ExamWeb.PCMSocket do
          ^encounter <- conn.path_params["encounter_id"],
          actor when is_binary(actor) <- get_session(conn, :exam_actor),
          true <-
-           MedFabric.ExamWeb.ProxyIdentity.matches?(conn.req_headers, actor, MedFabric.Exam.lab()),
-         true <- Records.member?(Postgres, encounter, actor, :patient) do
+           MedFabric.ExamWeb.ProxyIdentity.matches?(conn.req_headers, actor, Exam.lab()),
+         true <- Exam.member?(encounter, actor, :patient) do
       WebSockAdapter.upgrade(conn, __MODULE__, %{encounter: encounter, actor: actor},
         max_frame_size: 1936,
         timeout: 60_000
@@ -39,7 +40,9 @@ defmodule MedFabric.ExamWeb.PCMSocket do
 
   @impl true
   def init(%{encounter: encounter, actor: actor} = state) do
-    case Recordings.admit(encounter, actor) do
+    state = Map.put_new_lazy(state, :context, &Exam.context/0)
+
+    case Recordings.admit(encounter, actor, state.context) do
       {:ok, id, pid} ->
         {:push, {:text, Jason.encode!(%{acquisition_id: id})},
          Map.merge(state, %{capture: pid, id: id, source: nil})}
@@ -76,7 +79,7 @@ defmodule MedFabric.ExamWeb.PCMSocket do
   end
 
   def handle_in({"finish", [opcode: :text]}, state) do
-    case Recordings.finish(state.encounter, state.id, state.actor, state.capture) do
+    case Recordings.finish(state.encounter, state.id, state.actor, state.capture, state.context) do
       :ok -> {:stop, :normal, 1000, {:text, "ready"}, state}
       _ -> {:stop, :normal, 1011, {:text, "capture_failed"}, state}
     end
@@ -87,7 +90,7 @@ defmodule MedFabric.ExamWeb.PCMSocket do
   defp first_frame(_, nil), do: :ok
 
   defp first_frame(state, at),
-    do: Records.first_frame(Postgres, state.encounter, state.id, state.source, at)
+    do: Records.first_frame(state.context.db, state.encounter, state.id, state.source, at)
 
   defp setting?({"label", value}), do: is_binary(value) and byte_size(value) in 1..255
 
@@ -105,9 +108,9 @@ defmodule MedFabric.ExamWeb.PCMSocket do
   def handle_info(_, state), do: {:ok, state}
 
   @impl true
-  def terminate(_, %{capture: pid, encounter: encounter, id: id}) do
-    DynamicSupervisor.terminate_child(MedFabric.Exam.Captures, pid)
-    Recordings.status(encounter, id)
+  def terminate(_, %{capture: pid, encounter: encounter, id: id, context: context}) do
+    DynamicSupervisor.terminate_child(context.captures, pid)
+    Recordings.status(encounter, id, context)
     :ok
   end
 

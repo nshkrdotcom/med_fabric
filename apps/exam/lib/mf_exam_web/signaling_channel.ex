@@ -10,13 +10,7 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
       when is_binary(connection_id) and byte_size(connection_id) == 36 do
     with :clinician <- socket.assigns.role,
          ^encounter_id <- socket.assigns.encounter_id,
-         true <-
-           MedFabric.Store.Records.member?(
-             MedFabric.Store.Postgres,
-             encounter_id,
-             socket.assigns.actor,
-             :clinician
-           ) do
+         true <- Exam.member?(encounter_id, socket.assigns.actor, :clinician) do
       session_id = Exam.session_id(encounter_id)
 
       {:ok, %{session_id: session_id},
@@ -84,10 +78,10 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
         {:med_ex_preview, capture, index, frame},
         %{assigns: %{capture: capture, peer: peer, sequence: sequence}} = socket
       ) do
-    tick = tick(socket.assigns.clock, capture, index)
-    Preview.send_opus(peer, frame, sequence, tick)
+    clock = Preview.Clock.advance(socket.assigns.clock, capture, index)
+    Preview.send_opus(peer, frame, sequence, clock.tick)
     Capture.demand(capture)
-    {:noreply, assign(socket, sequence: sequence + 1, clock: {capture, index, tick})}
+    {:noreply, assign(socket, sequence: sequence + 1, clock: clock)}
   end
 
   def handle_info({:med_ex_preview_replaced, capture}, %{assigns: %{capture: capture}} = socket) do
@@ -108,10 +102,6 @@ defmodule MedFabric.ExamWeb.SignalingChannel do
       do: {:stop, :normal, socket}
 
   def handle_info(_, socket), do: {:noreply, socket}
-
-  defp tick(nil, _, index), do: index
-  defp tick({capture, last, tick}, capture, index), do: tick + index - last
-  defp tick({_, _, tick}, _, _), do: tick + 960
 
   @impl true
   def terminate(_reason, socket) do

@@ -1,7 +1,7 @@
 defmodule MedFabric.Exam.RecordingTest do
   use ExUnit.Case, async: false
   alias MedFabric.Exam
-  alias MedFabric.Exam.{Artifact, Recordings}
+  alias MedFabric.Exam.{Artifact, Context, Recordings}
   alias MedFabric.ExamWeb.PCMSocket
   alias MedFabric.Store.{Encounters, Postgres, Records}
 
@@ -9,25 +9,22 @@ defmodule MedFabric.Exam.RecordingTest do
 
   setup %{tmp_dir: dir} do
     encounter = "recording-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
-    config = %{artifact_dir: dir, encounters: %{encounter => %{}}}
-    old = Application.get_env(:mf_exam, :lab)
-    Application.put_env(:mf_exam, :lab, config)
+    db = start_supervised!({Postgres, url: System.fetch_env!("DATABASE_URL"), pool_size: 4})
+    captures = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+    pubsub = __MODULE__.PubSub
+    start_supervised!({Phoenix.PubSub, name: pubsub})
+    {:ok, :ok} = Postgres.migrate(db)
 
-    on_exit(fn ->
-      if old,
-        do: Application.put_env(:mf_exam, :lab, old),
-        else: Application.delete_env(:mf_exam, :lab)
-    end)
-
-    start_supervised!(
-      {Postgres, url: System.fetch_env!("DATABASE_URL"), name: Postgres, pool_size: 4}
-    )
-
-    start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: Exam.Captures})
-    {:ok, :ok} = Postgres.migrate()
+    context = %Context{
+      db: db,
+      captures: captures,
+      pubsub: pubsub,
+      artifact_dir: dir,
+      encounter_ids: [encounter]
+    }
 
     {:ok, :ok} =
-      Encounters.open(Postgres, %{
+      Encounters.open(db, %{
         "exam" => encounter,
         "patient_actor" => "patient",
         "clinician_actor" => "clinician",
@@ -36,18 +33,21 @@ defmodule MedFabric.Exam.RecordingTest do
         "encounter_ref" => "Encounter/" <> encounter
       })
 
-    %{encounter: encounter}
+    %{encounter: encounter, context: context}
   end
 
   test "writer installed its WAV but the recording update was interrupted", %{
-    encounter: encounter
+    encounter: encounter,
+    context: context
   } do
-    {owner, mon, id, _capture} = socket_owner(encounter, "Contact input")
+    {owner, mon, id, _capture} = socket_owner(encounter, "Contact input", context)
+
+    assert {:ok, %{first_received_at: first_frame}} = Records.pending(context.db, encounter)
 
     # Let the real socket finish through fsync/link. PostgreSQL then holds the
     # readiness update at the row lock until we cancel that specific backend.
     assert {:ok, :ok} =
-             Postgrex.transaction(Postgres, fn tx ->
+             Postgrex.transaction(context.db, fn tx ->
                %{rows: [[locker]]} =
                  Postgrex.query!(
                    tx,
@@ -66,36 +66,40 @@ defmodule MedFabric.Exam.RecordingTest do
                :ok
              end)
 
-    assert {:ok, "recording"} = Records.recording_status(Postgres, encounter, id)
-    assert :ok = Recordings.recover()
-    assert {:ok, "ready"} = Recordings.status(encounter, id)
-    assert {:ok, [%{id: ^id, evidence: evidence}]} = Records.list(Postgres, encounter)
+    assert :ok = Recordings.recover(%{context | encounter_ids: []})
+    assert {:ok, "recording"} = Records.recording_status(context.db, encounter, id)
+    assert :ok = Recordings.recover(context)
+    assert {:ok, "ready"} = Recordings.status(encounter, id, context)
+    assert {:ok, [%{id: ^id, evidence: evidence}]} = Records.list(context.db, encounter)
     assert evidence["provenance"]["input"]["label"] == "Contact input"
     assert evidence["provenance"]["actor"] == "patient"
     assert evidence["sample_count"] == 2
-    assert :ok = Artifact.verify(Exam.lab().artifact_dir, id, evidence)
+    assert evidence["effective_at"] == DateTime.to_iso8601(first_frame)
+    assert evidence["continuity"] == "observed_continuous"
+    assert :ok = Artifact.verify(context.artifact_dir, id, evidence)
   end
 
   test "a lost ready reply preserves one outcome per ID even for identical bytes", %{
-    encounter: encounter
+    encounter: encounter,
+    context: context
   } do
     ids =
       for label <- ["USB stethoscope", "Laptop microphone"] do
-        {owner, mon, id, _capture} = socket_owner(encounter, label)
+        {owner, mon, id, _capture} = socket_owner(encounter, label, context)
         send(owner, :finish)
         assert_receive {:socket_result, ^id, {:stop, :normal, 1000, {:text, "ready"}, _}}, 5000
         # WebSock has yet to send the callback's reply.
         Process.exit(owner, :kill)
         assert_receive {:DOWN, ^mon, :process, ^owner, :killed}
-        assert {:ok, "ready"} = Recordings.status(encounter, id)
+        assert {:ok, "ready"} = Recordings.status(encounter, id, context)
         id
       end
 
-    assert :ok = Recordings.recover()
+    assert :ok = Recordings.recover(context)
 
     evidence =
       Enum.map(ids, fn id ->
-        assert {:ok, %{evidence: row}} = Records.get(Postgres, encounter, id)
+        assert {:ok, %{evidence: row}} = Records.get(context.db, encounter, id)
         row
       end)
 
@@ -106,25 +110,38 @@ defmodule MedFabric.Exam.RecordingTest do
 
     assert length(Enum.uniq_by(evidence, & &1["artifact_key"])) == 2
     assert length(Enum.uniq_by(evidence, & &1["file_sha256"])) == 1
-    assert {:ok, rows} = Records.list(Postgres, encounter)
+    assert {:ok, rows} = Records.list(context.db, encounter)
     assert length(rows) == 2
   end
 
   test "reconciliation preserves a live writer, then interrupts its abandoned partial", c do
-    {owner, mon, id, capture} = socket_owner(c.encounter, "USB")
+    assert {:error, :capture_unavailable} = Recordings.admit(c.encounter, "clinician", c.context)
+    Phoenix.PubSub.subscribe(c.context.pubsub, "preview:" <> c.encounter)
+    {owner, mon, id, capture} = socket_owner(c.encounter, "USB", c.context)
+    assert_receive {:capture_started, ^capture}
+    assert [{_, ^capture, _, _}] = DynamicSupervisor.which_children(c.context.captures)
     writer_ref = Process.monitor(capture)
-    assert :ok = Recordings.recover()
-    assert {:ok, "recording"} = Recordings.status(c.encounter, id)
-    assert {:error, :capture_unavailable} = Recordings.admit(c.encounter, "patient")
+    assert :ok = Recordings.recover(c.context)
+    assert {:ok, "recording"} = Recordings.status(c.encounter, id, c.context)
+    assert {:error, :capture_unavailable} = Recordings.admit(c.encounter, "patient", c.context)
 
     # Hard process death bypasses both terminate callbacks, leaving the .part.
     Process.exit(capture, :kill)
     Process.exit(owner, :kill)
     assert_receive {:DOWN, ^writer_ref, :process, ^capture, :killed}
     assert_receive {:DOWN, ^mon, :process, ^owner, :killed}
-    assert {:ok, "interrupted"} = Recordings.status(c.encounter, id)
+    assert {:ok, "interrupted"} = Recordings.status(c.encounter, id, c.context)
     assert [] == File.ls!(Path.join(c.tmp_dir, id))
-    assert {:ok, []} = Records.list(Postgres, c.encounter)
+    assert {:ok, []} = Records.list(c.context.db, c.encounter)
+  end
+
+  test "closing an unfinished socket releases its writer and interrupts the reservation", c do
+    assert {:push, {:text, _}, state} =
+             PCMSocket.init(%{encounter: c.encounter, actor: "patient", context: c.context})
+
+    assert :ok = PCMSocket.terminate(:normal, state)
+    assert is_nil(Recordings.active(c.encounter))
+    assert {:ok, "interrupted"} = Records.recording_status(c.context.db, c.encounter, state.id)
   end
 
   @tag timeout: 180_000
@@ -132,11 +149,11 @@ defmodule MedFabric.Exam.RecordingTest do
     id = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
     dir = Path.join(c.tmp_dir, id)
     :ok = Artifact.create_directory(c.tmp_dir, id)
-    :ok = Records.reserve(Postgres, c.encounter, id, "patient")
+    :ok = Records.reserve(c.context.db, c.encounter, id, "patient")
 
     :ok =
       Records.first_frame(
-        Postgres,
+        c.context.db,
         c.encounter,
         id,
         %{"label" => "Reference"},
@@ -164,11 +181,11 @@ defmodule MedFabric.Exam.RecordingTest do
       |> Base.encode16(case: :lower)
 
     File.rename!(path, Path.join(dir, digest <> ".wav"))
-    assert {:ok, "ready"} = Recordings.status(c.encounter, id)
-    assert {:ok, %{evidence: evidence}} = Records.get(Postgres, c.encounter, id)
+    assert {:ok, "ready"} = Recordings.status(c.encounter, id, c.context)
+    assert {:ok, %{evidence: evidence}} = Records.get(c.context.db, c.encounter, id)
     assert evidence["sample_count"] == samples
 
-    accept = Task.async(fn -> Exam.accept(c.encounter, id, "clinician") end)
+    accept = Task.async(fn -> Exam.accept(c.encounter, id, "clinician", c.context) end)
 
     players =
       for offset <- [1, 4] do
@@ -184,16 +201,16 @@ defmodule MedFabric.Exam.RecordingTest do
 
     assert :ok = Task.await(accept, 120_000)
     Enum.each(players, &Task.await(&1, 120_000))
-    assert {:ok, %{actor: "clinician"}} = Records.get(Postgres, c.encounter, id)
+    assert {:ok, %{actor: "clinician"}} = Records.get(c.context.db, c.encounter, id)
   end
 
-  defp socket_owner(encounter, label) do
+  defp socket_owner(encounter, label, context) do
     caller = self()
 
     {owner, mon} =
       spawn_monitor(fn ->
         {:push, {:text, message}, state} =
-          PCMSocket.init(%{encounter: encounter, actor: "patient"})
+          PCMSocket.init(%{encounter: encounter, actor: "patient", context: context})
 
         %{"acquisition_id" => id} = Jason.decode!(message)
 

@@ -101,7 +101,7 @@ defmodule MedFabric.ExamWeb.Router do
     actor = get_session(conn, :exam_actor)
     role = get_session(conn, :exam_role)
     key = conn.query_params["key"]
-    local_session = get_session(conn, :lab_encounter) == id and member?(id, actor, role)
+    local_session = get_session(conn, :lab_encounter) == id and Exam.member?(id, actor, role)
 
     cond do
       lab.local? && local_session ->
@@ -125,7 +125,7 @@ defmodule MedFabric.ExamWeb.Router do
     with {:ok, actor} <- MedFabric.ExamWeb.ProxyIdentity.actor(conn.req_headers, secret),
          role when role in ["patient", "clinician"] <-
            Enum.find(["patient", "clinician"], &(entry[&1 <> "_actor"] == actor)),
-         true <- member?(id, actor, role) do
+         true <- Exam.member?(id, actor, role) do
       if current_session and get_session(conn, :exam_actor) == actor,
         do: conn,
         else: grant(conn, id, actor, role)
@@ -135,10 +135,6 @@ defmodule MedFabric.ExamWeb.Router do
   end
 
   defp valid_key?(key, expected), do: is_binary(key) and Plug.Crypto.secure_compare(key, expected)
-
-  defp member?(id, actor, "patient"), do: Records.member?(Postgres, id, actor, :patient)
-  defp member?(id, actor, "clinician"), do: Records.member?(Postgres, id, actor, :clinician)
-  defp member?(_, _, _), do: false
 
   defp grant(conn, id, actor, role) do
     conn

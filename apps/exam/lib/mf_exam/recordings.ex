@@ -4,7 +4,7 @@ defmodule MedFabric.Exam.Recordings do
   alias MedFabric.Domain.Evidence
   alias MedFabric.Exam
   alias MedFabric.Exam.Artifact
-  alias MedFabric.Store.{Postgres, Records}
+  alias MedFabric.Store.Records
 
   def active(encounter) do
     case :global.whereis_name({__MODULE__, encounter}) do
@@ -13,26 +13,31 @@ defmodule MedFabric.Exam.Recordings do
     end
   end
 
-  def admit(encounter, actor) do
+  def admit(encounter, actor, context \\ Exam.context()) do
     locked(encounter, fn ->
-      with true <- Records.member?(Postgres, encounter, actor, :patient),
+      with true <- Exam.member?(encounter, actor, :patient, context.db),
            nil <- active(encounter),
-           :ok <- reconcile(encounter) do
+           :ok <- reconcile(encounter, context) do
         id = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
-        root = Exam.lab().artifact_dir
+        root = context.artifact_dir
 
         with :ok <- Artifact.create_directory(root, id),
-             :ok <- Records.reserve(Postgres, encounter, id, actor),
+             :ok <- Records.reserve(context.db, encounter, id, actor),
              {:ok, pid} <-
                DynamicSupervisor.start_child(
-                 Exam.Captures,
+                 context.captures,
                  {MedEx.Capture,
                   owner: self(), acquisition_id: id, artifact_dir: Path.join(root, id)}
                ) do
           # Name the writer itself. If the socket dies during finish, the name stays
           # occupied until the writer has finished installing (or aborting) the file.
           :yes = :global.register_name({__MODULE__, encounter}, pid)
-          Phoenix.PubSub.broadcast(Exam.PubSub, "preview:" <> encounter, {:capture_started, pid})
+          Phoenix.PubSub.broadcast(
+            context.pubsub,
+            "preview:" <> encounter,
+            {:capture_started, pid}
+          )
+
           {:ok, id, pid}
         end
       else
@@ -42,13 +47,13 @@ defmodule MedFabric.Exam.Recordings do
     end)
   end
 
-  def finish(encounter, id, actor, pid) do
+  def finish(encounter, id, actor, pid, context \\ Exam.context()) do
     locked(encounter, fn ->
       with ^pid <- active(encounter),
-           true <- Records.member?(Postgres, encounter, actor, :patient),
-           {:ok, %{id: ^id, producer: ^actor} = row} <- Records.pending(Postgres, encounter),
+           true <- Exam.member?(encounter, actor, :patient, context.db),
+           {:ok, %{id: ^id, producer: ^actor} = row} <- Records.pending(context.db, encounter),
            {:ok, artifact} <- MedEx.Capture.finish(pid) do
-        complete(encounter, row, artifact)
+        complete(encounter, row, artifact, context)
       else
         {:error, _} = error -> error
         _ -> {:error, :capture_unavailable}
@@ -56,11 +61,10 @@ defmodule MedFabric.Exam.Recordings do
     end)
   end
 
-  def recover do
-    with {:ok, encounters} <-
-           Records.pending_encounters(Postgres, Map.keys(Exam.lab().encounters)) do
+  def recover(context \\ Exam.context()) do
+    with {:ok, encounters} <- Records.pending_encounters(context.db, context.encounter_ids) do
       Enum.reduce_while(encounters, :ok, fn encounter, :ok ->
-        case locked(encounter, fn -> reconcile(encounter) end) do
+        case locked(encounter, fn -> reconcile(encounter, context) end) do
           :ok -> {:cont, :ok}
           error -> {:halt, error}
         end
@@ -68,11 +72,13 @@ defmodule MedFabric.Exam.Recordings do
     end
   end
 
-  def status(encounter, id) do
-    case Records.recording_status(Postgres, encounter, id) do
+  def status(encounter, id, context \\ Exam.context()) do
+    case Records.recording_status(context.db, encounter, id) do
       {:ok, "recording"} ->
         locked(encounter, fn ->
-          with :ok <- reconcile(encounter), do: Records.recording_status(Postgres, encounter, id)
+          with :ok <- reconcile(encounter, context) do
+            Records.recording_status(context.db, encounter, id)
+          end
         end)
 
       result ->
@@ -84,26 +90,11 @@ defmodule MedFabric.Exam.Recordings do
     :global.trans({{__MODULE__, encounter}, self()}, fun, [node()])
   end
 
-  defp reconcile(encounter) do
+  defp reconcile(encounter, context) do
     with nil <- active(encounter),
-         {:ok, %{} = row} <- Records.pending(Postgres, encounter) do
-      root = Exam.lab().artifact_dir
-
-      with :ok <- Artifact.remove_partials(root, row.id) do
-        case Artifact.finalized(root, row.id) do
-          {:ok, artifact} ->
-            case complete(encounter, row, artifact) do
-              {:error, :invalid_recording} -> Records.interrupt(Postgres, encounter, row.id)
-              result -> result
-            end
-
-          {:error, reason} when reason in [:unfinished, :invalid_recording] ->
-            Records.interrupt(Postgres, encounter, row.id)
-
-          error ->
-            error
-        end
-      end
+         {:ok, %{} = row} <- Records.pending(context.db, encounter),
+         :ok <- Artifact.remove_partials(context.artifact_dir, row.id) do
+      recover_attempt(encounter, row, context)
     else
       pid when is_pid(pid) -> :ok
       {:ok, nil} -> :ok
@@ -111,11 +102,38 @@ defmodule MedFabric.Exam.Recordings do
     end
   end
 
-  defp complete(encounter, %{id: id} = row, %{acquisition_id: id} = artifact) do
+  defp recover_attempt(encounter, row, context) do
+    with {:ok, file} <- Artifact.finalized(context.artifact_dir, row.id),
+         artifact = recovered_artifact(file, row.id),
+         :ok <- complete(encounter, row, artifact, context) do
+      :ok
+    else
+      {:error, reason} when reason in [:unfinished, :invalid_recording] ->
+        Records.interrupt(context.db, encounter, row.id)
+
+      error ->
+        error
+    end
+  end
+
+  # Only the capture writer installs a final WAV in this reserved directory, after
+  # validating the stream from sample zero. Recovery relies on that installation
+  # contract for continuity, and on the file for the sample count.
+  defp recovered_artifact(file, id) do
+    Map.merge(file, %{
+      acquisition_id: id,
+      kind: :audio_pcm16_wav,
+      first_sample: 0,
+      end_sample: file.sample_count,
+      continuity: :observed_continuous
+    })
+  end
+
+  defp complete(encounter, %{id: id} = row, %{acquisition_id: id} = artifact, context) do
     with {:ok, evidence} <-
            Evidence.recording(artifact, row.producer, row.source, row.first_received_at),
-         :ok <- Records.complete(Postgres, encounter, id, evidence) do
-      Exam.announce(encounter)
+         :ok <- Records.complete(context.db, encounter, id, evidence) do
+      Exam.announce(encounter, context)
     end
   end
 end

@@ -29,7 +29,11 @@ manual listening check, and optional local workspace SDK testing.
 
 ## Verify the unpublished candidate
 
-Use sibling checkouts named `med_ex` and `med_fabric`. The script projects MedEx and passes that local project path to Mix. Candidate dependency resolution uses a separate lockfile under `apps/exam/_build`.
+Use sibling checkouts named `med_ex` and `med_fabric`. Commit MedEx changes
+before running: Weld prepares from a clean source revision. The script passes
+the exact prepared release bundle's `project/` path to Mix and compares its
+browser assets with the tested sources. Candidate dependency resolution uses a
+separate lockfile under `apps/exam/_build`.
 
 ```bash
 bash ops/qc_candidate.sh
@@ -56,7 +60,9 @@ export MF_CLINICIAN_ACCESS_KEY="$(openssl rand -hex 24)"
 export MF_RELEASE_DIR="$PWD/_build/exam-release"
 ```
 
-For the unpublished candidate, use the generated SDK with ordinary Mix:
+For development outside candidate QC, a disposable SDK projection can be used
+with ordinary Mix as below. For release QC, use `ops/qc_candidate.sh` and the
+prepared project path it prints; this development projection is a separate tree.
 
 ```bash
 (cd ../med_ex && mix weld.project)

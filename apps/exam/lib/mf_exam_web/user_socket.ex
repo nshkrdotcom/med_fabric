@@ -2,8 +2,8 @@ defmodule MedFabric.ExamWeb.UserSocket do
   @moduledoc false
   use Phoenix.Socket
 
+  alias MedFabric.Exam
   alias MedFabric.ExamWeb.Endpoint
-  alias MedFabric.Store.{Postgres, Records}
 
   channel("signaling:*", MedFabric.ExamWeb.SignalingChannel)
   channel("talkback:*", MedFabric.ExamWeb.TalkbackChannel)
@@ -15,9 +15,9 @@ defmodule MedFabric.ExamWeb.UserSocket do
         if MedFabric.ExamWeb.ProxyIdentity.matches?(
              info[:x_headers] || [],
              actor,
-             MedFabric.Exam.lab()
+             Exam.lab()
            ) and
-             Records.member?(Postgres, encounter_id, actor, role) do
+             Exam.member?(encounter_id, actor, role) do
           {:ok, assign(socket, encounter_id: encounter_id, actor: actor, role: role)}
         else
           :error

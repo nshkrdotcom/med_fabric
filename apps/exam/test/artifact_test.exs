@@ -63,6 +63,78 @@ defmodule MedFabric.Exam.ArtifactTest do
     end
   end
 
+  test "If-Range applies a range only when the strong ETag matches", c do
+    etag = ~s("#{c.evidence["file_sha256"]}")
+
+    for {validator, status, body} <- [
+          {etag, 206, <<40>>},
+          {"W/" <> etag, 200, c.wav},
+          {~s("old"), 200, c.wav}
+        ] do
+      conn =
+        Plug.Test.conn(:get, "/")
+        |> put_req_header("range", "bytes=-1")
+        |> put_req_header("if-range", validator)
+
+      sent = Artifact.serve(conn, c.tmp_dir, @id, c.evidence)
+      assert sent.status == status
+      assert sent.resp_body == body
+      assert get_resp_header(sent, "etag") == [etag]
+    end
+  end
+
+  test "same-size corruption outside a requested range invalidates the whole recording", c do
+    File.write!(c.path, binary_part(c.wav, 0, byte_size(c.wav) - 1) <> <<41>>)
+
+    assert {:error, :invalid_recording} = Artifact.verify(c.tmp_dir, @id, c.evidence)
+
+    conn = Plug.Test.conn(:get, "/") |> put_req_header("range", "bytes=0-3")
+    sent = Artifact.serve(conn, c.tmp_dir, @id, c.evidence)
+    assert sent.status == 404
+    assert sent.resp_body == "Recording unavailable"
+  end
+
+  test "checks the persisted PCM digest independently of the complete WAV digest", c do
+    changed = %{c.evidence | "pcm_sha256" => String.duplicate("0", 64)}
+
+    assert :ok = Artifact.verify(c.tmp_dir, @id, c.evidence)
+    assert {:error, :recording_changed} = Artifact.verify(c.tmp_dir, @id, changed)
+  end
+
+  test "recovery rejects extra or truncated bytes even with a matching complete-file hash", c do
+    File.rm!(c.path)
+
+    for wav <- [c.wav <> <<0, 0>>, binary_part(c.wav, 0, byte_size(c.wav) - 2)] do
+      path = Path.join([c.tmp_dir, @id, hex(wav) <> ".wav"])
+      File.write!(path, wav)
+      assert {:error, :invalid_recording} = Artifact.finalized(c.tmp_dir, @id)
+      File.rm!(path)
+    end
+  end
+
+  test "serves the final byte of a PCM payload extending past the hashing chunk", c do
+    File.rm!(c.path)
+    pcm = :binary.copy(<<0>>, 65_536) <> <<10, 20>>
+    wav = MedEx.Wav.header(byte_size(pcm), 48_000) <> pcm
+    digest = hex(wav)
+    key = @id <> "/" <> digest <> ".wav"
+    File.write!(Path.join(c.tmp_dir, key), wav)
+
+    evidence = %{
+      c.evidence
+      | "artifact_key" => key,
+        "file_sha256" => digest,
+        "pcm_sha256" => hex(pcm),
+        "sample_count" => 32_769
+    }
+
+    conn = Plug.Test.conn(:get, "/") |> put_req_header("range", "bytes=-1")
+    sent = Artifact.serve(conn, c.tmp_dir, @id, evidence)
+    assert sent.status == 206
+    assert sent.resp_body == <<20>>
+    assert get_resp_header(sent, "content-range") == ["bytes 65581-65581/65582"]
+  end
+
   test "only the bound attempt may use the verified file", c do
     assert {:error, _} = Artifact.verify(c.tmp_dir, "another-id", c.evidence)
     basename = Path.basename(c.path)
@@ -77,6 +149,21 @@ defmodule MedFabric.Exam.ArtifactTest do
     bad_wav = String.replace(c.wav, "WAVE", "FAKE")
     File.write!(Path.join([c.tmp_dir, @id, hex(bad_wav) <> ".wav"]), bad_wav)
     assert {:error, :invalid_recording} = Artifact.finalized(c.tmp_dir, @id)
+  end
+
+  test "finalized inspection returns file facts for the reservation to interpret", c do
+    digest = c.evidence["file_sha256"]
+    pcm_digest = c.evidence["pcm_sha256"]
+
+    assert Artifact.finalized(c.tmp_dir, @id) ==
+             {:ok,
+              %{
+                artifact_key: digest <> ".wav",
+                file_sha256: digest,
+                pcm_sha256: pcm_digest,
+                sample_count: 2,
+                sample_rate_hz: 48_000
+              }}
   end
 
   defp hex(bytes), do: Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
