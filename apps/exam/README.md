@@ -21,7 +21,7 @@ migration, and capture supervisor when `MF_LAB=1` is configured. Patient and
 clinician browsers negotiate a direct two-way WebRTC talkback call. An
 independent authorized channel negotiates the clinician's receive-only
 diagnostic preview peer while the patient browser streams live 48 kHz mono
-PCM16LE over `/pcm`. MedEx finalizes the lossless WAV independently of preview,
+PCM16LE over the encounter-scoped recording WebSocket. MedEx finalizes the lossless WAV independently of preview,
 and the clinician reviews that recording alongside manually entered pulse-rate
 measurements. PostgreSQL commits acceptance and export intent atomically, and an
 async delivery action confirms each `Observation` against the FHIR R4 server.

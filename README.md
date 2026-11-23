@@ -13,23 +13,17 @@ WebRTC talkback, live diagnostic audio capture with
 recordings and pulse-rate measurements. PostgreSQL records acceptance and queues
 HL7 FHIR R4 delivery.
 
-## Quickstart
+## Run the exam candidate
 
-On Ubuntu 26.04 with the pinned toolchains active (`.tool-versions`, PostgreSQL
-18, and Temurin JDK `21.0.9+10` or external `DATABASE_URL` / `FHIR_BASE_URL`):
+The 0.2 candidate combines two-way conversation, independently selected diagnostic audio and clinician-entered pulse measurements. A patient can recover a recording outcome after reconnecting. Clinicians can seek in a verified WAV, review its source and time, and deliver the accepted observation to the encounter’s own FHIR destination.
+
+From this checkout, with sibling MedEx and Mix Workspace Ops checkouts and the medical registry installed, run the SDK and Fabric QC sequence:
 
 ```bash
-./onboard.sh --integration
-bash ops/verify_browser.sh --release
+bash ops/qc_candidate.sh
 ```
 
-Start with the [browser-to-record guide](guides/browser_to_record.md) for full
-prerequisites, running the compiled `mf_exam` Mix release directly, the manual
-listening check, and local workspace mode.
-
-Read the [architecture and roadmap](guides/architecture_and_roadmap.md) for
-clinical ownership boundaries, PostgreSQL/FHIR contracts, and the 12-use-case
-roadmap.
+The command builds the unpublished SDK from source and runs the exam release with that SDK. Allow time for native dependencies, Dialyzer, PostgreSQL, HAPI and Chromium. For a live exam, follow the operator setup. For an actual TURN demonstration use the two-endpoint media procedure. [Browser-to-record guide](guides/browser_to_record.md) · [Remote media verification](guides/media_verification.md) · [Architecture and roadmap](guides/architecture_and_roadmap.md)
 
 ## Projects
 

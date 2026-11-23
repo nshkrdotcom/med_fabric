@@ -21,7 +21,7 @@ HTTP using `Req`.
 (`reviewed-auscultation-recording`) and manually entered pulse rates (LOINC
 `8867-4`, UCUM `/min`) into distinct FHIR R4 `Observation` payloads. It uses
 conditional create (`If-None-Exist`) and confirms remote identity and clinical
-values on read-back.
+values on read-back, including the presence or absence of a quantity comparator.
 
 Use `FHIR_BASE_URL` and `mix test integration` to exercise retry against native
 HAPI. See the [browser-to-record guide](../../guides/browser_to_record.md).

@@ -117,6 +117,7 @@ defmodule MedFabric.ExamWeb.ExamLive do
         </label>
         <button type="button" data-start>Start capture</button>
         <button type="button" data-finish disabled>Finish capture</button>
+        <button type="button" data-check hidden>Check recording outcome</button>
         <p role="status"></p>
       </section>
 

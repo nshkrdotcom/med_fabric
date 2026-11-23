@@ -34,12 +34,10 @@ if System.get_env("MF_LAB") == "1" do
   proxy_secret = System.get_env("MF_PROXY_SECRET")
 
   if local? do
-    for {_, %{"patient_key" => p, "clinician_key" => c}} <- entries do
-      unless is_binary(p) and is_binary(c) and min(byte_size(p), byte_size(c)) >= 32 and p != c,
-        do: raise("Each local encounter needs distinct 32-byte or longer access keys")
-    end
-    unless Enum.all?(encounters, &(Map.has_key?(&1, "patient_key") and Map.has_key?(&1, "clinician_key"))),
-      do: raise("Missing local encounter access keys")
+    keys = Enum.flat_map(encounters, &[&1["patient_key"], &1["clinician_key"]])
+    unless Enum.all?(keys, &(is_binary(&1) and byte_size(&1) >= 32)) and
+             length(Enum.uniq(keys)) == length(keys),
+      do: raise("Local encounter access keys must be unique and at least 32 bytes long")
   else
     unless is_binary(proxy_secret) and byte_size(proxy_secret) >= 32,
       do: raise("HTTPS operation requires MF_PROXY_SECRET and an authenticating loopback reverse proxy")

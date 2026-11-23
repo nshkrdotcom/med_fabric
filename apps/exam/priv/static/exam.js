@@ -35,6 +35,7 @@ const Capture = {
     const status = this.el.querySelector('[role="status"]');
     const base = `/encounters/${encodeURIComponent(this.el.dataset.encounter)}`;
     const savedKey = `med-fabric-attempt${base}`;
+    const retry = this.el.querySelector("[data-check]");
     let current;
     this.cleanup = () => { const op = current; current = null; op?.controller?.abort(); op?.socket.close(); };
     void listInputs(input);
@@ -47,15 +48,25 @@ const Capture = {
         const {status: saved} = await res.json();
         if (current !== op || !this.el.isConnected) return;
         status.textContent = saved;
+        retry.hidden = saved !== "recording";
         if (saved !== "recording") sessionStorage.removeItem(savedKey);
+        else status.textContent = "Recording outcome pending";
       } catch {
-        if (current === op && this.el.isConnected) status.textContent = "Recording outcome unavailable. Reload to retry.";
+        if (current === op && this.el.isConnected) {
+          status.textContent = "Recording outcome unavailable";
+          retry.hidden = false;
+        }
       }
+    };
+    retry.onclick = () => {
+      const id = sessionStorage.getItem(savedKey);
+      if (id) void readOutcome(id, current);
     };
     const prior = sessionStorage.getItem(savedKey);
     if (prior) void readOutcome(prior, current);
 
     start.onclick = async () => {
+      retry.hidden = true;
       start.disabled = true;
       input.disabled = true;
       status.textContent = "Starting microphone";
@@ -70,7 +81,7 @@ const Capture = {
         start.disabled = input.disabled = false;
         finish.disabled = true;
         if (result === "ready") sessionStorage.removeItem(savedKey);
-        else if (op.id && result === "disconnected") void readOutcome(op.id, op);
+        else if (op.id && ["disconnected", "capture_failed"].includes(result)) void readOutcome(op.id, op);
       };
 
       try {

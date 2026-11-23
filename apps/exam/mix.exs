@@ -6,7 +6,7 @@ defmodule MedFabric.Exam.MixProject do
   def project do
     [
       app: :mf_exam,
-      version: "0.1.0",
+      version: "0.2.0",
       elixir: "~> 1.20",
       description: "Connected remote clinical examination",
       dialyzer: [plt_add_apps: [:mix]],
@@ -24,7 +24,7 @@ defmodule MedFabric.Exam.MixProject do
       {:mf_domain, path: "../../core/domain"},
       {:mf_store, path: "../../core/store"},
       {:mf_interop, path: "../../core/interop"},
-      workspace_dep({:med_ex, "~> 0.1.0"}),
+      workspace_dep({:med_ex, "~> 0.2.0"}),
       # Ratio PR 131 widens its optional Decimal constraint. Keep this pin in the
       # deployable application until Hex ships that change.
       {:ratio, git: "https://github.com/robertbenavidez/elixir-rational.git",

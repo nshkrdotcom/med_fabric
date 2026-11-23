@@ -9,7 +9,7 @@ external HL7 FHIR R4 server for delivery. The three core clinical libraries
 
 ## Exam composition
 
-In `0.1.0`, one authorized encounter composes three independent paths:
+Each authorized encounter composes three independent paths:
 
 1. **Two-way conversation:** Direct browser-to-browser WebRTC audio talkback
    between patient and clinician, authorized and signaled by `apps/exam`.
@@ -33,10 +33,10 @@ flowchart LR
 ```
 
 An encounter outlives its peer connections. A diagnostic acquisition owns its
-capture lifetime; browser disconnects only affect live preview availability.
+capture lifetime. A preview listener can disconnect independently. Loss of the patient producer ends an unfinished recording.
 After evidence is finalized and stored, PostgreSQL owns review, acceptance, and
 export status across application restarts. Acceptance and its FHIR delivery
-intent commit in one SQL transaction; FHIR HTTP runs outside that transaction
+intent commit in one SQL transaction. FHIR HTTP runs outside that transaction
 and outside LiveView.
 
 ## State and effects review
@@ -44,29 +44,29 @@ and outside LiveView.
 | Owner | State and reason |
 | --- | --- |
 | `MedEx.Capture` | Temporary `.part` WAV writer, next expected sample index, running PCM SHA-256, and single-frame preview demand. Enforces byte order, detects source loss, and keeps preview bounded. |
-| `PCMSocket` & `ActiveCapture` registry | `PCMSocket` owns one admitted patient PCM WebSocket. The unique registry entry prevents overlapping captures on the same encounter and lets a reconnecting clinician locate the live capture. Neither owns ready evidence. |
+| `PCMSocket` and the temporary writer | A reserved attempt binds the acquisition ID and patient before PCM. Per-encounter admission serializes writer creation, finish and recovery. The live writer owns the name used by preview discovery. |
 | `SignalingChannel` | One `MedEx.Preview` peer, per-peer RTP packet sequence, and monotonic 48 kHz media clock. A replacement peer starts a fresh transport sequence. |
 | PostgreSQL (`core/store`) | Encounter membership, typed evidence + provenance, accepted observations, and FHIR outbox intents. Row locks serialize review and acceptance. The exam verifies immutable WAV bytes before entering the acceptance transaction. |
 | LiveView & browser | Presentation state, user actions, and ephemeral media handles. FHIR HTTP runs in an async delivery action; PostgreSQL owns the delivery outcome. |
 
-The release verifier configures one test encounter with distinct, server-bound
-actor identities and role keys. Integrate real identity-provider authentication
-and multi-encounter routing before operating beyond a controlled lab.
+The deployment supports one BEAM instance with its own persistent artifact volume and database. It can host multiple encounters concurrently. An authenticated reverse proxy supplies identity for HTTPS deployments. The exam enforces membership, destination and session scope. Localhost has a separate role-key entry flow.
 
 ## PostgreSQL schema and invariants
 
-`core/store/priv/sql/002_evidence.sql` defines four tables (applied idempotently
-via `MedFabric.Store.Postgres.migrate/0` under an advisory transaction lock):
+The store applies the scripts under `core/store/priv/sql/` in filename order under a transaction lock.
 
 | Table | Purpose & key invariants |
 | --- | --- |
 | `encounters` | Encounter ID (`PK`), `patient_actor`, `clinician_actor`, and nullable `closed_at`. |
-| `acquisitions` | `(encounter_id, id)` `PK`, `evidence` (`jsonb`), and `conflict` flag. SQL `CHECK` constraints enforce required `kind` and `provenance` object, requiring `artifact_key` + `file_sha256` for `audio_pcm16_wav` and forbidding artifact fields while requiring numeric `value` for `pulse_rate`. |
+| `acquisitions` | `(encounter_id, id)` `PK`, `evidence` (`jsonb`), and `conflict` flag. Recording reservations also store producer, first accepted frame receipt time and source settings until finalization. A partial unique index allows one recording in progress per encounter. Ready evidence constraints enforce required `kind` and `provenance` object, requiring `artifact_key` + `file_sha256` for `audio_pcm16_wav` and forbidding artifact fields while requiring numeric `value` for `pulse_rate`. |
+| `encounter_exports` | The immutable FHIR destination and subject/encounter references for one encounter. |
 | `observations` | `(encounter_id, acquisition_id)` `PK` referencing `acquisitions`, `actor`, and `accepted_at`. Guarantees at most one accepted observation per acquisition; late conflicts cannot overwrite accepted records. |
 | `outbox_deliveries` | `(encounter_id, acquisition_id)` `PK` referencing `observations`, `destination`, `external_id`, `resource` (`jsonb`), `remote_ref`, and `last_error`. Enforces `UNIQUE (destination, external_id)` for idempotent FHIR retries. |
 
 `core/store` performs PostgreSQL transactions only—it performs no filesystem
 `File.read/1` calls and no HTTP calls.
+
+The socket reports an acquisition ID before the browser sends audio. A finalized canonical WAV lives at `<artifact_dir>/<acquisition_id>/<sha256>.wav`. On startup, next admission or an outcome lookup, recovery validates bytes and restores reviewable evidence or marks the abandoned partial interrupted. A live writer retains ownership. Acceptance checks the named evidence off the LiveView process. Authorized playback verifies and streams the same descriptor in bounded chunks with byte ranges. Use a fresh database and volume for this greenfield release. Retain any 0.1 artifacts with their corresponding release.
 
 ## HL7 FHIR R4 mapping and confirmation
 
@@ -81,28 +81,30 @@ confirmation (rejecting unexpected clinical modifiers or conflicting values):
 | `pulse_rate` | LOINC `8867-4` (`http://loinc.org`) | `valueQuantity` in UCUM `/min` (`beats/minute`), method `"Manually entered measurement"`. |
 | `audio_pcm16_wav` | `reviewed-auscultation-recording` (`https://med-fabric.local/fhir/CodeSystem/exam-observation`) | `valueString` set to `file_sha256`, method `"Reviewed diagnostic audio recording"`. |
 
+The pulse comparison includes the FHIR quantity comparator. An exact value and a bound such as “less than 70” cannot confirm each other. The two supported Observation shapes permit server envelope metadata, reference display enrichment and a coding display while protecting the submitted clinical fields. Outbox delivery remains clinician-triggered and safely retryable.
+
 ## Capability families and 12-use-case roadmap
 
-| Family | Shared requirements | Target use cases | 0.1.0 coverage vs. planned gaps |
+| Family | Shared requirements | Target use cases | Current implementation and roadmap |
 | --- | --- | --- | --- |
-| Clinical collaboration | Session roles, real-time media, annotations, escalation | Connected telehealth exam (3), ultrasound & imaging (6), tele-EMS (7), speech therapy (9), procedural guidance (12) | **0.1.0:** Patient–clinician 1:1 WebRTC audio talkback + role separation. **Planned:** Video tracks, multiparty SFU, annotations, real IdP/RBAC, multi-encounter routing. |
-| Device acquisition & monitoring | Source identity, timing, calibration, typed evidence | Digital stethoscope (1), RPM (4), respiratory devices (8), device troubleshooting (10), hearing/assistive devices (11) | **0.1.0:** Browser 48 kHz mono PCM16LE audio + manual pulse-rate evidence in one encounter. **Planned:** Hardware USB/BLE device gateways, multi-channel ECG/SpO₂ telemetry, calibration & control channels. |
-| Clinical audio & signal processing | Signal fidelity, timing, lossless recording, quality checks | Digital stethoscope (1), voice monitoring (2), respiratory devices (8), speech therapy (9), hearing/assistive devices (11) | **0.1.0:** Bit-exact lossless WAV capture independent of live Opus preview + peer replacement recovery. **Planned:** Bell/diaphragm filtering, clipping/SNR QC, waveform review UI, out-of-band signal workers. |
-| AI-assisted workflows | Consent, model provenance, explicit clinician review, escalation | Voice monitoring (2), medical voice assistants (5) | **0.1.0:** Explicit clinician acceptance + persisted provenance structure. **Planned:** Derived-result provenance schema constraints, ASR/TTS/VAD voice pipelines, model workers, escalation rules. |
+| Clinical collaboration | Session roles, real-time media, annotations, escalation | Connected telehealth exam (3), ultrasound & imaging (6), tele-EMS (7), speech therapy (9), procedural guidance (12) | **Implemented:** Patient–clinician 1:1 WebRTC audio talkback + role separation. **Planned:** Video tracks, multiparty SFU, annotations, additional identity providers and team roles. |
+| Device acquisition & monitoring | Source identity, timing, calibration, typed evidence | Digital stethoscope (1), RPM (4), respiratory devices (8), device troubleshooting (10), hearing/assistive devices (11) | **Implemented:** Browser 48 kHz mono PCM16LE audio + manual pulse-rate evidence in one encounter. **Planned:** Hardware USB/BLE device gateways, multi-channel ECG/SpO₂ telemetry, calibration & control channels. |
+| Clinical audio & signal processing | Signal fidelity, timing, lossless recording, quality checks | Digital stethoscope (1), voice monitoring (2), respiratory devices (8), speech therapy (9), hearing/assistive devices (11) | **Implemented:** Bit-exact lossless WAV capture independent of live Opus preview + peer replacement recovery. **Planned:** Bell/diaphragm filtering, clipping/SNR QC, waveform review UI, out-of-band signal workers. |
+| AI-assisted workflows | Consent, model provenance, explicit clinician review, escalation | Voice monitoring (2), medical voice assistants (5) | **Implemented:** Explicit clinician acceptance + persisted provenance structure. **Planned:** Derived-result provenance schema constraints, ASR/TTS/VAD voice pipelines, model workers, escalation rules. |
 
 ## Extension boundaries
 
 [MedEx](https://github.com/nshkrdotcom/med_ex/blob/main/guides/architecture_and_roadmap.md)
 owns live media capture and preview transport. Out-of-band waveform processing
 and inference (such as future NeuroKit2 or WFDB-Python workers, ONNX/Ortex
-models, or Pipecat/whisper.cpp voice pipelines) are **out of scope for 0.1.0**;
+models, or Pipecat/whisper.cpp voice pipelines) are **future work**;
 when built, they will run as separately deployed workers or opt-in packages
 consuming finalized artifacts outside capture and submitting derived results
 with source digest and algorithm provenance into Fabric's review workflow.
 LiveKit fits at the multiparty SFU boundary when needed; Orthanc fits at the
 DICOM imaging/export boundary.
 
-The `0.1.0` exam deploys as an OTP Mix release. Keeping `core/domain`,
+The exam deploys as an OTP Mix release. Keeping `core/domain`,
 `core/store`, and `core/interop` decoupled from `apps/exam` preserves the option
 to package and publish a reusable `:med_fabric` Hex library later once a second
 application defines its public library API.

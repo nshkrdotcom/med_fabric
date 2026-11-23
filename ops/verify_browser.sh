@@ -56,14 +56,22 @@ curl -fsS --max-time 5 -H 'Accept: application/fhir+json' "${FHIR_BASE_URL%/}/me
 export MF_ENCOUNTERS_FILE="$work/refs.json"
 (cd apps/exam && env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs)
 
+# Native transition checks share the browser verifier's isolated services.
+# Core projects have their own dependency/build roots outside the exam overlay.
+for package in core/store core/interop; do
+  (cd "$package" && env -u MIX_EXS -u MIX_DEPS_PATH -u MIX_BUILD_PATH -u MIX_LOCKFILE \
+    -u MIX_WORKSPACE_OPS_BOOTSTRAP -u MIX_ENV -u MF_LAB mix test integration)
+done
+(cd apps/exam && env -u MF_LAB MIX_ENV=test mix test integration)
+
 if [[ "$mode" == "--release" ]]; then
-  (cd apps/exam && env -u MF_LAB MIX_ENV=prod mix release --overwrite) >"$work/release.log" 2>&1 ||
+  (cd apps/exam && env -u MF_LAB MIX_ENV=prod mix release --path "$work/release" --overwrite) >"$work/release.log" 2>&1 ||
     { cat "$work/release.log" >&2; exit 1; }
 fi
 
 start_exam() {
   if [[ "$mode" == "--release" ]]; then
-    (cd apps/exam && exec _build/prod/rel/mf_exam/bin/mf_exam start) >>"$work/exam.log" 2>&1 &
+    (cd apps/exam && exec "$work/release/bin/mf_exam" start) >>"$work/exam.log" 2>&1 &
   else
     (cd apps/exam && exec mix run --no-halt) >>"$work/exam.log" 2>&1 &
   fi
