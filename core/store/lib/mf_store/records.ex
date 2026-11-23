@@ -59,6 +59,7 @@ defmodule MedFabric.Store.Records do
            SET conflict = a.conflict OR (a.evidence <> EXCLUDED.evidence AND NOT EXISTS (
              SELECT 1 FROM observations o WHERE o.encounter_id=a.encounter_id AND o.acquisition_id=a.id
            ))
+           WHERE a.state='ready'
            RETURNING conflict, evidence=$3
            """,
            [encounter, acquisition, evidence]
@@ -68,34 +69,124 @@ defmodule MedFabric.Store.Records do
     end
   end
 
-  def list(db, encounter) do
+  def reserve(db, encounter, id, producer) do
+    Postgrex.query(
+      db,
+      """
+      INSERT INTO acquisitions (encounter_id,id,producer,state)
+      SELECT id,$2,$3,'recording' FROM encounters
+      WHERE id=$1 AND patient_actor=$3 AND closed_at IS NULL
+      ON CONFLICT DO NOTHING
+      """,
+      [encounter, id, producer]
+    )
+    |> written(:capture_unavailable)
+  end
+
+  def first_frame(db, encounter, id, source, at) do
+    Postgrex.query(
+      db,
+      """
+      UPDATE acquisitions SET capture_source=$3,first_received_at=$4
+      WHERE encounter_id=$1 AND id=$2 AND state='recording' AND first_received_at IS NULL
+      """,
+      [encounter, id, source, at]
+    )
+    |> written(:capture_unavailable)
+  end
+
+  def pending_encounters(db, configured_ids) do
+    case Postgrex.query(db, """
+           SELECT encounter_id FROM acquisitions
+           WHERE state='recording' AND encounter_id=ANY($1::text[])
+           """, [configured_ids]) do
+      {:ok, %{rows: rows}} -> {:ok, Enum.map(rows, fn [id] -> id end)}
+      error -> error
+    end
+  end
+
+  def pending(db, encounter) do
     case Postgrex.query(
            db,
            """
-           SELECT a.id, a.evidence, a.conflict, o.actor, d.remote_ref, d.last_error
-           FROM acquisitions a
-           LEFT JOIN observations o ON (o.encounter_id,o.acquisition_id)=(a.encounter_id,a.id)
-           LEFT JOIN outbox_deliveries d ON (d.encounter_id,d.acquisition_id)=(a.encounter_id,a.id)
-           WHERE a.encounter_id=$1 ORDER BY a.id
+           SELECT id,producer,capture_source,first_received_at FROM acquisitions
+           WHERE encounter_id=$1 AND state='recording'
            """,
            [encounter]
          ) do
-      {:ok, %{rows: rows}} ->
-        {:ok,
-         Enum.map(rows, fn [id, evidence, conflict, actor, remote, error] ->
-           %{
-             id: id,
-             evidence: evidence,
-             conflict: conflict,
-             actor: actor,
-             remote: remote,
-             error: error
-           }
-         end)}
+      {:ok, %{rows: [[id, actor, source, at]]}} ->
+        {:ok, %{id: id, producer: actor, source: source, first_received_at: at}}
 
-      error ->
-        error
+      {:ok, %{rows: []}} -> {:ok, nil}
+      error -> error
     end
+  end
+
+  def interrupt(db, encounter, id) do
+    Postgrex.query(
+      db,
+      "UPDATE acquisitions SET state='interrupted' WHERE encounter_id=$1 AND id=$2 AND state='recording'",
+      [encounter, id]
+    )
+    |> written(:capture_unavailable)
+  end
+
+  def complete(db, encounter, id, evidence) do
+    # A repeat finish may confirm only the same durable evidence.
+    Postgrex.query(
+      db,
+      """
+      UPDATE acquisitions SET state='ready',evidence=$3,producer=NULL,capture_source=NULL,first_received_at=NULL
+      WHERE encounter_id=$1 AND id=$2 AND (
+        (state='recording' AND first_received_at IS NOT NULL)
+        OR (state='ready' AND evidence=$3)
+      )
+      """,
+      [encounter, id, evidence]
+    )
+    |> written(:evidence_conflict)
+  end
+
+  def recording_status(db, encounter, id) do
+    case Postgrex.query(
+           db,
+           """
+           SELECT state FROM acquisitions WHERE encounter_id=$1 AND id=$2
+           AND (state <> 'ready' OR evidence->>'kind'='audio_pcm16_wav')
+           """,
+           [encounter, id]
+         ) do
+      {:ok, %{rows: [[state]]}} -> {:ok, state}
+      {:ok, %{rows: []}} -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  @review_query """
+  SELECT a.id, a.evidence, a.conflict, o.actor, d.remote_ref, d.last_error
+  FROM acquisitions a
+  LEFT JOIN observations o ON (o.encounter_id,o.acquisition_id)=(a.encounter_id,a.id)
+  LEFT JOIN outbox_deliveries d ON (d.encounter_id,d.acquisition_id)=(a.encounter_id,a.id)
+  WHERE a.encounter_id=$1 AND a.state='ready'
+  """
+
+  def list(db, encounter) do
+    case Postgrex.query(db, @review_query <> " ORDER BY a.id", [encounter]) do
+      {:ok, %{rows: rows}} -> {:ok, Enum.map(rows, &review_row/1)}
+      error -> error
+    end
+  end
+
+  def get(db, encounter, acquisition) do
+    case Postgrex.query(db, @review_query <> " AND a.id=$2", [encounter, acquisition]) do
+      {:ok, %{rows: [row]}} -> {:ok, review_row(row)}
+      {:ok, %{rows: []}} -> {:error, :not_found}
+      error -> error
+    end
+  end
+
+  defp review_row([id, evidence, conflict, actor, remote, error]) do
+    %{id: id, evidence: evidence, conflict: conflict, actor: actor, remote: remote, error: error}
   end
 
   def accept(db, encounter, acquisition, actor, evidence, destination, external_id, resource) do
@@ -107,7 +198,7 @@ defmodule MedFabric.Store.Records do
                SELECT id FROM encounters WHERE id=$1 AND clinician_actor=$3 AND closed_at IS NULL FOR UPDATE
              )
              SELECT a.evidence, a.conflict FROM authorized e JOIN acquisitions a ON e.id=a.encounter_id
-             WHERE a.id=$2 FOR UPDATE OF a
+             WHERE a.id=$2 AND a.state='ready' FOR UPDATE OF a
              """,
              [encounter, acquisition, actor]
            ).rows do

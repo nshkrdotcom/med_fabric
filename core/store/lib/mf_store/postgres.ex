@@ -40,18 +40,16 @@ defmodule MedFabric.Store.Postgres do
     do: raise(ArgumentError, "Unsupported PostgreSQL URL option #{key}")
 
   def migrate(db \\ __MODULE__) do
-    sql =
-      Application.app_dir(
-        Application.get_application(__MODULE__),
-        "priv/sql/002_evidence.sql"
-      )
-      |> File.read!()
+    scripts =
+      Application.app_dir(Application.get_application(__MODULE__), "priv/sql/*.sql")
+      |> Path.wildcard()
+      |> Enum.sort()
 
     Postgrex.transaction(db, fn conn ->
       Postgrex.query!(conn, "SELECT pg_advisory_xact_lock(73160649)", [])
 
-      sql
-      |> String.split(";")
+      scripts
+      |> Enum.flat_map(fn path -> path |> File.read!() |> String.split(";") end)
       |> Enum.map(&String.trim/1)
       |> Enum.reject(&(&1 == ""))
       |> Enum.each(&Postgrex.query!(conn, &1, []))
