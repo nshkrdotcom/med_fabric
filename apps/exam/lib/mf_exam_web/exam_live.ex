@@ -15,7 +15,9 @@ defmodule MedFabric.ExamWeb.ExamLive do
       when role in ["patient", "clinician"] do
     role = if role == "patient", do: :patient, else: :clinician
 
-    if Records.member?(Postgres, id, actor, role) do
+    trusted = !connected?(socket) or MedFabric.ExamWeb.ProxyIdentity.matches?(
+      get_connect_info(socket, :x_headers) || [], actor, Exam.lab())
+    if trusted and Records.member?(Postgres, id, actor, role) do
       if connected?(socket), do: Phoenix.PubSub.subscribe(MedFabric.Exam.PubSub, "exam:" <> id)
       token = Phoenix.Token.sign(Endpoint, "exam-preview", {id, actor, role})
 

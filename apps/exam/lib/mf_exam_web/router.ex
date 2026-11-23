@@ -113,9 +113,7 @@ defmodule MedFabric.ExamWeb.Router do
   end
 
   defp authorize_proxy(conn, id, entry, secret, current_session) do
-    with [token] <- get_req_header(conn, "x-exam-proxy-token"),
-         true <- valid_key?(token, secret),
-         [actor] <- get_req_header(conn, "x-exam-actor"),
+    with {:ok, actor} <- MedFabric.ExamWeb.ProxyIdentity.actor(conn.req_headers, secret),
          role when role in ["patient", "clinician"] <-
            Enum.find(["patient", "clinician"], &(entry[&1 <> "_actor"] == actor)),
          true <- member?(id, actor, role) do

@@ -46,6 +46,8 @@ if System.get_env("MF_LAB") == "1" do
   end
 
   urls = System.get_env("MF_TURN_URLS", "") |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+  unless Enum.all?(urls, &Regex.match?(~r/\Aturns?:[^\s,]+\z/, &1)),
+    do: raise("MF_TURN_URLS must contain turn: or turns: URLs")
   turn_secret = System.get_env("MF_TURN_SECRET")
   relay? = System.get_env("MF_RELAY_ONLY") == "1"
   if (relay? or urls != []) and (urls == [] or !is_binary(turn_secret) or byte_size(turn_secret) < 32),
