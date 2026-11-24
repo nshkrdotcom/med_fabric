@@ -1,21 +1,41 @@
-# Implementation status — November 24, 2026
+# Implementation status
 
-The source develops two simulated clinical workflows: a paired acoustic/ECG examination and an offline/replayed PLXS pulse-oximeter spot check. The server owns enrollment, encounter authorization, stream generations, immutable manifests, clinical review, derived metrics and FHIR outbox delivery. `apps/handheld` is ordinary Elixir; `apps/preview` is an optional separate native-media BEAM. The current product version is preserved; no release is authorized.
+Med Fabric 0.2.0 implements the simulated paired acoustic/ECG examination and
+PLXS pulse-oximeter spot check. The Exam server owns authorization, capture
+manifests, review, derived metrics and the FHIR outbox. The standalone handheld
+uses CA-verified WSS and a durable spool. The optional preview runs in a
+separate BEAM.
 
-The implementation includes verified WSS transport, device protocols and checksums, durable local spool, explicit gaps/reset/capacity outcomes, bounded clock intervals, persisted monitor-command outcomes, Linux file ownership locks, independent heartbeat liveness, PostgreSQL migrations and transactional acceptance, segment playback/inspection and clinical review controls. Exact finite decimals are retained through PostgreSQL JSONB and FHIR JSON. Simulation labels and source device/time remain distinct from gateway, receipt and review facts.
+## Runtime qualification
 
-## Evidence boundary
+- Elixir 1.20.5 and OTP 29.1.2 compiled the headless and native projects.
+  PostgreSQL 18.6 passed fresh migrations and repeated migration of a prior
+  schema with ready, recording, interrupted and accepted outbox records.
+- Both paired process suites passed. They verified independent PCM oracles,
+  source gaps and resets, rational-rate s24, bounded spooling, writer stalls,
+  fenced replay, server crash recovery and abrupt handheld restart. During
+  restart, a competing handheld was refused and only synchronized source
+  records were replayed. Immutable review retries and staged manifest byte
+  equality passed.
+- The isolated preview suite received real browser RTC audio, killed the preview
+  BEAM and observed the viewer disconnect while authoritative capture continued.
+  The review browser exercised WAV playback, ECG SVG inspection and alignment
+  and gap disclosure. The separate legacy browser suite passed.
+- The spot-check suite passed on HAPI FHIR R4 7.6.0. It verified synchronized
+  event replay, unusable and repeated measurements, atomic metric acceptance,
+  two remote Observations and exact read-back after a lost upstream reply.
+- Verified MedEx revisions and optional provider subdirectories are pinned in
+  the Mix locks. The plain Mix default remains headless. The source-selection
+  checks covered separate mutable paths, legacy Hex 0.1.0 and the explicit
+  missing stream-v1 diagnostic.
 
-No Elixir/OTP, PostgreSQL or container runtime was available during implementation. No server/handheld end-to-end, migration, ExUnit, native media, browser or HAPI workflow is claimed green. Python/shell/JavaScript syntax checks and Git whitespace checks passed for inspected helpers. A real loopback TCP test verified the fault proxy's exact 65,792-byte forwarding, active connection cutoff, outage rejection and reconnect; this is proxy-only evidence.
+See the [handheld runbook](guides/handheld_demo.md) for the commands and
+deployment ownership requirements. The Python runner and fault proxy drive
+the retained real-network tests.
 
-Independent review corrected FHIR instant comparison, remote ID and malformed Bundle handling, and strengthened permanent tests. The real HAPI lost-reply test forwards an actual write before discarding the upstream response. Database tests exercise competing admissions, stale leases, revocation, unknown commands, concurrent two-metric review and rollback of every derived/outbox effect when the second metric fails.
+## Physical device and clinical validation
 
-The device review also tightened receipt identity and local-prefix checks before spool retirement, prevented historical sample regeneration after a source restart, separated command admission from blocked stream locks, and preserved unanswered-command uncertainty at manifest finalization. Session resource ownership now covers initialization and interrupted connection attempts; focused cleanup regressions are included for runtime QC.
-
-## Required closure
-
-Restore the established root `VERSION` from the actual repository if it is missing; the supplied snapshot omitted that file. Resolve each selected source context separately for dev and test. Recompile Postgrex with the committed exact JSON codec. Pin new MedEx API consumers to a real verified reachable source SHA after SDK QC; old Hex remains an explicit legacy lane.
-
-Run each headless project, source selection tests, database integration tests and the complete OS-process acceptance matrix. Qualify all crash barriers, independent sibling/heartbeat progress, strict current-fence spool retirement, frozen manifest recovery, native preview process death and real HAPI read-back. Use the updated guides and the separate QC handoff for exact prerequisites and commands.
-
-Retain the simulator, provider application, fault scenarios, independent oracles, browser and database regressions. The Python process runner and transparent fault proxy are essential until replaced with equivalent passing integration coverage; deleting them while their Elixir entrypoints depend on them would remove a required gate. Scratch probes and generated lab data are disposable. Engineering evidence does not establish physical-device or clinical validity.
+Qualification still requires real ADC and oscillator measurements, channel
+calibration and units, hardware dropout and restart behavior, BLE conformance,
+target deployment security, clinician human factors, and evidence supporting
+the specific intended clinical use.
