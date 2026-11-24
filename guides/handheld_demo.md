@@ -1,6 +1,6 @@
 # Synthetic handheld lab
 
-Med Fabric records two independent reference-peripheral waveforms or a sparse PLXS collection. The workstation and the handheld communicate using authenticated WebSockets over TLS. The synthetic source clocks, units, fixed UTC test fixture and status observations describe the simulator. Physical sensors, clock-path error, BLE radio behavior and clinical performance require separate hardware and clinical qualification.
+Med Fabric records two independent reference-peripheral waveforms or a sparse PLXS collection. The workstation and the handheld communicate using authenticated WebSockets over TLS. The synthetic source clocks, units, fixed UTC test fixture and status observations describe the simulator. Physical and clinical qualification requires ADC and oscillator measurements, calibrated channels and units, hardware dropout and restart testing, BLE conformance, deployment security, and clinician human-factors evidence for the intended use.
 
 ## Choose application sources
 
@@ -39,17 +39,17 @@ The independent consumer script expects paths resolvable from its temporary cons
 
 ## Process acceptance
 
-The runner needs Python 3.10+, OpenSSL, util-linux flock, native PostgreSQL tools (initdb, postgres, psql on PATH), and bubblewrap with working unprivileged user and PID/mount namespaces on Linux. Run as a regular user. Preview and real browser gates also need Chromium, Playwright for Node and the matching Opus/RTC build prerequisites. Install Playwright into the checkout's ignored node_modules or another ancestor that Node ESM can resolve, then run `npx playwright install chromium`. A spot-check gate uses a dedicated local HTTP HAPI R4 instance at FHIR_BASE_URL or starts a Docker HAPI container. MF_HAPI_IMAGE can specify the operator's verified HAPI image digest. FHIR integration creates synthetic Patient, Encounter and Device resources and checks an intentionally dropped POST response before retry.
+The runner needs Python 3.10+, OpenSSL, util-linux flock, native PostgreSQL tools (initdb, postgres, psql on PATH), and bubblewrap with working unprivileged user and PID/mount namespaces on Linux. Run as a regular user. Preview and real browser gates also need Chromium, Playwright for Node and the matching Opus/RTC build prerequisites. Install the shared pinned browser dependencies with `(cd ops && npm ci && npx playwright install chromium)`. A spot-check gate uses a dedicated local HTTP HAPI R4 instance at FHIR_BASE_URL or starts a Docker HAPI container. MF_HAPI_IMAGE can specify the operator's verified HAPI image digest. FHIR integration creates synthetic Patient, Encounter and Device resources and checks an intentionally dropped POST response before retry.
 
 ```bash
 elixir ops/handheld_acceptance.exs --suite paired --preview off
 elixir ops/handheld_acceptance.exs --suite paired --preview isolated
 elixir ops/handheld_acceptance.exs --suite spot-check --fhir hapi
 elixir ops/handheld_acceptance.exs --suite legacy-browser
-elixir ops/handheld_acceptance.exs --suite all --preview isolated --fhir hapi --run-dir _build/full-lab --report _build/full-lab/report.json
+elixir ops/handheld_acceptance.exs --suite all --preview isolated --fhir hapi --report /path/to/report.json
 ```
 
-Each invocation needs a new empty run directory. Default directories are unique. The runner starts its own password-protected PostgreSQL cluster, Exam BEAM, client BEAM and a transparent loopback TLS proxy. Private per-role mounts hide the run tree, server artifacts, credentials, oracle and database from the handheld/sidecar. A 60-second baseline compares independently computed raw source and monitor bytes, verifies clock holdouts, cuts the uplink for ten seconds and proves audio and control make progress during a five-second ECG stall. Additional runs cover CRC/native formats, explicit 100-sample gap, source reboot interruption, capacity, stale generation, cross-encounter admission, conflicting replay and kill/restart at named file/journal/manifest/database boundaries. The spot-check runner kills the client after durable local ingestion, submits the final inventory before replay, loses an event response, exercises unusable/repeat/usable review and checks the two remote observations. Test-only barrier files under the private run directory are disabled in ordinary production runtime configuration.
+Acceptance creates and removes a system temporary directory by default. Use `--report /path/to/report.json` to retain only the report or `--run-dir /path/to/new-lab` to retain the full run for investigation. The runner starts its own password-protected PostgreSQL cluster, Exam BEAM, client BEAM and a transparent loopback TLS proxy. Private per-role mounts hide the run tree, server artifacts, credentials, oracle and database from the handheld/sidecar. A 60-second baseline compares independently computed raw source and monitor bytes, verifies clock holdouts, cuts the uplink for ten seconds and proves audio and control make progress during a five-second ECG stall. Additional runs cover CRC/native formats, explicit 100-sample gap, source reboot interruption, capacity, stale generation, cross-encounter admission, conflicting replay and kill/restart at named file/journal/manifest/database boundaries. The spot-check runner kills the client after durable local ingestion, submits the final inventory before replay, loses an event response, exercises unusable/repeat/usable review and checks the two remote observations. Test-only barrier files under the private run directory are disabled in ordinary production runtime configuration.
 
 Review report.json together with logs, chunk/index/manifest files, source identity markers, per-stream receipts and the wall-clock/host-monotonic observation. Required skips, missing prerequisites, expired deadlines and wrong outcomes fail the gate. A failed run can contain secret-bearing server.json and credential files. Keep its directory private. The report is synthetic engineering evidence.
 
@@ -86,4 +86,6 @@ Waveform spool defaults to 64 MiB and a single in-flight network frame per strea
 (cd apps/exam && MF_NETWORK_SUITE=paired mix test integration/device_network_test.exs)
 ```
 
-Retain the protocol, source-selection, recovery, authorization, clinical and external FHIR tests. The Python process runner/proxy are required today by the entry scripts. If the team consolidates orchestration into Elixir later, first qualify its replacement against the same assertions, then remove the old implementation. Generated certs, database clusters, scenario logs and spools are disposable after retaining/redacting the required failure or qualification evidence.
+The process harness and TLS fault proxy exercise separate OS processes, real
+sockets, forced outages and independent capture oracles. Treat a retained
+lab as private because it contains generated certificates and credentials.

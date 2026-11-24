@@ -2,24 +2,18 @@ defmodule MedFabric.DeviceNetworkTest do
   use ExUnit.Case, async: false
   @moduletag timeout: 1_550_000
 
-  test "external paired and spot-check producers verify real durable artifacts and reviewed outcomes" do
+  @tag :tmp_dir
+  test "external paired and spot-check producers verify real durable artifacts and reviewed outcomes",
+       %{tmp_dir: directory} do
+    on_exit(fn -> File.rm_rf!(directory) end)
     root = Path.expand("../../..", __DIR__)
-
-    run =
-      Path.join(
-        System.tmp_dir!(),
-        "fabric-network-" <> Base.url_encode64(:crypto.strong_rand_bytes(8), padding: false)
-      )
-
-    report = Path.join(run, "report.json")
+    report = Path.join(directory, "report.json")
     suite = System.get_env("MF_NETWORK_SUITE", "paired")
 
     args = [
       "ops/handheld_acceptance.exs",
       "--suite",
       suite,
-      "--run-dir",
-      run,
       "--report",
       report,
       "--preview",
@@ -28,10 +22,10 @@ defmodule MedFabric.DeviceNetworkTest do
 
     args = if suite in ["spot-check", "all"], do: args ++ ["--fhir", "hapi"], else: args
 
-    {_output, exit} =
+    {output, exit} =
       System.cmd(System.find_executable("elixir"), args, cd: root, stderr_to_stdout: true)
 
-    assert exit == 0, "Inspect retained report #{report}"
+    assert exit == 0, output
 
     assert %{"passed" => true, "skipped_required" => []} =
              e = File.read!(report) |> JSON.decode!()

@@ -1,5 +1,11 @@
 defmodule MedExHandheld.SourceTest do
   use ExUnit.Case, async: true
+
+  setup context do
+    if dir = context[:tmp_dir], do: on_exit(fn -> File.rm_rf!(dir) end)
+    :ok
+  end
+
   alias MedExHandheld.{ReferencePeripheral, RDP1, Spool, Monitor, PLXPeripheral}
 
   test "RDP1 independent CRC vector survives every split and coalesced reads" do

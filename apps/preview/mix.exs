@@ -7,15 +7,15 @@ defmodule MedFabric.Preview.MixProject do
     defaults = [
       {:med_ex, "~> 0.2.0",
        github: "nshkrdotcom/med_ex",
-       ref: "83defa6d16e5062b3b027cb0e1dbec98bac38705",
+       ref: "c031a38a9e28fe6bccf1358d8f41fa419aa708d2",
        override: true},
       {:med_ex_opus, "~> 0.2.0",
        github: "nshkrdotcom/med_ex",
-       ref: "6e69605f256925ea2f7e03a377fca9ad5bc6bce0",
+       ref: "3dbb770550ac1a4340eecb6951d5bf21c6f0fcb8",
        subdir: "extensions/med_ex_opus"},
       {:med_ex_rtc, "~> 0.2.0",
        github: "nshkrdotcom/med_ex",
-       ref: "6e69605f256925ea2f7e03a377fca9ad5bc6bce0",
+       ref: "3dbb770550ac1a4340eecb6951d5bf21c6f0fcb8",
        subdir: "extensions/med_ex_rtc"},
       {:bandit, "~> 1.6"},
       {:plug, "~> 1.16"}

@@ -1,6 +1,11 @@
 defmodule MedFabric.Exam.DeviceRootLockTest do
   use ExUnit.Case, async: false
 
+  setup context do
+    if dir = context[:tmp_dir], do: on_exit(fn -> File.rm_rf!(dir) end)
+    :ok
+  end
+
   alias MedEx.StreamWriter
   alias MedFabric.Exam.DeviceRootLock
 

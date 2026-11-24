@@ -39,9 +39,8 @@ The oxygen-saturation resource uses the R4 oxygen-saturation profile, LOINC
 `2708-6`, and UCUM `%`; device pulse uses the heart-rate profile, LOINC `8867-4`
 and UCUM `/min`. The originating exact mantissa/exponent remains in evidence.
 Decimal values are encoded as JSON numbers using `MedFabric.Interop.JSON`,
-and decoded without binary floating-point rounding. The Postgrex JSON codec
-must be `MedFabric.Store.JSON` at compile time so outbox JSONB round trips
-preserve the same numeric values. Recompile Postgrex after changing that setting.
+and decoded without binary floating-point rounding. Store connections select `MedFabric.Store.JSON` in their Postgrex type module
+so outbox JSONB round trips preserve the same numeric values.
 
 Read-back comparison requires the selected profiles and exact clinical fields,
 including method, measurement time, device, source-event lineage and simulation

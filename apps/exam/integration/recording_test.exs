@@ -8,6 +8,7 @@ defmodule MedFabric.Exam.RecordingTest do
   @moduletag :tmp_dir
 
   setup %{tmp_dir: dir} do
+    on_exit(fn -> File.rm_rf!(dir) end)
     encounter = "recording-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
     db = start_supervised!({Postgres, url: System.fetch_env!("DATABASE_URL"), pool_size: 4})
     captures = start_supervised!({DynamicSupervisor, strategy: :one_for_one})

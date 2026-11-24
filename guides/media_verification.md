@@ -4,13 +4,25 @@ The browser capture checkpoint sends a generated 997 Hz mono microphone signal t
 
 ## Local run
 
-For the unpublished MedEx candidate, run the following command from the Fabric checkout. Select the matching MedEx sources before running the browser checkpoints. [Prerequisites and workspace setup](browser_to_record.md)
+Run the browser smoke check from the Fabric root after installing the
+browser dependencies and the legacy-media Exam context described in the
+[handheld runbook](handheld_demo.md):
 
 ```sh
 elixir ops/handheld_acceptance.exs --suite legacy-browser
 ```
 
-The wrapper controls the local PostgreSQL, HAPI and exam processes across three checkpoints. It prints the capture measurements as JSON, restarts the exam, accepts and exports both records, then checks remote identities and the WAV after restart. Both role contexts in the local scenario share one Chromium process.
+The extended known-tone gate runs capture, restarts Exam, accepts and exports
+both records, then checks the remote identities and WAV again. Use dedicated
+lab services as described in [Browser to record](browser_to_record.md).
+
+```sh
+bash ops/verify_browser.sh
+```
+
+Use `--release` to exercise a compiled release and `MF_BROWSER_KEEP=1` to
+retain its private diagnostic directory. Both local browser contexts use
+one Chromium process.
 
 ## Relay run with separate network endpoints
 
@@ -21,10 +33,10 @@ Run real coturn with REST authentication (`use-auth-secret`, `static-auth-secret
 On each browser machine, install the checkout's pinned Playwright and Chromium. Launch one loopback endpoint on each machine.
 
 ```sh
-cd ops/browser
+cd ops
 npm ci
 npx playwright install --with-deps chromium
-MF_BROWSER_PORT=9333 node endpoint.mjs
+MF_BROWSER_PORT=9333 node browser/endpoint.mjs
 ```
 
 Each launcher prints a private WebSocket endpoint with an unguessable path. Keep its terminal open. Use two SSH forwards from the control machine and retain each endpoint's path.
@@ -38,7 +50,7 @@ ssh -NT -L 29333:127.0.0.1:9333 clinician-browser
 On the control machine, install the same pinned Playwright version. Create two role-specific Playwright storage-state files using the deployment's identity provider. For a cookie-based browser login, run the commands below in separate fresh sessions, complete the login as the indicated actor and close the browser to save its state. Keep the state files and endpoint paths private. The proxy must recognize each role session when used from its browser machine. Use deployment-provisioned role states if the identity provider binds sessions to the originating device.
 
 ```sh
-cd ops/browser
+cd ops
 npm ci
 npx playwright install chromium
 umask 077
@@ -53,15 +65,15 @@ npx playwright codegen --save-storage="$MF_CLINICIAN_STORAGE_STATE" "$MF_PUBLIC_
 export MF_PATIENT_BROWSER_WS='ws://127.0.0.1:19333/<patient-endpoint-path>'
 export MF_CLINICIAN_BROWSER_WS='ws://127.0.0.1:29333/<clinician-endpoint-path>'
 set -o pipefail
-node check.mjs --capture --relay | tee "$HOME/.local/state/med-fabric-qc/relay.json"
+node browser/check.mjs --capture --relay | tee "$HOME/.local/state/med-fabric-qc/relay.json"
 ```
 
 For the export checkpoints, set `FHIR_BASE_URL` on the control machine to the synthetic HAPI endpoint used by this encounter. Restart the exam on its host between checkpoints. The control machine needs read access to that FHIR endpoint. Refresh the browser endpoint variables if the endpoint processes restart.
 
 ```sh
-node check.mjs --relay
+node browser/check.mjs --relay
 # Restart the exam and HAPI with their persisted volumes, then rerun the read-back.
-node check.mjs --relay --after-restart
+node browser/check.mjs --relay --after-restart
 ```
 
 The Chromium processes run on the endpoint machines. SSH carries Playwright control traffic. ICE, RTP, PCM, and authenticated page traffic originate at the browsers. The API requests that inspect authorized HTTP byte ranges originate at the Playwright API context, which carries the role's session cookies. Record endpoint networks, coturn version, exam/SDK revisions, and deployment configuration alongside the JSON for each run. Keep credentials out of the report.

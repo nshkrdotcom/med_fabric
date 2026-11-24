@@ -1,5 +1,11 @@
 defmodule MedExHandheld.SessionCleanupTest do
   use ExUnit.Case, async: true
+
+  setup context do
+    if dir = context[:tmp_dir], do: on_exit(fn -> File.rm_rf!(dir) end)
+    :ok
+  end
+
   alias MedExHandheld.{Session, Spool}
 
   @tag :tmp_dir

@@ -154,6 +154,17 @@ start_hapi() {
   fi
 }
 
+stop_hapi() {
+  local pid attempt
+  pid="$(hapi_pid)" || return 0
+  kill "$pid"
+  for ((attempt=0;attempt<60;attempt++)); do
+    hapi_pid >/dev/null || return 0
+    sleep 1
+  done
+  die "HAPI failed to stop"
+}
+
 print_env() {
   printf 'export DATABASE_URL=%q\n' "${DATABASE_URL:-$native_db_url}"
   printf 'export FHIR_BASE_URL=%q\n' "${FHIR_BASE_URL:-$native_fhir_url}"
@@ -180,13 +191,8 @@ case "${1:-}" in
     print_env
     ;;
   restart-hapi)
-    pid="$(hapi_pid)" || die "No owned HAPI process in $state"
-    kill "$pid"
-    for ((attempt=0;attempt<60;attempt++)); do
-      hapi_pid >/dev/null || break
-      sleep 1
-    done
-    hapi_pid >/dev/null && die "HAPI failed to stop"
+    hapi_pid >/dev/null || die "No owned HAPI process in $state"
+    stop_hapi
     start_hapi
     wait_hapi "$native_fhir_url"
     ;;
@@ -197,9 +203,7 @@ case "${1:-}" in
     print_env
     ;;
   stop)
-    if pid="$(hapi_pid)"; then
-      kill "$pid"
-    fi
+    stop_hapi
     if [[ -s "$state/pgdata/PG_VERSION" ]]; then
       bin="$(pg_bin)"
       if "$bin/pg_ctl" -D "$state/pgdata" status >/dev/null; then

@@ -60,11 +60,18 @@ defmodule MedFabric.Exam.DeviceReviewTest do
     rows =
       S.rows(
         c.db,
-        "SELECT a.evidence,d.resource FROM acquisitions a JOIN outbox_deliveries d ON (d.encounter_id,d.acquisition_id)=(a.encounter_id,a.id) WHERE a.parent_acquisition_id=$1 ORDER BY a.evidence->>'kind'",
+        """
+        SELECT a.evidence, d.resource, jsonb_typeof(d.resource #> '{valueQuantity,value}')
+        FROM acquisitions a
+        JOIN outbox_deliveries d ON (d.encounter_id, d.acquisition_id) = (a.encounter_id, a.id)
+        WHERE a.parent_acquisition_id = $1
+        ORDER BY a.evidence->>'kind'
+        """,
         [c.bind.id]
       )
 
-    for [evidence, resource] <- rows do
+    for [evidence, resource, value_type] <- rows do
+      assert value_type == "number"
       assert evidence["provenance"]["simulated"]
       assert evidence["source_event_id"] == "measurement-one"
       assert resource["device"]["reference"] == "Device/synthetic-plx"
@@ -72,7 +79,7 @@ defmodule MedFabric.Exam.DeviceReviewTest do
       assert resource["issued"] != resource["effectiveDateTime"]
     end
 
-    [_, [_, oxygen]] = rows
+    [_, [_, oxygen, _]] = rows
     assert Decimal.equal?(oxygen["valueQuantity"]["value"], Decimal.new("97.2"))
 
     assert {:error, :review_conflict} =

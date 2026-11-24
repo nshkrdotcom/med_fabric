@@ -1,3 +1,5 @@
+Postgrex.Types.define(MedFabric.Store.Postgres.Types, [], json: MedFabric.Store.JSON)
+
 defmodule MedFabric.Store.Postgres do
   @moduledoc "Native PostgreSQL connection and schema setup."
 
@@ -16,7 +18,11 @@ defmodule MedFabric.Store.Postgres do
     location = if connection[:socket_dir], do: [], else: [hostname: uri.host || "localhost"]
 
     Postgrex.start_link(
-      [database: URI.decode(String.trim_leading(uri.path, "/")), port: uri.port || 5432] ++
+      [
+        database: URI.decode(String.trim_leading(uri.path, "/")),
+        port: uri.port || 5432,
+        types: MedFabric.Store.Postgres.Types
+      ] ++
         location ++ auth ++ connection ++ opts
     )
   end

@@ -29,7 +29,7 @@ manual listening check, and optional local workspace SDK testing.
 
 ## Verify the source checkout
 
-Select the matching MedEx source as documented in [the handheld runbook](handheld_demo.md). Run the retained browser gate against an isolated lab:
+Prepare the legacy media Exam context and browser dependencies using the [handheld runbook](handheld_demo.md). Run the browser gate against an isolated lab:
 
 ```bash
 elixir ops/handheld_acceptance.exs --suite legacy-browser
@@ -65,6 +65,9 @@ export MF_EXAM_LEGACY_MEDIA=1
 MF_LAB=1 "$MF_RELEASE_DIR/bin/mf_exam" start
 ```
 
+The legacy media profile has its own build directory, so switching back to
+headless Exam does not reuse native application metadata.
+
 Run the seed command sequentially for each synthetic encounter, changing the ID, actors and keys. It writes a private JSON array. Each entry carries its own patient/clinician actors, FHIR destination, Patient reference and Encounter reference. Boot binds those identifiers in PostgreSQL. Conflicting existing bindings fail startup. The lab seed marks its FHIR encounter in progress. To use existing resources, provision the file directly. Keep the file outside Git.
 
 The local endpoint listens on `127.0.0.1` at `MF_HTTP_PORT` (default 4000). In separate browser profiles open the encounter with the relevant key, for example `http://localhost:4000/encounters/exam-a?key=YOUR_PATIENT_KEY`. The server exchanges it for a session and redirects. Select conversation microphones independently on each side. On the patient page select the diagnostic input, start capture, and finish. If the reply is lost, reload the same tab or select **Check recording outcome**. The clinician sees recording duration, source label and first-frame receipt time, can seek during playback and explicitly accept and deliver either evidence kind. Stop the release with Ctrl-C.
@@ -81,6 +84,6 @@ Set `MF_TURN_URLS` to comma-separated TURN URIs and `MF_TURN_SECRET` to the shar
 - `core/store` runs native transaction and encounter-isolation cases with `mix test integration` and `DATABASE_URL`.
 - `core/interop` runs pure FHIR comparison cases with `mix test`. Run `mix test integration` with `FHIR_BASE_URL` for the native HAPI retry.
 - `apps/exam` runs artifact, range and proxy cases with `mix test`, and the interrupted recording scenarios with `env -u MF_LAB mix test integration` and `DATABASE_URL`. Select the matching source in `.mix_sources.json`.
-- The deployable exam currently pins the single dependency-constraint change from Ratio PR 131 at commit `05191db`. The lock resolves Numbers 5.2.5 and Decimal 3.2.0. Run `mix hex.audit` in the exam and review the pinned Git change separately. Remove the Git pin when a Hex Ratio release admits Decimal 3. MedEx itself continues to declare Hex dependencies. [Ratio PR 131](https://github.com/qqwy/elixir-rational/pull/131)
+- The optional legacy media profile pins the dependency-constraint change from Ratio PR 131 at commit `05191db`. The lock resolves Numbers 5.2.5 and Decimal 3.2.0. Run `mix hex.audit` in the exam and review the pinned Git change separately. Remove the Git pin when a Hex Ratio release admits Decimal 3. MedEx itself continues to declare Hex dependencies. [Ratio PR 131](https://github.com/qqwy/elixir-rational/pull/131)
 
 See [Architecture and roadmap](architecture_and_roadmap.md) for storage ownership and clinical invariants.

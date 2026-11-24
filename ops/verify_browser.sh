@@ -6,14 +6,13 @@ umask 077
 for tool in mix node openssl curl psql jq; do
   command -v "$tool" >/dev/null || { echo "Missing prerequisite: $tool. Run ./onboard.sh --integration." >&2; exit 1; }
 done
-[[ -d ops/browser/node_modules/playwright ]] || { echo "Run ./onboard.sh --integration." >&2; exit 1; }
+[[ -d ops/node_modules/playwright ]] || { echo "Run ./onboard.sh --integration." >&2; exit 1; }
 
-export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-$PWD/_build/playwright}"
 mode="${1:-}"
 [[ -z "$mode" || "$mode" == "--release" ]] || { echo "Usage: $0 [--release]" >&2; exit 1; }
 
-mkdir -p _build
-work="$(mktemp -d "$PWD/_build/browser.XXXXXXXX")"
+work="$(mktemp -d "${TMPDIR:-/tmp}/med-fabric-browser.XXXXXXXX")"
+export MF_EXAM_LEGACY_MEDIA=1
 export MF_EXAM_ID="exam-$(openssl rand -hex 8)"
 export MF_LAB=1
 export MF_HTTP_PORT="${MF_HTTP_PORT:-14000}"
@@ -40,8 +39,15 @@ cleanup() {
   if [[ "$MF_SERVICE_STATE" == "$work/services" && -d "$MF_SERVICE_STATE" ]]; then
     ops/local_services.sh stop
   fi
+  if [[ "${MF_BROWSER_KEEP:-0}" == 1 ]]; then
+    printf 'Evidence directory %s\n' "$work"
+  else
+    rm -rf -- "$work"
+  fi
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [[ -z "${DATABASE_URL:-}" || -z "${FHIR_BASE_URL:-}" ]]; then
   native_env="$(ops/local_services.sh start)"
@@ -62,7 +68,7 @@ for package in core/store core/interop; do
   (cd "$package" && env -u MIX_EXS -u MIX_DEPS_PATH -u MIX_BUILD_PATH -u MIX_LOCKFILE \
     -u MF_MED_EX_PATH -u MIX_ENV -u MF_LAB mix test integration)
 done
-(cd apps/exam && env -u MF_LAB MIX_ENV=test mix test integration)
+(cd apps/exam && env -u MF_LAB mix test integration/{recording,encounter_scope}_test.exs)
 
 if [[ "$mode" == "--release" ]]; then
   (cd apps/exam && env -u MF_LAB MIX_ENV=prod mix release --path "$work/release" --overwrite) >"$work/release.log" 2>&1 ||
@@ -96,4 +102,3 @@ stop_exam
 if "$owns_hapi"; then ops/local_services.sh restart-hapi; fi
 start_exam
 node ops/browser/check.mjs --after-restart
-echo "Evidence directory $work"

@@ -8,6 +8,7 @@ defmodule MedFabric.Exam.ArtifactTest do
   @id "a-valid-recording-id-123"
 
   setup %{tmp_dir: dir} do
+    on_exit(fn -> File.rm_rf!(dir) end)
     pcm = <<10, 20, 30, 40>>
 
     wav =

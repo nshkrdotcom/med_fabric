@@ -9,7 +9,7 @@ defmodule MedExHandheld.MixProject do
         [
           {:med_ex, "~> 0.2.0",
            github: "nshkrdotcom/med_ex",
-           ref: "83defa6d16e5062b3b027cb0e1dbec98bac38705",
+           ref: "c031a38a9e28fe6bccf1358d8f41fa419aa708d2",
            override: true},
           {:gun, "~> 2.8.0"}
         ],

@@ -167,7 +167,9 @@ class Lab:
     def wait(self,fn,timeout=30,p=None):
         end=time.monotonic()+timeout
         while time.monotonic()<end:
-            if p and p.poll() is not None: raise RuntimeError("subprocess exited before readiness; see retained logs")
+            if p and p.poll() is not None:
+                item = next(item for process, item in self.procs if process == p)
+                raise RuntimeError(f"{item['log']} exited with status {p.returncode} before readiness")
             try:
                 value=fn()
                 if value: return value
@@ -583,14 +585,25 @@ def main():
     parser.add_argument("--fhir",choices=["hapi"])
     parser.add_argument("--report",type=pathlib.Path)
     a=parser.parse_args()
-    directory=(a.run_dir or pathlib.Path(tempfile.mkdtemp(prefix="med-fabric-"))).resolve()
     if a.operation=="prepare":
-        prepare(directory);print(f"Prepared synthetic lab at {directory}");return 0
+        directory=(a.run_dir or pathlib.Path(tempfile.mkdtemp(prefix="med-fabric-"))).resolve()
+        prepare(directory)
+        print(f"Prepared synthetic lab at {directory}")
+        return 0
+    if a.run_dir:
+        return run_acceptance(a, a.run_dir.resolve(), a.report or a.run_dir/"report.json")
+    with tempfile.TemporaryDirectory(prefix="med-fabric-") as directory:
+        return run_acceptance(a, pathlib.Path(directory).resolve(), a.report)
+
+def run_acceptance(a, directory, target):
     lab=Lab(a,directory)
-    target=a.report or directory/"report.json"
     def expired(*_):
         raise TimeoutError("suite deadline exceeded")
+    def interrupted(*_):
+        raise InterruptedError("suite interrupted")
     signal.signal(signal.SIGALRM,expired)
+    signal.signal(signal.SIGTERM,interrupted)
+    signal.signal(signal.SIGINT,interrupted)
     signal.alarm({"paired":900,"spot-check":300,"legacy-browser":300,"all":1500}[a.suite])
     try:
         lab.execute()
@@ -603,9 +616,19 @@ def main():
         signal.alarm(0)
         try:lab.close()
         except Exception as e:lab.report.update(passed=False,cleanup_error=str(e))
-        target.parent.mkdir(parents=True,exist_ok=True)
-        save(target,lab.report)
-    print(f"Acceptance report {target}")
+        if target:
+            target.parent.mkdir(parents=True,exist_ok=True)
+            save(target,lab.report)
+    if target:
+        print(f"Acceptance report {target}")
+    if lab.report["passed"]:
+        print("Passed: " + ", ".join(lab.required))
+    else:
+        location = lab.report.get("failure_location")
+        if location:
+            print(f'{location["file"]}:{location["line"]} ({location["function"]})', file=sys.stderr)
+        print(lab.report.get("cleanup_error") or lab.report.get("error", "Acceptance failed"),
+              file=sys.stderr)
     return 0 if lab.report["passed"] else 1
 if __name__=="__main__":
     sys.exit(main())
