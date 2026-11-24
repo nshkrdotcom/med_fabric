@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
 import urllib.error
 import urllib.request
 import urllib.parse
@@ -52,11 +53,20 @@ def prepare(directory):
         file = directory/name
         file.write_text(secrets.token_urlsafe(48))
         file.chmod(0o600)
-    crt, key = directory/"cert.pem", directory/"key.pem"
-    subprocess.run(["openssl","req","-x509","-newkey","rsa:2048","-nodes","-days","2",
-                    "-subj","/CN=localhost","-addext","subjectAltName=DNS:localhost,IP:127.0.0.1",
-                    "-addext","basicConstraints=critical,CA:TRUE","-keyout",str(key),"-out",str(crt)],
-                   check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    ca, crt, key = directory/"ca.pem", directory/"cert.pem", directory/"key.pem"
+    with tempfile.TemporaryDirectory(dir=directory) as certificate_work:
+        ca_key = pathlib.Path(certificate_work)/"ca.key"
+        common = ["openssl","req","-x509","-newkey","rsa:2048","-nodes","-days","2"]
+        quiet = {"check":True,"stdout":subprocess.DEVNULL,"stderr":subprocess.DEVNULL}
+        subprocess.run(common+["-subj","/CN=MedFabric synthetic lab CA",
+                        "-addext","basicConstraints=critical,CA:TRUE",
+                        "-addext","keyUsage=critical,keyCertSign,cRLSign",
+                        "-keyout",str(ca_key),"-out",str(ca)],**quiet)
+        subprocess.run(common+["-CA",str(ca),"-CAkey",str(ca_key),"-subj","/CN=localhost",
+                        "-addext","subjectAltName=DNS:localhost,IP:127.0.0.1",
+                        "-addext","basicConstraints=critical,CA:FALSE",
+                        "-addext","extendedKeyUsage=serverAuth",
+                        "-keyout",str(key),"-out",str(crt)],**quiet)
     key.chmod(0o600)
     tag = secrets.token_hex(6)
     encounter = {"exam":"fixture-"+tag,"patient_actor":"synthetic-patient","clinician_actor":"synthetic-reviewer",
@@ -75,7 +85,7 @@ def prepare(directory):
     secondary_token.write_text(secrets.token_urlsafe(48));secondary_token.chmod(0o600)
     cfg["encounters"].append(secondary)
     cfg["devices"].append({"id":"secondary-gateway","exam":secondary["exam"],"credential_file":str(secondary_token)})
-    client={"server":f"wss://localhost:{p}","ca_file":str(crt),"credential_file":str(directory/"device.credential"),
+    client={"server":f"wss://localhost:{p}","ca_file":str(ca),"credential_file":str(directory/"device.credential"),
             "device":"reference-gateway","encounter":encounter["exam"],"acquisition":"paired-"+tag,
             "seed":37,"seconds":60,"spool_root":str(directory/"spool"),"spool_limit":67108864,"preview":False}
     save(directory/"server.json",cfg)
@@ -104,6 +114,7 @@ class Lab:
                      "unknown_command_outcome_exercised":False,"preview_os_process_killed":False,"bounds_respected":False}
         self.started=time.monotonic(); self.procs=[]; self.seq=0; self.server=None; self.preview=None
         self.env=dict(os.environ,PGHOST="127.0.0.1",PGPORT=str(self.cfg["postgres_port"]),PGUSER="lab",PGDATABASE="postgres",PGPASSWORD=(directory/"postgres.credential").read_text())
+        self.env.pop("SSLKEYLOGFILE", None)
         self.browser=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         self.container=None
     def isolate(self,role,args,config=None):
@@ -118,7 +129,7 @@ class Lab:
         elif role=="preview":
             files=["preview.credential"];dirs=[]
         else:
-            files=[str(pathlib.Path(config).relative_to(self.dir)),"cert.pem",pathlib.Path(read(pathlib.Path(config))["credential_file"]).name]
+            files=[str(pathlib.Path(config).relative_to(self.dir)),"ca.pem",pathlib.Path(read(pathlib.Path(config))["credential_file"]).name]
             cfg=read(pathlib.Path(config))
             spool="spool/"+cfg["acquisition"]
             (self.dir/spool).mkdir(exist_ok=True,parents=True)
@@ -209,7 +220,7 @@ class Lab:
         else:
             self.container="fabric-hapi-"+secrets.token_hex(6)
             port=e["destination"].split(":")[-1].split("/")[0]
-            self.launch("hapi",["docker","run","--rm","--name",self.container,"-p",f"127.0.0.1:{port}:8080",os.getenv("MF_HAPI_IMAGE","hapiproject/hapi:v7.6.1")])
+            self.launch("hapi",["docker","run","--rm","--name",self.container,"-p",f"127.0.0.1:{port}:8080",os.getenv("MF_HAPI_IMAGE","hapiproject/hapi:v7.6.0")])
         base=e["destination"]
         cap=self.wait(lambda:json.loads(self.get(base+"/metadata")),timeout=120)
         if not cap["fhirVersion"].startswith("4.0"):raise ValueError("FHIR R4 required")
@@ -246,7 +257,10 @@ class Lab:
     def client_process(self,profile,case,**changes):
         cfg=dict(self.client,acquisition=case+"-"+secrets.token_hex(5),preview=self.a.preview=="isolated",**changes)
         path=self.dir/(cfg["acquisition"]+".json");save(path,cfg)
-        return cfg,self.launch(case,["mix","run","-e","MedExHandheld.CLI.main(System.argv())","--","--config",path,"--scenario",profile],ROOT/"apps/handheld")
+        return cfg,self.run_client(cfg,profile,case)
+    def run_client(self,cfg,profile,name):
+        path=self.dir/(cfg["acquisition"]+".json")
+        return self.launch(name,["mix","run","-e","MedExHandheld.CLI.main(System.argv())","--","--config",path,"--scenario",profile],ROOT/"apps/handheld")
     def manifest(self,cfg):
         path=self.dir/"artifact"/"device-v1"/sha(cfg["acquisition"].encode())/"manifest.mej1"
         blob=path.read_bytes()
@@ -276,7 +290,9 @@ class Lab:
                 assert a==edge
                 edge=b
             num,den=map(int,desc["sample_rate"])
-            if not cfg.get("spool_limit",67108864)<67108864 and not cfg.get("reset"):
+            if cfg.get("restart_cutoffs"):
+                assert edge==cfg["restart_cutoffs"][name],(name,edge,cfg["restart_cutoffs"])
+            elif not cfg.get("spool_limit",67108864)<67108864 and not cfg.get("reset"):
                 assert edge==cfg["seconds"]*num//den,(edge,cfg["seconds"]*num//den)
             expected_gap=[(1920,2020)] if cfg.get("gap") and name=="audio" else []
             assert gaps==expected_gap
@@ -320,6 +336,7 @@ class Lab:
         if self.preview:
             viewer=self.launch("rtc-viewer",["node",ROOT/"ops/handheld/monitor_viewer.mjs",self.dir/"server.json",id,self.dir/"viewer.ready"])
             self.wait((self.dir/"viewer.ready").exists,p=viewer)
+            self.viewer = viewer
         self.action(id,"monitor_gain",gain="half")
         self.wait(lambda: count("device_facts",f"acquisition_id='{id}' AND kind='command_outcome_unknown'")>0,p=child)
         barrier.touch()
@@ -346,12 +363,20 @@ class Lab:
                 self.stop(self.preview,kill=True)
                 assert self.preview.returncode==-signal.SIGKILL
                 self.report["preview_os_process_killed"]=True
+                assert self.viewer.wait(15) == 0, "viewer did not observe preview loss"
                 self.start_preview()
             outage=self.dir/"outage"
             outage.touch();time.sleep(10);outage.unlink()
+        staged = None
         if armed:
             reached=armed.with_suffix(".reached")
             self.wait(reached.exists,p=p)
+            if barrier in ["manifest_install.all","db_completion.all"]:
+                digest, raw = self.sql(
+                    f"SELECT digest,encode(bytes,'hex') FROM device_manifest_staging WHERE acquisition_id='{cfg['acquisition']}'"
+                ).split("|")
+                staged = (digest, bytes.fromhex(raw))
+                assert sha(staged[1]) == digest
             self.stop(self.server,kill=True)
             reached.unlink()
             self.start_server();self.login()
@@ -360,6 +385,9 @@ class Lab:
         root,digest,m=self.manifest(cfg)
         res=self.oracle(cfg,root,m)
         res.update(manifest_digest=digest,manifest_path=str(root.relative_to(self.dir)/"manifest.mej1"))
+        if staged:
+            assert staged == (digest, (root/"manifest.mej1").read_bytes())
+            res["staged_bytes_preserved"]=True
         if case=="baseline":
             for k in ["raw_payload_digests","oracle_payload_digests","duplicate_logical_frames"]:self.report[k]=res[k]
             checks=res["clock_holdouts"]
@@ -389,11 +417,67 @@ class Lab:
             choice={"decision":decision,"note":"Synthetic review","ranges":[{"stream":stream,"first":seg["first_sample"],"end":seg["end_sample"]}],"metrics":[],"acknowledged":m["defects"]}
         else:
             choice={"decision":"reject","note":"No verified samples","metrics":[]}
+        if case in ["spool-capacity","source-reset"]:
+            decision = "reject" if case == "spool-capacity" else "repeat"
+            choice={"decision":decision,"note":"Verified synthetic interruption","metrics":[]}
         self.action(cfg["acquisition"],"review",expect=409,digest="0"*64,choice=choice)
         self.action(cfg["acquisition"],"review",digest=digest,choice=choice)
+        self.action(cfg["acquisition"],"review",digest=digest,choice=choice)
+        self.action(cfg["acquisition"],"review",expect=409,digest=digest,
+                    choice=dict(choice,note="Conflicting immutable edit"))
+        res["review_decision"]=choice["decision"]
+        if self.a.preview=="isolated" and case in ["baseline","source-gap"]:
+            self.run("paired-review-ui",["node",ROOT/"ops/handheld/paired_review.mjs",
+                                         self.dir/"server.json",cfg["acquisition"],choice["decision"]])
+            res["browser_review_verified"]=True
         self.report["review_revisions"].append(digest)
         self.report["scenarios"][case]=res
         return res
+    def paired_restart(self):
+        cfg, child = self.client_process(PAIRED,"handheld-restart",seconds=12)
+        root = self.dir/"spool"/cfg["acquisition"]
+        names = ["audio","ecg"]
+        self.wait(lambda:self.sql(
+            f"SELECT count(*) FROM stream_attempts WHERE acquisition_id='{cfg['acquisition']}'"
+        )=="2",p=child)
+        outage=self.dir/"outage"
+        outage.touch()
+        self.wait(lambda:all(len(list((root/n).glob("*.rec")))>=3 for n in names),p=child)
+        duplicate=self.run_client(cfg,PAIRED,"handheld-duplicate")
+        assert duplicate.wait(10)!=0
+        duplicate_log=self.dir/self.procs[-1][1]["log"]
+        assert "spool already owned" in duplicate_log.read_text()
+        self.stop(child,kill=True)
+        assert child.returncode==-signal.SIGKILL
+
+        cutoffs={}
+        for n in names:
+            cursor=read(root/n/"source.json")
+            assert not cursor["done"]
+            sequence, sample=cursor["sequence"],cursor["sample"]
+            while (record:=root/n/f"{sequence}.rec").exists():
+                data=record.read_bytes()
+                known,frame=data[:32],data[32:]
+                assert hashlib.sha256(frame).digest()==known
+                assert frame[:4]==b"MEX1"
+                seq,first,count=struct.unpack_from(">QQI",frame,20)
+                assert (seq,first)==(sequence,sample)
+                sequence+=1
+                sample+=count
+            cutoffs[n]=sample
+
+        outage.unlink()
+        resumed=self.run_client(cfg,PAIRED,"handheld-replay")
+        assert resumed.wait(45)==0
+        artifacts,digest,m=self.manifest(cfg)
+        assert all(stream["index"]["terminal"]=="interrupted" for stream in m["streams"].values())
+        settings=dict(cfg,restart_cutoffs=cutoffs)
+        result=self.oracle(settings,artifacts,m)
+        result.update(manifest_digest=digest,synchronized_cutoffs=cutoffs,second_owner_refused=True)
+        self.action(cfg["acquisition"],"review",digest=digest,
+                    choice={"decision":"repeat","note":"Handheld restart interrupted capture","metrics":[]})
+        self.report["review_revisions"].append(digest)
+        self.report["scenarios"]["handheld-restart"]=result
     def paired(self):
         self.paired_case("baseline",seconds=60,lose_command_ack=True,trace_monitor=True)
         self.paired_case("source-gap",seconds=3,gap=True)
@@ -413,6 +497,7 @@ class Lab:
         self.report["scenarios"]["network-denials"]=read(pathlib.Path(cfg["negative_result"]))
         reset=self.paired_case("source-reset",seconds=4,reset=True)
         assert reset["coverage"]["ecg"]["samples"]==75
+        self.paired_restart()
         r=self.sql("SELECT max(max_frame_bytes),max(max_pending_bytes),max(max_pending_frames) FROM device_limits_observed").split("|")
         maxima={"frame_bytes":int(r[0]),"pending_bytes":int(r[1]),"pending_frames":int(r[2]),
                 "spool_bytes":max(read(p)["spool"]["maximum"] for p in (self.dir/"spool").glob("*/result.json")),
@@ -510,7 +595,10 @@ def main():
     try:
         lab.execute()
     except Exception as e:
-        lab.report.update(passed=False,error=type(e).__name__+": "+str(e))
+        failure = traceback.extract_tb(e.__traceback__)[-1]
+        lab.report.update(passed=False,error=type(e).__name__+": "+str(e),
+                          failure_location={"file":pathlib.Path(failure.filename).name,
+                                            "line":failure.lineno,"function":failure.name})
     finally:
         signal.alarm(0)
         try:lab.close()

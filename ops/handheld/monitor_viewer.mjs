@@ -11,8 +11,10 @@ try{
   const view=page.locator("#listen-"+id);
   await view.locator("button").click();
   await page.waitForFunction(id=>{
-    const el=document.querySelector("#listen-"+id+" audio");
-    return el?.srcObject?.getAudioTracks()[0]?.readyState==="live" && el.currentTime>0.1;
+    const monitor=document.getElementById("listen-"+id);
+    const audio=monitor?.querySelector("audio");
+    return monitor?.querySelector("output").textContent==="connected" &&
+      audio?.srcObject?.getAudioTracks()[0]?.readyState==="live" && audio.currentTime>0.1;
   },id,{timeout:25000});
   await writeFile(ready,"received synthetic monitor audio\n");
   await page.waitForFunction(id=>document.querySelector("#listen-"+id+" output")?.textContent==="Disconnected",id,{timeout:45000});
