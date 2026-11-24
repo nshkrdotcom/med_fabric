@@ -69,7 +69,20 @@ if System.get_env("MF_LAB") == "1" do
        (urls == [] or !is_binary(turn_secret) or byte_size(turn_secret) < 32),
      do: raise("TURN requires MF_TURN_URLS and a 32-byte or longer MF_TURN_SECRET")
 
+  cert=System.get_env("MF_DEVICE_TLS_CERTFILE")
+  key=System.get_env("MF_DEVICE_TLS_KEYFILE")
+  if is_nil(cert) != is_nil(key),do: raise("Configure both device TLS certificate and key")
+  if cert do
+    {:ok,bind_ip}=:inet.parse_address(String.to_charlist(System.get_env("MF_DEVICE_BIND_IP","127.0.0.1")))
+    config :mf_exam,MedFabric.ExamWeb.Endpoint,https: [ip: bind_ip,port: String.to_integer(System.get_env("MF_DEVICE_TLS_PORT","4443")),certfile: cert,keyfile: key]
+  end
+  if sidecar=System.get_env("MF_PREVIEW_URL") do
+    uri=URI.new!(sidecar)
+    unless uri.scheme=="http" and uri.host in ["127.0.0.1","localhost"],do: raise("Preview feed must use a same-host listener")
+    config :mf_exam,:sidecar,%{url: sidecar,secret: File.read!(System.fetch_env!("MF_PREVIEW_CREDENTIAL_FILE")) |> String.trim()}
+  end
   config :mf_exam, :lab, %{
+    device_enabled: not is_nil(cert),
     encounters: entries,
     local?: local?,
     proxy_secret: if(local?, do: nil, else: proxy_secret),
@@ -84,4 +97,9 @@ if System.get_env("MF_LAB") == "1" do
     url: [scheme: uri.scheme, host: uri.host, port: uri.port],
     http: [ip: {127, 0, 0, 1}, port: port],
     secret_key_base: System.fetch_env!("MF_SECRET_KEY_BASE")
+end
+
+if System.get_env("MF_EXAM_LEGACY_MEDIA")=="1" do
+  config :med_ex, :rtc_provider, MedEx.RTC.Provider
+  config :med_ex, :preview_provider, MedEx.Opus.Provider
 end

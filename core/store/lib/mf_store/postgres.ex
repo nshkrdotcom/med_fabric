@@ -48,11 +48,17 @@ defmodule MedFabric.Store.Postgres do
     Postgrex.transaction(db, fn conn ->
       Postgrex.query!(conn, "SELECT pg_advisory_xact_lock(73160649)", [])
 
-      scripts
-      |> Enum.flat_map(fn path -> path |> File.read!() |> String.split(";") end)
-      |> Enum.map(&String.trim/1)
-      |> Enum.reject(&(&1 == ""))
-      |> Enum.each(&Postgrex.query!(conn, &1, []))
+      Postgrex.query!(conn, "CREATE TABLE IF NOT EXISTS mf_schema_history (name text PRIMARY KEY)", [])
+      Enum.each(scripts, fn path ->
+        name = Path.basename(path)
+        if Postgrex.query!(conn, "SELECT name FROM mf_schema_history WHERE name=$1", [name]).rows == [] do
+          sql = File.read!(path)
+          delimiter = if String.starts_with?(sql, "-- statement"), do: "-- statement", else: ";"
+          sql |> String.split(delimiter) |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+          |> Enum.each(&Postgrex.query!(conn, &1, []))
+          Postgrex.query!(conn, "INSERT INTO mf_schema_history VALUES ($1)", [name])
+        end
+      end)
     end)
   end
 end

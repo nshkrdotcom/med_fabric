@@ -243,6 +243,39 @@ const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
 const liveSocket = new LiveSocket("/live", Socket, {
   params: { _csrf_token: csrfToken },
   hooks: {
+    DeviceMonitor: {
+      mounted() {
+        const audio = this.el.querySelector("audio");
+        const output = this.el.querySelector("output");
+        this.request = async (operation, data = {}) => {
+          const response = await fetch(this.el.dataset.endpoint, {method: "POST", headers: {
+            "content-type": "application/json", "x-csrf-token": document.querySelector("meta[name=csrf-token]").content
+          }, body: JSON.stringify({operation, ...data})});
+          if (!response.ok) throw new Error("Preview unavailable");
+          return response.json();
+        };
+        this.el.querySelector("button").onclick = async () => {
+          try {
+            this.peer?.close();
+            const ice = await fetch(this.el.dataset.endpoint.split("/devices/")[0] + "/ice").then(r => r.json());
+            this.peer = new RTCPeerConnection(ice);
+            this.peer.addTransceiver("audio", {direction: "recvonly"});
+            this.peer.ontrack = e => {audio.srcObject = new MediaStream([e.track]); audio.play().catch(() => {});};
+            await this.peer.setLocalDescription(await this.peer.createOffer());
+            await new Promise((resolve, reject) => {
+              const timer = setTimeout(() => reject(new Error("ICE gathering timeout")), 6000);
+              const check = () => {if (this.peer.iceGatheringState === "complete") {clearTimeout(timer);resolve();}};
+              this.peer.onicegatheringstatechange = check; check();
+            });
+            const answer = await this.request("offer", {sdp: this.peer.localDescription.sdp});
+            await this.peer.setRemoteDescription({type: "answer", sdp: answer.sdp});
+            clearInterval(this.timer);
+            this.timer = setInterval(() => this.request("status").then(s => output.textContent = s.state).catch(() => output.textContent = "Disconnected"), 2000);
+          } catch (error) { output.textContent = error.message; this.peer?.close(); }
+        };
+      },
+      destroyed() {clearInterval(this.timer);this.peer?.close();this.request("close").catch(() => {});}
+    },
     Capture,
     Talkback,
     MedExSessionHook: createMedExHook({

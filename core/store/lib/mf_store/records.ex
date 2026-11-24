@@ -59,7 +59,7 @@ defmodule MedFabric.Store.Records do
            SET conflict = a.conflict OR (a.evidence <> EXCLUDED.evidence AND NOT EXISTS (
              SELECT 1 FROM observations o WHERE o.encounter_id=a.encounter_id AND o.acquisition_id=a.id
            ))
-           WHERE a.state='ready'
+           WHERE a.state='ready' AND a.capture_profile='legacy'
            RETURNING conflict, evidence=$3
            """,
            [encounter, acquisition, evidence]
@@ -88,7 +88,7 @@ defmodule MedFabric.Store.Records do
       db,
       """
       UPDATE acquisitions SET capture_source=$3,first_received_at=$4
-      WHERE encounter_id=$1 AND id=$2 AND state='recording' AND first_received_at IS NULL
+      WHERE encounter_id=$1 AND id=$2 AND state='recording' AND capture_profile='legacy' AND first_received_at IS NULL
       """,
       [encounter, id, source, at]
     )
@@ -100,7 +100,7 @@ defmodule MedFabric.Store.Records do
            db,
            """
            SELECT encounter_id FROM acquisitions
-           WHERE state='recording' AND encounter_id=ANY($1::text[])
+           WHERE state='recording' AND capture_profile='legacy' AND encounter_id=ANY($1::text[])
            """,
            [configured_ids]
          ) do
@@ -114,7 +114,7 @@ defmodule MedFabric.Store.Records do
            db,
            """
            SELECT id,producer,capture_source,first_received_at FROM acquisitions
-           WHERE encounter_id=$1 AND state='recording'
+           WHERE encounter_id=$1 AND state='recording' AND capture_profile='legacy'
            """,
            [encounter]
          ) do
@@ -132,7 +132,7 @@ defmodule MedFabric.Store.Records do
   def interrupt(db, encounter, id) do
     Postgrex.query(
       db,
-      "UPDATE acquisitions SET state='interrupted' WHERE encounter_id=$1 AND id=$2 AND state='recording'",
+      "UPDATE acquisitions SET state='interrupted' WHERE encounter_id=$1 AND id=$2 AND state='recording' AND capture_profile='legacy'",
       [encounter, id]
     )
     |> written(:capture_unavailable)
@@ -144,7 +144,7 @@ defmodule MedFabric.Store.Records do
       db,
       """
       UPDATE acquisitions SET state='ready',evidence=$3,producer=NULL,capture_source=NULL,first_received_at=NULL
-      WHERE encounter_id=$1 AND id=$2 AND (
+      WHERE encounter_id=$1 AND id=$2 AND capture_profile='legacy' AND (
         (state='recording' AND first_received_at IS NOT NULL)
         OR (state='ready' AND evidence=$3)
       )
@@ -174,7 +174,7 @@ defmodule MedFabric.Store.Records do
   FROM acquisitions a
   LEFT JOIN observations o ON (o.encounter_id,o.acquisition_id)=(a.encounter_id,a.id)
   LEFT JOIN outbox_deliveries d ON (d.encounter_id,d.acquisition_id)=(a.encounter_id,a.id)
-  WHERE a.encounter_id=$1 AND a.state='ready'
+  WHERE a.encounter_id=$1 AND a.state='ready' AND a.capture_profile='legacy'
   """
 
   def list(db, encounter) do
@@ -205,7 +205,7 @@ defmodule MedFabric.Store.Records do
                SELECT id FROM encounters WHERE id=$1 AND clinician_actor=$3 AND closed_at IS NULL FOR UPDATE
              )
              SELECT a.evidence, a.conflict FROM authorized e JOIN acquisitions a ON e.id=a.encounter_id
-             WHERE a.id=$2 AND a.state='ready' FOR UPDATE OF a
+             WHERE a.id=$2 AND a.state='ready' AND a.capture_profile='legacy' FOR UPDATE OF a
              """,
              [encounter, acquisition, actor]
            ).rows do
@@ -222,7 +222,7 @@ defmodule MedFabric.Store.Records do
     end)
   end
 
-  defp insert_acceptance(tx, [encounter, acquisition, _] = observation, delivery) do
+  def insert_acceptance(tx, [encounter, acquisition, _] = observation, delivery) do
     case Postgrex.query!(
            tx,
            """

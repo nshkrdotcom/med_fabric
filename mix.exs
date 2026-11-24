@@ -22,8 +22,11 @@ defmodule MedFabric.Workspace.MixProject do
       ],
       blitz_workspace: [
         root: __DIR__,
-        projects: Path.wildcard("{apps,core}/*/mix.exs") |> Enum.map(&Path.dirname/1),
-        isolation: [deps_path: true, build_path: true, lockfile: true],
+        projects:
+          Path.wildcard("{apps,core}/*/mix.exs")
+          |> Enum.map(&Path.dirname/1)
+          |> Enum.reject(&(&1 == "apps/preview")),
+        isolation: [deps_path: false, build_path: false, lockfile: false],
         parallelism: [
           multiplier: :auto,
           base: [

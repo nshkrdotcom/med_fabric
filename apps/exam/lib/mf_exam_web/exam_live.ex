@@ -116,6 +116,7 @@ defmodule MedFabric.ExamWeb.ExamLive do
     ~H"""
     <main>
       <h1>Encounter {@encounter}</h1>
+      <a :if={@role == :clinician && Exam.lab()[:device_enabled]} href={"/encounters/#{@encounter}/devices"}>Handheld examinations and review</a>
       <section id="talkback" phx-update="ignore" phx-hook="Talkback"
         data-encounter={@encounter} data-role={@role} data-token={@token}>
         <h2>Conversation</h2>

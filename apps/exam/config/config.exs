@@ -1,5 +1,7 @@
 import Config
 
+config :postgrex, :json_library, MedFabric.Store.JSON
+
 config :mf_exam, MedFabric.ExamWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   url: [host: "localhost"],

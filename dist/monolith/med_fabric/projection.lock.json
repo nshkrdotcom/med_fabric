@@ -1,0 +1,173 @@
+{
+  "graph": {
+    "edges": [
+      {
+        "kind": "runtime",
+        "app": "mf_domain",
+        "to": "core/domain",
+        "requirement": null,
+        "from": "apps/exam"
+      },
+      {
+        "kind": "runtime",
+        "app": "mf_interop",
+        "to": "core/interop",
+        "requirement": null,
+        "from": "apps/exam"
+      },
+      {
+        "kind": "runtime",
+        "app": "mf_store",
+        "to": "core/store",
+        "requirement": null,
+        "from": "apps/exam"
+      },
+      {
+        "kind": "runtime",
+        "app": "mf_domain",
+        "to": "core/domain",
+        "requirement": null,
+        "from": "core/store"
+      }
+    ],
+    "digest": "a1e6fe5f5ce5f81fa592ea0ae26e61b1109bbbb83ffc1ae0d915b84903851fcc",
+    "excluded_projects": [
+      ".",
+      "apps/exam"
+    ],
+    "selected_projects": [
+      "core/domain",
+      "core/interop",
+      "core/store"
+    ],
+    "violations": []
+  },
+  "projection": {
+    "build_path": "/home/home/p/g/n/med_fabric/dist/monolith/med_fabric",
+    "copied_files": [
+      ".formatter.exs",
+      "CHANGELOG.md",
+      "LICENSE",
+      "README.md",
+      "assets/med_fabric.svg",
+      "config/config.exs",
+      "config/dev.exs",
+      "config/prod.exs",
+      "config/test.exs",
+      "docs/architecture/browser-to-record.md",
+      "lib/mf_domain.ex",
+      "lib/mf_domain/encounter.ex",
+      "lib/mf_interop.ex",
+      "lib/mf_interop/fhir_client.ex",
+      "lib/mf_store.ex",
+      "lib/mf_store/postgres.ex",
+      "mix.exs",
+      "priv/sql/001_clinical_outbox.sql",
+      "test/core_domain/mf_domain_test.exs",
+      "test/support/weld_helpers/core_domain_test_helper.exs",
+      "test/support/weld_helpers/core_interop_test_helper.exs",
+      "test/support/weld_helpers/core_store_test_helper.exs",
+      "test/test_helper.exs"
+    ],
+    "package_files": [
+      ".formatter.exs",
+      "CHANGELOG.md",
+      "LICENSE",
+      "README.md",
+      "assets/med_fabric.svg",
+      "config",
+      "docs",
+      "lib",
+      "mix.exs",
+      "priv",
+      "projection.lock.json"
+    ],
+    "git_revision": "e7546c2e35488da47d4dffee597e010493388004",
+    "tree_digest": "583727b2d21f028ef8cceb72a399024d452949ee4b4e394ca1e3e180ce5d6cd8"
+  },
+  "manifest": {
+    "path": "/home/home/p/g/n/med_fabric/build_support/weld.exs",
+    "digest": "fc1c0b72a03950c652e2d7701760f6b0e35da1657989e19f9ae66637c0f79337"
+  },
+  "artifact": {
+    "id": "med_fabric",
+    "package": {
+      "name": "med_fabric",
+      "version": "0.1.0",
+      "otp_app": "med_fabric"
+    }
+  },
+  "workspace": {
+    "root": "/home/home/p/g/n/med_fabric",
+    "discovery": {
+      "source": "manifest",
+      "project_ids": [
+        ".",
+        "apps/exam",
+        "core/domain",
+        "core/interop",
+        "core/store"
+      ],
+      "adapter": null,
+      "globs": [
+        "apps/*",
+        "core/*"
+      ],
+      "root_project?": true
+    },
+    "project_count": 5
+  },
+  "verification": [
+    {
+      "env": "test",
+      "status": "ok",
+      "task": "selected_tests_baseline",
+      "test_count": 1,
+      "project_test_counts": [
+        {
+          "app": "mf_store",
+          "test_count": 0,
+          "project_id": "core/store"
+        },
+        {
+          "app": "mf_interop",
+          "test_count": 0,
+          "project_id": "core/interop"
+        },
+        {
+          "app": "mf_domain",
+          "test_count": 1,
+          "project_id": "core/domain"
+        }
+      ]
+    },
+    {
+      "env": "dev",
+      "status": "ok",
+      "task": "deps.get"
+    },
+    {
+      "env": "dev",
+      "status": "ok",
+      "task": "compile --warnings-as-errors"
+    },
+    {
+      "env": "test",
+      "status": "ok",
+      "task": "test",
+      "failure_count": 0,
+      "test_count": 1
+    },
+    {
+      "env": "dev",
+      "status": "ok",
+      "task": "docs --warnings-as-errors"
+    },
+    {
+      "env": "dev",
+      "reason": "artifact_opted_out",
+      "status": "skipped",
+      "task": "hex.build"
+    }
+  ]
+}

@@ -13,25 +13,13 @@ WebRTC talkback, live diagnostic audio capture with
 recordings and pulse-rate measurements. PostgreSQL records acceptance and queues
 HL7 FHIR R4 delivery.
 
-## Run the exam candidate
+## Run the clinical workflows
 
-The 0.2 candidate combines two-way conversation, independently selected diagnostic audio and clinician-entered pulse measurements. A patient can recover a recording outcome after reconnecting. Clinicians can seek in a verified WAV, review its source and time, and deliver the accepted observation to the encounter’s own FHIR destination.
+The exam supports a guided synthetic acoustic/ECG acquisition and a PLXS spot check with delayed delivery, alongside browser WAV and manual pulse. A device credential plus a clinician's encounter grant authorizes capture. Review binds the exact immutable manifest. Each accepted PLXS metric has an independent FHIR delivery record.
 
-From this checkout, with MedEx checked out alongside it, run the SDK and Fabric QC sequence:
+Select the matching MedEx source and use ordinary Mix in each application. The temporary default Git branch must be replaced with the verified reachable implementation commit after integration. No MedEx or Fabric package publication is part of this change.
 
-```bash
-bash ops/qc_candidate.sh
-```
-
-The command prepares the SDK's Weld release bundle, checks its browser assets,
-and runs the exam release against that exact bundle's `project/` directory.
-Commit SDK source changes first: Weld requires a clean source revision. The
-candidate dependency lock stays under `apps/exam/_build/`. Allow time for native
-dependencies, Dialyzer, PostgreSQL, HAPI and Chromium. For a live exam, follow the
-operator setup. For an actual TURN demonstration use the two-endpoint media
-procedure. [Browser-to-record guide](guides/browser_to_record.md) ·
-[Remote media verification](guides/media_verification.md) ·
-[Architecture and roadmap](guides/architecture_and_roadmap.md)
+[Handheld setup and process acceptance](guides/handheld_demo.md) · [Browser to record](guides/browser_to_record.md) · [Optional monitor service](guides/preview_isolation.md)
 
 ## Projects
 
@@ -41,6 +29,8 @@ procedure. [Browser-to-record guide](guides/browser_to_record.md) ·
 | [core/store](core/store/README.md) | Commit encounters, evidence, acceptance, and outbox intents atomically in PostgreSQL |
 | [core/interop](core/interop/README.md) | Map reviewed recordings and pulse rates to HL7 FHIR R4 and confirm idempotent delivery |
 | [apps/exam](apps/exam/README.md) | Boot Phoenix, authorize encounters, host talkback/preview/PCM sockets, and serve the review UI |
+| [apps/handheld](apps/handheld/README.md) | Standalone synthetic peripheral client, TLS transport and durable spool |
+| [apps/preview](apps/preview/README.md) | Optional isolated monitor encoding, RTC and signaling |
 
 ## License
 

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.40.5">
+    <meta name="project" content="Med Fabric v0.2.0">
+
+
+    <title>Overview — Med Fabric v0.2.0</title>
+
+    <link rel="stylesheet" href="dist/html-elixir-RXHHCTJW.css" />
+
+    <script defer src="dist/sidebar_items-EC2A0E25.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-LBCGAQQV.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="readme.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="Med Fabric" />
+        </a>
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+Med Fabric
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.2.0
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras="Pages"></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-extra" id="main" data-type="extras">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of Med Fabric</span>
+            <div class="search-input-wrapper">
+              <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+              <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+                <i class="ri-close-line ri-lg" title="Cancel search"></i>
+              </button>
+            </div>
+          </label>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <div class="engine-selector" data-multiple="false">
+          <button type="button" class="engine-button" aria-label="Select search engine" aria-haspopup="true" aria-expanded="false">
+            <i class="ri-search-2-line" aria-hidden="true"></i>
+            <span class="engine-name">Default</span>
+            <i class="ri-arrow-down-s-line" aria-hidden="true"></i>
+          </button>
+          <div class="engine-dropdown" hidden role="menu">
+
+              <button type="button"
+                      class="engine-option"
+                      data-engine-url="search.html?q="
+                      role="menuitemradio"
+                      aria-checked="true">
+                <span class="name">Default</span>
+                <span class="help">In-browser search</span>
+              </button>
+
+          </div>
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>Overview</h1>
+
+<a href="readme.md" title="Copy Markdown (hold Ctrl/Cmd and click it to open as Markdown)" class="copy-markdown icon-action" rel="help">
+  <i class="ri-markdown-line" aria-hidden="true"></i>
+  <span class="sr-only">Copy Markdown</span>
+</a>
+
+
+  </div>
+
+
+<p align="center"><img src="assets/med_fabric.svg" width="200" alt="Med Fabric" /></p><h1 align="center">Med Fabric</h1><p align="center">  <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a></p><p>Med Fabric is a deployable Elixir reference exam that brings together two-way
+WebRTC talkback, live diagnostic audio capture with
+<a rel="nofollow" href="https://github.com/nshkrdotcom/med_ex">MedEx</a>, and clinician review of
+recordings and pulse-rate measurements. PostgreSQL records acceptance and queues
+HL7 FHIR R4 delivery.</p><h2 id="run-the-exam-candidate" class="section-heading"><a href="#run-the-exam-candidate" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Run the exam candidate</span></h2><p>The 0.2 candidate combines two-way conversation, independently selected diagnostic audio and clinician-entered pulse measurements. A patient can recover a recording outcome after reconnecting. Clinicians can seek in a verified WAV, review its source and time, and deliver the accepted observation to the encounter’s own FHIR destination.</p><p>From this checkout, with MedEx checked out alongside it, run the SDK and Fabric QC sequence:</p><pre><code class="makeup bash" translate="no"><span class="">bash ops/qc_candidate.sh
+</span></code></pre><p>The command prepares the SDK's Weld release bundle, checks its browser assets,
+and runs the exam release against that exact bundle's <code class="inline">project/</code> directory.
+Commit SDK source changes first: Weld requires a clean source revision. The
+candidate dependency lock stays under <code class="inline">apps/exam/_build/</code>. Allow time for native
+dependencies, Dialyzer, PostgreSQL, HAPI and Chromium. For a live exam, follow the
+operator setup. For an actual TURN demonstration use the two-endpoint media
+procedure. <a href="browser_to_record.html">Browser-to-record guide</a> ·
+<a href="media_verification.html">Remote media verification</a> ·
+<a href="architecture_and_roadmap.html">Architecture and roadmap</a></p><h2 id="projects" class="section-heading"><a href="#projects" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Projects</span></h2><table><thead><tr><th style="text-align: left;">Path</th><th style="text-align: left;">Responsibility</th></tr></thead><tbody><tr><td style="text-align: left;"><a href="exam.html">core/domain</a></td><td style="text-align: left;">Validate audio and vital evidence constructors in pure Elixir</td></tr><tr><td style="text-align: left;"><a href="exam.html">core/store</a></td><td style="text-align: left;">Commit encounters, evidence, acceptance, and outbox intents atomically in PostgreSQL</td></tr><tr><td style="text-align: left;"><a href="exam.html">core/interop</a></td><td style="text-align: left;">Map reviewed recordings and pulse rates to HL7 FHIR R4 and confirm idempotent delivery</td></tr><tr><td style="text-align: left;"><a href="exam.html">apps/exam</a></td><td style="text-align: left;">Boot Phoenix, authorize encounters, host talkback/preview/PCM sockets, and serve the review UI</td></tr></tbody></table><h2 id="license" class="section-heading"><a href="#license" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">License</span></h2><p>Released under the MIT License.</p>
+
+</div>
+
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
+
+  </div>
+  <div class="bottom-actions-item">
+
+      <a href="browser_to_record.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+Browser to record
+        </span>
+      </a>
+
+  </div>
+</div>
+    <footer class="footer">
+
+        <p>
+
+          <span class="line">
+            <button class="a-main footer-button display-quick-switch" title="Go to package docs">
+              Go to package docs
+            </button>
+
+              <a href="llms.txt" target="_blank">
+                View llms.txt
+              </a>
+
+
+              <a href="Med Fabric.epub">
+                Download ePub version
+              </a>
+
+          </span>
+        </p>
+
+        <p class="built-using">
+          Built using
+          <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.40.5) for the
+
+            <a href="https://elixir-lang.org" title="Elixir" target="_blank" translate="no">Elixir programming language</a>
+
+        </p>
+
+
+    </footer>
+  </div>
+</main>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const codeBlocks = document.querySelectorAll("pre code.mermaid");
+    if (!codeBlocks.length || !window.mermaid) return;
+    mermaid.initialize({startOnLoad: false, securityLevel: "strict"});
+    const nodes = Array.from(codeBlocks, code => {
+      const diagram = document.createElement("div");
+      diagram.className = "mermaid";
+      diagram.textContent = code.textContent;
+      code.parentElement.replaceWith(diagram);
+      return diagram;
+    });
+    mermaid.run({nodes});
+  });
+</script>
+
+  </body>
+</html>

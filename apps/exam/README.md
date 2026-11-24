@@ -9,7 +9,7 @@
 
 `mf_exam` (`apps/exam`) is the deployable Phoenix + LiveView reference
 examination application in [Med Fabric](../../README.md). It consumes the single
-Welded [`:med_ex`](https://github.com/nshkrdotcom/med_ex) SDK and composes
+source [`:med_ex`](https://github.com/nshkrdotcom/med_ex) SDK and composes
 `mf_domain`, `mf_store`, and `mf_interop`.
 
 ---

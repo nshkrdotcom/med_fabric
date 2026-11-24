@@ -17,15 +17,22 @@ defmodule MedFabric.Exam.Application do
           []
 
         lab ->
-          [
-            {Postgres, url: lab.database_url, name: Postgres},
+          device=if lab[:device_enabled],do: [
+            {MedFabric.Exam.DeviceRootLock,lab.artifact_dir},
+            MedFabric.Exam.PreviewGateway,
+            {Registry,keys: :unique,name: MedFabric.Exam.DeviceRegistry}
+          ],else: []
+          device ++ [
+            {Postgres, url: lab.database_url, name: Postgres, pool_size: 12},
             %{id: :schema, start: {__MODULE__, :schema, []}},
             {DynamicSupervisor, strategy: :one_for_one, name: MedFabric.Exam.Captures}
-          ]
+          ] ++ if(lab[:device_enabled],do: [MedFabric.Exam.DeviceExpiry],else: [])
       end
 
     Supervisor.start_link(children ++ lab_children ++ [Endpoint],
-      strategy: :one_for_one,
+      # The root lock precedes every writer. Any guard crash stops all later
+      # children before reacquisition, and reverse shutdown keeps it held last.
+      strategy: :rest_for_one,
       name: MedFabric.Exam.Supervisor
     )
   end
@@ -35,12 +42,16 @@ defmodule MedFabric.Exam.Application do
 
     with {:ok, :ok} <- Postgres.migrate(),
          :ok <- open_encounters(lab.encounters),
-         :ok <- Recordings.recover() do
+         :ok <- Recordings.recover(),
+         :ok <- recover_devices(lab) do
       :ignore
     else
       {:error, reason} -> {:error, {:schema_unavailable, reason}}
     end
   end
+
+  defp recover_devices(%{device_enabled: true}),do: MedFabric.Exam.DeviceManifest.recover()
+  defp recover_devices(_),do: :ok
 
   defp open_encounters(encounters) do
     Enum.reduce_while(encounters, :ok, fn {_id, entry}, :ok ->

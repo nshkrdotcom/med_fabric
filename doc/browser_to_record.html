@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="x-ua-compatible" content="ie=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="generator" content="ExDoc v0.40.5">
+    <meta name="project" content="Med Fabric v0.2.0">
+
+
+    <title>Browser to record — Med Fabric v0.2.0</title>
+
+    <link rel="stylesheet" href="dist/html-elixir-RXHHCTJW.css" />
+
+    <script defer src="dist/sidebar_items-EC2A0E25.js"></script>
+    <script defer src="docs_config.js"></script>
+    <script defer src="dist/html-LBCGAQQV.js"></script>
+
+  </head>
+  <body>
+    <script>(()=>{var t="ex_doc:settings",e="dark";var o="dark",s="light";var E="sidebar_state",n="closed";var r="sidebar_width";var a="sidebar-open";var i=new URLSearchParams(window.location.search),S=i.get("theme")||JSON.parse(localStorage.getItem(t)||"{}").theme;(S===o||S!==s&&window.matchMedia("(prefers-color-scheme: dark)").matches)&&document.body.classList.add(e);var d=sessionStorage.getItem(E),A=d!==n&&!window.matchMedia(`screen and (max-width: ${768}px)`).matches;document.body.classList.toggle(a,A);var c=sessionStorage.getItem(r);c&&document.body.style.setProperty("--sidebarWidth",`${c}px`);var p=/(Macintosh|iPhone|iPad|iPod)/.test(window.navigator.userAgent);document.documentElement.classList.toggle("apple-os",p);})();
+</script>
+
+<div class="body-wrapper">
+
+<button id="sidebar-menu" class="sidebar-button sidebar-toggle" aria-label="toggle sidebar" aria-controls="sidebar">
+  <i class="ri-menu-line ri-lg" title="Collapse/expand sidebar"></i>
+</button>
+
+<nav id="sidebar" class="sidebar">
+
+  <div class="sidebar-header">
+    <div class="sidebar-projectInfo">
+
+        <a href="readme.html" class="sidebar-projectImage">
+          <img src="assets/logo.svg" alt="Med Fabric" />
+        </a>
+
+      <div>
+        <a href="readme.html" class="sidebar-projectName" translate="no">
+Med Fabric
+        </a>
+        <div class="sidebar-projectVersion" translate="no">
+          v0.2.0
+        </div>
+      </div>
+    </div>
+    <ul id="sidebar-list-nav" class="sidebar-list-nav" role="tablist" data-extras="Pages"></ul>
+  </div>
+</nav>
+
+<output role="status" id="toast"></output>
+
+<main class="content page-extra" id="main" data-type="extras">
+  <div id="content" class="content-inner">
+    <div class="top-search">
+      <div class="search-settings">
+        <form class="search-bar" action="search.html">
+          <label class="search-label">
+            <span class="sr-only">Search documentation of Med Fabric</span>
+            <div class="search-input-wrapper">
+              <input name="q" type="text" class="search-input" placeholder="Press / to search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+              <button type="button" tabindex="-1" class="search-close-button" aria-hidden="true">
+                <i class="ri-close-line ri-lg" title="Cancel search"></i>
+              </button>
+            </div>
+          </label>
+        </form>
+        <div class="autocomplete">
+        </div>
+        <div class="engine-selector" data-multiple="false">
+          <button type="button" class="engine-button" aria-label="Select search engine" aria-haspopup="true" aria-expanded="false">
+            <i class="ri-search-2-line" aria-hidden="true"></i>
+            <span class="engine-name">Default</span>
+            <i class="ri-arrow-down-s-line" aria-hidden="true"></i>
+          </button>
+          <div class="engine-dropdown" hidden role="menu">
+
+              <button type="button"
+                      class="engine-option"
+                      data-engine-url="search.html?q="
+                      role="menuitemradio"
+                      aria-checked="true">
+                <span class="name">Default</span>
+                <span class="help">In-browser search</span>
+              </button>
+
+          </div>
+        </div>
+        <button class="icon-settings display-settings">
+          <i class="ri-settings-3-line"></i>
+          <span class="sr-only">Settings</span>
+        </button>
+      </div>
+    </div>
+
+<div id="top-content">
+  <div class="heading-with-actions top-heading">
+    <h1>Browser to record</h1>
+
+<a href="browser_to_record.md" title="Copy Markdown (hold Ctrl/Cmd and click it to open as Markdown)" class="copy-markdown icon-action" rel="help">
+  <i class="ri-markdown-line" aria-hidden="true"></i>
+  <span class="sr-only">Copy Markdown</span>
+</a>
+
+
+  </div>
+
+
+<p>This guide covers Ubuntu 26.04 prerequisites, running the automated release
+verifier, building and running the compiled <code class="inline">mf_exam</code> Mix release directly, the
+manual listening check, and optional local workspace SDK testing.</p><h2 id="prerequisites-ubuntu-26-04" class="section-heading"><a href="#prerequisites-ubuntu-26-04" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Prerequisites (Ubuntu 26.04)</span></h2><ol><li><p><strong>System packages:</strong></p><pre><code class="makeup bash" translate="no"><span class="">sudo apt-get install -y git curl tar build-essential pkg-config libssl-dev jq openssl
+</span></code></pre><p><em>(Install <code class="inline">libopus-dev</code> as well if compiling <code class="inline">membrane_opus_plugin</code> from
+source instead of using precompiled binaries.)</em></p></li><li><p><strong>Pinned runtimes (<code class="inline">.tool-versions</code> via <code class="inline">asdf</code> or <code class="inline">mise</code>):</strong></p><ul><li>Erlang <code class="inline">29.1.2</code></li><li>Elixir <code class="inline">1.20.5-otp-29</code></li><li>Node.js <code class="inline">24.19.0</code> (required for <code class="inline">--integration</code> / Chromium verification)</li></ul></li><li><p><strong>Native services (or external URLs):</strong></p><ul><li><strong>PostgreSQL 18</strong> server binaries (<code class="inline">initdb</code>, <code class="inline">pg_ctl</code>, <code class="inline">createdb</code>, <code class="inline">psql</code>),
+or an existing test database via <code class="inline">DATABASE_URL</code>.</li><li><strong>Temurin JDK <code class="inline">21.0.9+10</code></strong> (full JDK with <code class="inline">javac 21.0.9</code>) with <code class="inline">JAVA_HOME</code>
+set when using the built-in local HAPI FHIR 7.6.0 runner, or an existing R4
+FHIR server via <code class="inline">FHIR_BASE_URL</code>.</li></ul></li></ol><h2 id="verify-the-unpublished-candidate" class="section-heading"><a href="#verify-the-unpublished-candidate" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Verify the unpublished candidate</span></h2><p>Use sibling checkouts named <code class="inline">med_ex</code> and <code class="inline">med_fabric</code>. Commit MedEx changes
+before running: Weld prepares from a clean source revision. The script passes
+the exact prepared release bundle's <code class="inline">project/</code> path to Mix and compares its
+browser assets with the tested sources. Candidate dependency resolution uses a
+separate lockfile under <code class="inline">apps/exam/_build</code>.</p><pre><code class="makeup bash" translate="no"><span class="">bash ops/qc_candidate.sh
+</span></code></pre><p>This runs SDK QC and Weld preparation, the browser-helper unit tests, Fabric core tests and static analysis, docs, the exam dependency audit, native database and HAPI cases, recording recovery, and a compiled-release browser scenario. It uses the generated local SDK for the exam. Once MedEx 0.2 is on Hex, resolve it from <code class="inline">apps/exam</code> with <a href="https://mix.hexdocs.pm/Mix.Tasks.Deps.Get.html"><code class="inline">mix deps.get</code></a>, commit that lock, then use the ordinary <code class="inline">./onboard.sh --integration</code> and <code class="inline">bash ops/verify_browser.sh --release</code> workflow. The 0.1 Hex package implements an earlier browser protocol.</p><p>Use a fresh dedicated test database and artifact directory for the candidate. The verifier creates synthetic clinical records. If <code class="inline">DATABASE_URL</code> and <code class="inline">FHIR_BASE_URL</code> are unset it owns isolated native services and restarts HAPI during the browser run. Providing those URLs targets your dedicated integration services.</p><h2 id="operate-the-exam" class="section-heading"><a href="#operate-the-exam" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Operate the exam</span></h2><p>From the Fabric root, create the dedicated volume, start the services and set the encounter identity in your shell:</p><pre><code class="makeup bash" translate="no"><span class="">umask 077
+</span><span class="">export MF_ENCOUNTERS_FILE=&quot;$PWD/_build/encounters.json&quot;
+</span><span class="">export MF_ARTIFACT_DIR=&quot;$PWD/_build/capture-volume&quot;
+</span><span class="">export MF_SECRET_KEY_BASE=&quot;$(openssl rand -hex 48)&quot;
+</span><span class="">mkdir -p &quot;$(dirname &quot;$MF_ENCOUNTERS_FILE&quot;)&quot; &quot;$MF_ARTIFACT_DIR&quot;
+</span><span class="">eval &quot;$(bash ops/local_services.sh start)&quot;
+</span><span class="">export MF_EXAM_ID=exam-a MF_PATIENT_ACTOR=patient-a MF_CLINICIAN_ACTOR=clinician-a
+</span><span class="">export MF_PATIENT_ACCESS_KEY=&quot;$(openssl rand -hex 24)&quot;
+</span><span class="">export MF_CLINICIAN_ACCESS_KEY=&quot;$(openssl rand -hex 24)&quot;
+</span><span class="">export MF_RELEASE_DIR=&quot;$PWD/_build/exam-release&quot;
+</span></code></pre><p>For development outside candidate QC, a disposable SDK projection can be used
+with ordinary Mix as below. For release QC, use <code class="inline">ops/qc_candidate.sh</code> and the
+prepared project path it prints; this development projection is a separate tree.</p><pre><code class="makeup bash" translate="no"><span class="">(cd ../med_ex &amp;&amp; mix weld.project)
+</span><span class="">export MF_MED_EX_PATH=&quot;$(cd ../med_ex/dist/monolith/med_ex &amp;&amp; pwd)&quot;
+</span><span class="">(
+</span><span class="">  cd apps/exam
+</span><span class="">  mkdir -p _build
+</span><span class="">  cp mix.lock _build/candidate.mix.lock
+</span><span class="">  mix deps.get
+</span><span class="">  env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs
+</span><span class="">  env -u MF_LAB MIX_ENV=prod mix release --path &quot;$MF_RELEASE_DIR&quot; --overwrite
+</span><span class="">)
+</span><span class="">MF_LAB=1 &quot;$MF_RELEASE_DIR/bin/mf_exam&quot; start
+</span></code></pre><p>For the published SDK, leave <code class="inline">MF_MED_EX_PATH</code> unset and use the standard Mix lockfile.</p><p>Run the seed command sequentially for each synthetic encounter, changing the ID, actors and keys. It writes a private JSON array. Each entry carries its own patient/clinician actors, FHIR destination, Patient reference and Encounter reference. Boot binds those identifiers in PostgreSQL. Conflicting existing bindings fail startup. The lab seed marks its FHIR encounter in progress. To use existing resources, provision the file directly. Keep the file outside Git.</p><p>The local endpoint listens on <code class="inline">127.0.0.1</code> at <code class="inline">MF_HTTP_PORT</code> (default 4000). In separate browser profiles open the encounter with the relevant key, for example <code class="inline">http://localhost:4000/encounters/exam-a?key=YOUR_PATIENT_KEY</code>. The server exchanges it for a session and redirects. Select conversation microphones independently on each side. On the patient page select the diagnostic input, start capture, and finish. If the reply is lost, reload the same tab or select <strong>Check recording outcome</strong>. The clinician sees recording duration, source label and first-frame receipt time, can seek during playback and explicitly accept and deliver either evidence kind. Stop the release with Ctrl-C and stop owned services with <code class="inline">bash ops/local_services.sh stop</code>.</p><h2 id="https-and-relay" class="section-heading"><a href="#https-and-relay" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">HTTPS and relay</span></h2><p>Keep the application bound to loopback behind an authenticating reverse proxy. Set <code class="inline">MF_PUBLIC_ORIGIN</code> to the external HTTPS origin and provision a random <code class="inline">MF_PROXY_SECRET</code> of at least 32 bytes in the proxy and exam. Authenticate every HTTP and WebSocket upgrade at the proxy. Strip any client-supplied <code class="inline">X-Exam-Actor</code> and <code class="inline">X-Exam-Proxy-Token</code> headers and inject the authenticated actor ID and secret. The actor must match a configured encounter participant. HTTPS mode uses the proxy identity in place of lab URL keys. Restrict backend and proxy secret access to the trusted host. Configure secure cookies and TLS at the public ingress.</p><p>Set <code class="inline">MF_TURN_URLS</code> to comma-separated TURN URIs and <code class="inline">MF_TURN_SECRET</code> to the shared coturn REST auth secret. The exam issues one-hour credentials when an authorized peer connects. Set <code class="inline">MF_RELAY_ONLY=1</code> for a forced-relay run. TURN transports the two WebRTC paths. The authoritative PCM stream uses a separate authenticated WebSocket. Use the remote media guide for two hosts, known-signal checks, connection and recovery times, and selected candidate-pair evidence. <a href="media_verification.html">Remote media verification</a></p><h2 id="targeted-checks" class="section-heading"><a href="#targeted-checks" class="hover-link"><i class="ri-link-m" aria-hidden="true"></i></a><span class="text">Targeted checks</span></h2><ul><li><code class="inline">core/domain</code> runs pure evidence cases with <a href="https://mix.hexdocs.pm/Mix.Tasks.Test.html"><code class="inline">mix test</code></a>.</li><li><code class="inline">core/store</code> runs native transaction and encounter-isolation cases with <code class="inline">mix test integration</code> and <code class="inline">DATABASE_URL</code>.</li><li><code class="inline">core/interop</code> runs pure FHIR comparison cases with <a href="https://mix.hexdocs.pm/Mix.Tasks.Test.html"><code class="inline">mix test</code></a>. Run <code class="inline">mix test integration</code> with <code class="inline">FHIR_BASE_URL</code> for the native HAPI retry.</li><li><code class="inline">apps/exam</code> runs artifact, range and proxy cases with <a href="https://mix.hexdocs.pm/Mix.Tasks.Test.html"><code class="inline">mix test</code></a>, and the interrupted recording scenarios with <code class="inline">env -u MF_LAB mix test integration</code> and <code class="inline">DATABASE_URL</code>. Set <code class="inline">MF_MED_EX_PATH</code> for the unpublished SDK.</li><li>The deployable exam currently pins the single dependency-constraint change from Ratio PR 131 at commit <code class="inline">05191db</code>. The lock resolves Numbers 5.2.5 and Decimal 3.2.0. Run <code class="inline">mix hex.audit</code> in the exam and review the pinned Git change separately. Remove the Git pin when a Hex Ratio release admits Decimal 3. MedEx itself continues to declare Hex dependencies. <a rel="nofollow" href="https://github.com/qqwy/elixir-rational/pull/131">Ratio PR 131</a></li></ul><p>See <a href="architecture_and_roadmap.html">Architecture and roadmap</a> for storage ownership and clinical invariants.</p>
+
+</div>
+
+<div class="bottom-actions" id="bottom-actions">
+  <div class="bottom-actions-item">
+
+      <a href="readme.html" class="bottom-actions-button" rel="prev">
+        <span class="subheader">
+          ← Previous Page
+        </span>
+        <span class="title">
+Overview
+        </span>
+      </a>
+
+  </div>
+  <div class="bottom-actions-item">
+
+      <a href="media_verification.html" class="bottom-actions-button" rel="next">
+        <span class="subheader">
+          Next Page →
+        </span>
+        <span class="title">
+Browser media verification
+        </span>
+      </a>
+
+  </div>
+</div>
+    <footer class="footer">
+
+        <p>
+
+          <span class="line">
+            <button class="a-main footer-button display-quick-switch" title="Go to package docs">
+              Go to package docs
+            </button>
+
+              <a href="llms.txt" target="_blank">
+                View llms.txt
+              </a>
+
+
+              <a href="Med Fabric.epub">
+                Download ePub version
+              </a>
+
+          </span>
+        </p>
+
+        <p class="built-using">
+          Built using
+          <a href="https://github.com/elixir-lang/ex_doc" title="ExDoc" target="_blank" rel="help noopener" translate="no">ExDoc</a> (v0.40.5) for the
+
+            <a href="https://elixir-lang.org" title="Elixir" target="_blank" translate="no">Elixir programming language</a>
+
+        </p>
+
+
+    </footer>
+  </div>
+</main>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const codeBlocks = document.querySelectorAll("pre code.mermaid");
+    if (!codeBlocks.length || !window.mermaid) return;
+    mermaid.initialize({startOnLoad: false, securityLevel: "strict"});
+    const nodes = Array.from(codeBlocks, code => {
+      const diagram = document.createElement("div");
+      diagram.className = "mermaid";
+      diagram.textContent = code.textContent;
+      code.parentElement.replaceWith(diagram);
+      return diagram;
+    });
+    mermaid.run({nodes});
+  });
+</script>
+
+  </body>
+</html>

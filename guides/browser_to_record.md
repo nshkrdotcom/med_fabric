@@ -27,21 +27,13 @@ manual listening check, and optional local workspace SDK testing.
      set when using the built-in local HAPI FHIR 7.6.0 runner, or an existing R4
      FHIR server via `FHIR_BASE_URL`.
 
-## Verify the unpublished candidate
+## Verify the source checkout
 
-Use sibling checkouts named `med_ex` and `med_fabric`. Commit MedEx changes
-before running: Weld prepares from a clean source revision. The script passes
-the exact prepared release bundle's `project/` path to Mix and compares its
-browser assets with the tested sources. Candidate dependency resolution uses a
-separate lockfile under `apps/exam/_build`.
+Select the matching MedEx source as documented in [the handheld runbook](handheld_demo.md). Run the retained browser gate against an isolated lab:
 
 ```bash
-bash ops/qc_candidate.sh
+elixir ops/handheld_acceptance.exs --suite legacy-browser
 ```
-
-This runs SDK QC and Weld preparation, the browser-helper unit tests, Fabric core tests and static analysis, docs, the exam dependency audit, native database and HAPI cases, recording recovery, and a compiled-release browser scenario. It uses the generated local SDK for the exam. Once MedEx 0.2 is on Hex, resolve it from `apps/exam` with `mix deps.get`, commit that lock, then use the ordinary `./onboard.sh --integration` and `bash ops/verify_browser.sh --release` workflow. The 0.1 Hex package implements an earlier browser protocol.
-
-Use a fresh dedicated test database and artifact directory for the candidate. The verifier creates synthetic clinical records. If `DATABASE_URL` and `FHIR_BASE_URL` are unset it owns isolated native services and restarts HAPI during the browser run. Providing those URLs targets your dedicated integration services.
 
 ## Operate the exam
 
@@ -53,24 +45,19 @@ export MF_ENCOUNTERS_FILE="$PWD/_build/encounters.json"
 export MF_ARTIFACT_DIR="$PWD/_build/capture-volume"
 export MF_SECRET_KEY_BASE="$(openssl rand -hex 48)"
 mkdir -p "$(dirname "$MF_ENCOUNTERS_FILE")" "$MF_ARTIFACT_DIR"
-eval "$(bash ops/local_services.sh start)"
+# Supply DATABASE_URL and FHIR_BASE_URL for your private test services.
 export MF_EXAM_ID=exam-a MF_PATIENT_ACTOR=patient-a MF_CLINICIAN_ACTOR=clinician-a
 export MF_PATIENT_ACCESS_KEY="$(openssl rand -hex 24)"
 export MF_CLINICIAN_ACCESS_KEY="$(openssl rand -hex 24)"
 export MF_RELEASE_DIR="$PWD/_build/exam-release"
 ```
 
-For development outside candidate QC, a disposable SDK projection can be used
-with ordinary Mix as below. For release QC, use `ops/qc_candidate.sh` and the
-prepared project path it prints; this development projection is a separate tree.
+For a compiled release, set the legacy media source selection, then build the exam through its ordinary Mix project.
 
 ```bash
-(cd ../med_ex && mix weld.project)
-export MF_MED_EX_PATH="$(cd ../med_ex/dist/monolith/med_ex && pwd)"
+export MF_EXAM_LEGACY_MEDIA=1
 (
   cd apps/exam
-  mkdir -p _build
-  cp mix.lock _build/candidate.mix.lock
   mix deps.get
   env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs
   env -u MF_LAB MIX_ENV=prod mix release --path "$MF_RELEASE_DIR" --overwrite
@@ -78,11 +65,9 @@ export MF_MED_EX_PATH="$(cd ../med_ex/dist/monolith/med_ex && pwd)"
 MF_LAB=1 "$MF_RELEASE_DIR/bin/mf_exam" start
 ```
 
-For the published SDK, leave `MF_MED_EX_PATH` unset and use the standard Mix lockfile.
-
 Run the seed command sequentially for each synthetic encounter, changing the ID, actors and keys. It writes a private JSON array. Each entry carries its own patient/clinician actors, FHIR destination, Patient reference and Encounter reference. Boot binds those identifiers in PostgreSQL. Conflicting existing bindings fail startup. The lab seed marks its FHIR encounter in progress. To use existing resources, provision the file directly. Keep the file outside Git.
 
-The local endpoint listens on `127.0.0.1` at `MF_HTTP_PORT` (default 4000). In separate browser profiles open the encounter with the relevant key, for example `http://localhost:4000/encounters/exam-a?key=YOUR_PATIENT_KEY`. The server exchanges it for a session and redirects. Select conversation microphones independently on each side. On the patient page select the diagnostic input, start capture, and finish. If the reply is lost, reload the same tab or select **Check recording outcome**. The clinician sees recording duration, source label and first-frame receipt time, can seek during playback and explicitly accept and deliver either evidence kind. Stop the release with Ctrl-C and stop owned services with `bash ops/local_services.sh stop`.
+The local endpoint listens on `127.0.0.1` at `MF_HTTP_PORT` (default 4000). In separate browser profiles open the encounter with the relevant key, for example `http://localhost:4000/encounters/exam-a?key=YOUR_PATIENT_KEY`. The server exchanges it for a session and redirects. Select conversation microphones independently on each side. On the patient page select the diagnostic input, start capture, and finish. If the reply is lost, reload the same tab or select **Check recording outcome**. The clinician sees recording duration, source label and first-frame receipt time, can seek during playback and explicitly accept and deliver either evidence kind. Stop the release with Ctrl-C.
 
 ## HTTPS and relay
 
@@ -95,7 +80,7 @@ Set `MF_TURN_URLS` to comma-separated TURN URIs and `MF_TURN_SECRET` to the shar
 - `core/domain` runs pure evidence cases with `mix test`.
 - `core/store` runs native transaction and encounter-isolation cases with `mix test integration` and `DATABASE_URL`.
 - `core/interop` runs pure FHIR comparison cases with `mix test`. Run `mix test integration` with `FHIR_BASE_URL` for the native HAPI retry.
-- `apps/exam` runs artifact, range and proxy cases with `mix test`, and the interrupted recording scenarios with `env -u MF_LAB mix test integration` and `DATABASE_URL`. Set `MF_MED_EX_PATH` for the unpublished SDK.
+- `apps/exam` runs artifact, range and proxy cases with `mix test`, and the interrupted recording scenarios with `env -u MF_LAB mix test integration` and `DATABASE_URL`. Select the matching source in `.mix_sources.json`.
 - The deployable exam currently pins the single dependency-constraint change from Ratio PR 131 at commit `05191db`. The lock resolves Numbers 5.2.5 and Decimal 3.2.0. Run `mix hex.audit` in the exam and review the pinned Git change separately. Remove the Git pin when a Hex Ratio release admits Decimal 3. MedEx itself continues to declare Hex dependencies. [Ratio PR 131](https://github.com/qqwy/elixir-rational/pull/131)
 
 See [Architecture and roadmap](architecture_and_roadmap.md) for storage ownership and clinical invariants.
