@@ -60,6 +60,7 @@ export MF_EXAM_LEGACY_MEDIA=1
   cd apps/exam
   mix deps.get
   env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs
+  MIX_ENV=prod mix deps.get
   env -u MF_LAB MIX_ENV=prod mix release --path "$MF_RELEASE_DIR" --overwrite
 )
 MF_LAB=1 "$MF_RELEASE_DIR/bin/mf_exam" start
@@ -70,7 +71,7 @@ headless Exam does not reuse native application metadata.
 
 Run the seed command sequentially for each synthetic encounter, changing the ID, actors and keys. It writes a private JSON array. Each entry carries its own patient/clinician actors, FHIR destination, Patient reference and Encounter reference. Boot binds those identifiers in PostgreSQL. Conflicting existing bindings fail startup. The lab seed marks its FHIR encounter in progress. To use existing resources, provision the file directly. Keep the file outside Git.
 
-The local endpoint listens on `127.0.0.1` at `MF_HTTP_PORT` (default 4000). In separate browser profiles open the encounter with the relevant key, for example `http://localhost:4000/encounters/exam-a?key=YOUR_PATIENT_KEY`. The server exchanges it for a session and redirects. Select conversation microphones independently on each side. On the patient page select the diagnostic input, start capture, and finish. If the reply is lost, reload the same tab or select **Check recording outcome**. The clinician sees recording duration, source label and first-frame receipt time, can seek during playback and explicitly accept and deliver either evidence kind. Stop the release with Ctrl-C.
+The local endpoint listens on `127.0.0.1` at `MF_HTTP_PORT` (default 4000). In separate browser profiles open the encounter with the relevant key, for example `http://localhost:4000/encounters/exam-a?key=YOUR_PATIENT_KEY`. The server exchanges it for a session and redirects. Select conversation microphones independently on each side. On the patient page select the diagnostic input, start capture, and finish. If the reply is lost, reload the same tab or select **Check recording outcome**. The clinician sees recording duration, source label and first-frame receipt time, can seek during playback and explicitly accept and deliver either evidence kind. Stop the foreground release with Ctrl-C.
 
 ## HTTPS and relay
 

@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
 </p>
 
 `mf_exam` (`apps/exam`) is the deployable Phoenix + LiveView reference
@@ -12,7 +12,17 @@ examination application in [Med Fabric](../../README.md). It consumes the single
 source [`:med_ex`](https://github.com/nshkrdotcom/med_ex) SDK and composes
 `mf_domain`, `mf_store`, and `mf_interop`.
 
----
+## Handheld examination
+
+Exam checks the device credential and encounter grant before admitting a
+stream or spot-check collection. It receives replay over TLS, persists
+authoritative evidence and progress, and presents verified waveform segments,
+gaps, timing bounds, and qualified measurements for review. PostgreSQL
+commits acceptance and any FHIR delivery intent together. Run the default
+Exam alongside the standalone Handheld client using the
+[handheld guide](../../guides/handheld_demo.md). The
+[isolated Preview service](../../guides/preview_isolation.md) is optional.
+
 
 ## Browser-to-record path
 

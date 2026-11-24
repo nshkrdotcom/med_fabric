@@ -4,14 +4,15 @@
 
 <p align="center">
   <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/core/interop/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
 </p>
 
 `mf_interop` (`core/interop`) is the single authoritative healthcare record
 exchange library for [Med Fabric](../../README.md) (kept outside
 [MedEx](https://github.com/nshkrdotcom/med_ex)). It maps accepted observations
 into HL7 FHIR R4 `Observation` resources and delivers them idempotently over
-HTTP using `Req`.
+HTTP using `Req`. Qualified spot-check pulse rate and oxygen saturation
+are separate observations with independent delivery and retry state.
 
 ---
 

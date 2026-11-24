@@ -62,7 +62,13 @@ defmodule MedFabric.Workspace.MixProject do
       main: "readme",
       before_closing_body_tag: &docs_diagrams/1,
       logo: "assets/med_fabric.svg",
-      assets: %{"assets" => "assets"},
+      assets: %{
+        "assets" => "assets",
+        "apps/exam/assets" => "assets",
+        "core/domain/assets" => "assets",
+        "core/interop/assets" => "assets",
+        "core/store/assets" => "assets"
+      },
       extras:
         [
           {"README.md", filename: "readme", title: "Overview"},

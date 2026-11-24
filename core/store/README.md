@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/core/store/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
 </p>
 
 `mf_store` (`core/store`) owns atomic persistence of encounters, typed evidence,
@@ -14,6 +14,10 @@ clinician-accepted observations, and transactional FHIR export outbox intents in
 ---
 
 ## Persistence
+
+Device ingestion records admitted attempts, durable stream progress and sealed
+manifests. Spot-check review commits accepted metrics and their FHIR delivery
+intents together. Browser recording has its own admission and recovery path.
 
 `MedFabric.Store.Postgres` runs the SQL files in `priv/sql/` in filename order
 under an advisory transaction lock. Use a dedicated candidate database and

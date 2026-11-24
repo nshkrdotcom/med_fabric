@@ -39,7 +39,8 @@ The independent consumer script expects paths resolvable from its temporary cons
 
 ## Process acceptance
 
-The runner needs Python 3.10+, OpenSSL, util-linux flock, native PostgreSQL tools (initdb, postgres, psql on PATH), and bubblewrap with working unprivileged user and PID/mount namespaces on Linux. Run as a regular user. Preview and real browser gates also need Chromium, Playwright for Node and the matching Opus/RTC build prerequisites. Install the shared pinned browser dependencies with `(cd ops && npm ci && npx playwright install chromium)`. A spot-check gate uses a dedicated local HTTP HAPI R4 instance at FHIR_BASE_URL or starts a Docker HAPI container. MF_HAPI_IMAGE can specify the operator's verified HAPI image digest. FHIR integration creates synthetic Patient, Encounter and Device resources and checks an intentionally dropped POST response before retry.
+Put PostgreSQL server binaries on PATH. On Ubuntu with PostgreSQL 18, use
+`export PATH="/usr/lib/postgresql/18/bin:$PATH"`. The runner needs Python 3.10+, OpenSSL, util-linux flock, native PostgreSQL tools (initdb, postgres, psql on PATH), and bubblewrap with working unprivileged user and PID/mount namespaces on Linux. Run as a regular user. Preview and real browser gates also need Chromium, Playwright for Node and the matching Opus/RTC build prerequisites. Install the shared pinned browser dependencies with `(cd ops && npm ci && npx playwright install chromium)`. A spot-check gate uses a dedicated local HTTP HAPI R4 instance at FHIR_BASE_URL or starts a Docker HAPI container. MF_HAPI_IMAGE can specify the operator's verified HAPI image digest. FHIR integration creates synthetic Patient, Encounter and Device resources and checks an intentionally dropped POST response before retry.
 
 ```bash
 elixir ops/handheld_acceptance.exs --suite paired --preview off
@@ -59,19 +60,64 @@ Review report.json together with logs, chunk/index/manifest files, source identi
 elixir ops/handheld_demo.exs prepare --run-dir _build/handheld-demo
 ```
 
-Preparation creates configuration, TLS material, two encounter/device bindings and directories. Start a private PostgreSQL cluster at the database_url in server.json with its associated credential, or edit that configuration to reference your own isolated test database. Manual mode may bypass the fault proxy by changing the handheld server URL to the TLS port from server.json. For a remote machine set the real DNS name, use a trusted certificate matching that name, and expose a dedicated TLS listener through firewall rules appropriate to the lab. The generated certificate is for localhost only. In ordinary MF_LAB startup, MF_DEVICE_TLS_CERTFILE and MF_DEVICE_TLS_KEYFILE enable device ingestion; MF_DEVICE_BIND_IP and MF_DEVICE_TLS_PORT select its listener. The browser/proxy identity arrangement remains independent.
+Preparation creates fixture configuration and localhost TLS material. Start
+a private PostgreSQL cluster in the prepared directory. Run as a regular
+user with the PostgreSQL server binaries on PATH.
 
 ```bash
-(cd apps/exam && mix run --no-start --no-halt ../../ops/run_exam.exs --config ../../_build/handheld-demo/server.json)
-# Second terminal, if retaining the prepared proxy URL: use its JSON port values.
-python3 ops/handheld/proxy.py PROXY_PORT TLS_PORT _build/handheld-demo/outage
-# Third terminal
-(cd apps/handheld && mix run -e 'MedExHandheld.CLI.main(System.argv())' -- --config ../../_build/handheld-demo/handheld-a.json --scenario paired_exam)
+lab="$PWD/_build/handheld-demo"
+pg_port=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["postgres_port"])' "$lab/server.json")
+
+initdb -D "$lab/pgdata" -U lab --auth-local=trust --auth-host=scram-sha-256 \
+  --pwfile="$lab/postgres.credential" --no-locale
+pg_ctl -D "$lab/pgdata" -l "$lab/logs/postgres.log" \
+  -o "-k $lab/pghost -h 127.0.0.1 -p $pg_port" start
 ```
+
+From the Fabric root, run each of these blocks in its own terminal.
+
+```bash
+cd apps/exam
+mix run --no-start --no-halt ../../ops/run_exam.exs --config ../../_build/handheld-demo/server.json
+```
+
+```bash
+python3 - _build/handheld-demo/server.json <<'PYTHON'
+import json
+import pathlib
+import sys
+
+config_path = pathlib.Path(sys.argv[1])
+config = json.loads(config_path.read_text())
+sys.argv = [
+    "ops/handheld/proxy.py", str(config["proxy_port"]), str(config["tls_port"]),
+    str(config_path.parent / "outage"),
+]
+import runpy
+runpy.run_path(sys.argv[0], run_name="__main__")
+PYTHON
+```
+
+```bash
+cd apps/handheld
+mix run -e 'MedExHandheld.CLI.main(System.argv())' -- \
+  --config ../../_build/handheld-demo/handheld-a.json --scenario paired_exam
+```
+
+For review, open
+`http://localhost:<http_port>/encounters/<exam>?key=<clinician_key>`
+using the first encounter in `server.json`. After the demo, stop Exam and the
+proxy with Ctrl-C and stop PostgreSQL with
+`pg_ctl -D _build/handheld-demo/pgdata stop`.
+
+For a remote handheld, set the server URL to a reachable DNS name and provision
+a certificate valid for that name and trusted by the handheld. In ordinary
+`MF_LAB` startup, `MF_DEVICE_TLS_CERTFILE` and `MF_DEVICE_TLS_KEYFILE` enable
+device ingestion. `MF_DEVICE_BIND_IP` and `MF_DEVICE_TLS_PORT` select its listener.
 
 The prepared harness config authorizes the synthetic encounter/site in advance. For manual readiness selection set authorize_scenarios to false. Enroll a device administratively with `DATABASE_URL=... mix run --no-start ../../ops/enroll_device.exs --device DEVICE --credential-file FILE` from apps/exam. Open the clinician URL for the encounter using its access key, follow **Handheld examinations and review**, select the enrolled device, profile and site and confirm readiness. The client then admits its descriptors and starts uploading. Review shows a verified per-segment audio player or ECG plot, explicit gaps, device/time qualifiers, upload state and the separate software-monitor command history. Select a verified source range and enter its stream:first:end for a paired review. The possible ECG correspondence uses both frozen timing bounds and lists only recorded ranges.
 
-To run the PLXS fixture, assign a fresh acquisition ID and choose plx_spot_check in the CLI. The same ID/boot is used for resuming an interrupted internet link with its original spool; reusing an ID for a different descriptor or patient is refused. The fixture holds its original local measurement time and explicit synthetic UTC qualification across delayed upload. Only qualified eligible completed measurements can be exported. Accepting both metrics creates one immutable review and two independently retryable outbox rows in one transaction. Collection rows do not represent scalar observations.
+To run the PLXS fixture, copy the handheld configuration, set its `acquisition` field to a fresh ID, and pass `--scenario plx_spot_check` with that copy. The same ID/boot is used for resuming an interrupted internet link with its original spool; reusing an ID for a different descriptor or patient is refused. The fixture holds its original local measurement time and explicit synthetic UTC qualification across delayed upload. Only qualified eligible completed measurements can be exported. Accepting both metrics creates one immutable review and two independently retryable outbox rows in one transaction. Collection rows do not represent scalar observations.
 
 Waveform spool defaults to 64 MiB and a single in-flight network frame per stream. Directory and file sync plus the Linux ownership lock are required. Use one authoritative Exam artifact root per configured database, one owner per device/acquisition spool and a service manager that observes actual process death before takeover. The protocol has no automatic network-filesystem or cross-host takeover. A reboot interrupts its source epoch; a new acquisition/boot can resume clinical collection after explicit reassignment. A committed receipt can confirm only a covered prefix on its bound stream/fence. Corruption, a missing acknowledged prefix or a timed-out disk operation blocks clean completion.
 

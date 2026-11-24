@@ -2,14 +2,28 @@
 
 Med Fabric owns clinical encounters, authorization, review, durable observations,
 and healthcare record export. `apps/exam` (`mf_exam`) is the composition root: it
-depends on [MedEx](https://github.com/nshkrdotcom/med_ex) for live media capture
-and diagnostic preview, PostgreSQL for authoritative clinical state, and an
-external HL7 FHIR R4 server for delivery. The three core clinical libraries
-(`core/domain`, `core/store`, `core/interop`) remain independent of `apps/exam`.
+uses [MedEx](https://github.com/nshkrdotcom/med_ex) for source capture and
+device contracts, PostgreSQL for authoritative clinical state, and an external
+HL7 FHIR R4 server for delivery. The domain, store, and interoperability
+libraries are independent of Exam.
 
-## Exam composition
+## Handheld acquisition
 
-Each authorized encounter composes three independent paths:
+The standalone Handheld application owns its synthetic source clocks, local
+command journal and durable spool. Exam admits device and stream descriptors
+against the encounter grant. It acknowledges covered durable prefixes, and
+Handheld replays its retained records over TLS following an interruption.
+The review binds the immutable capture manifest, including explicit gaps and
+clock uncertainty. For spot checks, accepting eligible measurements creates
+independently retryable FHIR outbox entries in the same transaction as review.
+
+The optional Preview application runs in a separate BEAM and receives
+disposable monitor data. The authoritative PCM and journal remain with Exam.
+See the [handheld guide](handheld_demo.md) and [preview guide](preview_isolation.md).
+
+## Browser examination
+
+An authorized browser encounter composes three independent paths.
 
 1. **Two-way conversation:** Direct browser-to-browser WebRTC audio talkback
    between patient and clinician, authorized and signaled by `apps/exam`.
@@ -131,3 +145,18 @@ application defines its public library API.
 
 See [Browser to record](browser_to_record.md) for prerequisites, release
 deployment, verification, and the manual listening check.
+
+
+## Qualification
+
+The simulated acceptance suites exercise PostgreSQL persistence, authenticated
+TLS reconnect and replay, process failures, and isolated monitor failure.
+The spot-check suite exercises retry and read-back against HAPI FHIR R4,
+including a lost HTTP response. The browser suites cover review and media.
+The [handheld guide](handheld_demo.md) lists the prerequisites and suites.
+
+Physical-device validation requires calibrated signals, ADC and oscillator
+characterization, and hardware dropout and restart testing. BLE conformance
+applies to physical pulse-oximeter integration. Clinical validation requires
+human-factors and intended-use evidence. Production deployment also requires
+security and operational qualification in its target environment.

@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/core/domain/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
 </p>
 
 `mf_domain` (`core/domain`) provides pure Elixir clinical evidence constructors

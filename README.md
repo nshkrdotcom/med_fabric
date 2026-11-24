@@ -4,22 +4,50 @@
 
 <p align="center">
   <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
 </p>
 
-Med Fabric is a deployable Elixir reference exam that brings together two-way
-WebRTC talkback, live diagnostic audio capture with
-[MedEx](https://github.com/nshkrdotcom/med_ex), and clinician review of
-recordings and pulse-rate measurements. PostgreSQL records acceptance and queues
-HL7 FHIR R4 delivery.
+Med Fabric is an Elixir medical-device reference application built on
+[MedEx](https://github.com/nshkrdotcom/med_ex). It connects device acquisition
+to encounter-scoped review, durable clinical acceptance, and HL7 FHIR R4
+delivery. Exam is the Phoenix server. Handheld is a standalone Mix application
+that simulates reference peripherals and can collect while the uplink is down.
+Preview is an optional service that runs in a separate BEAM.
 
-## Run the clinical workflows
+## Workflows
 
-The exam supports a guided synthetic acoustic/ECG acquisition and a PLXS spot check with delayed delivery, alongside browser WAV and manual pulse. A device credential plus a clinician's encounter grant authorizes capture. Review binds the exact immutable manifest. Each accepted PLXS metric has an independent FHIR delivery record.
+- **Paired acoustic and ECG examination.** Admit a device to an encounter and
+  record two independent waveforms. The reviewer can play verified acoustic
+  segments, inspect ECG ranges and explicit gaps, and see which recorded
+  ranges may correspond given the source clocks' uncertainty.
+- **Pulse-oximetry spot check.** Collect synthetic PLXS events into a durable
+  handheld spool and replay them after reconnecting. A clinician can mark a
+  collection unusable, request a repeat, or accept eligible pulse-rate and
+  oxygen-saturation measurements. Each accepted metric has its own retryable
+  FHIR delivery record.
+- **Browser examination.** Run two-way WebRTC talkback alongside patient-side
+  lossless WAV capture and clinician-entered pulse rate. See the browser
+  guide for the optional legacy media build profile.
 
-Select the matching MedEx source and use ordinary Mix in each application. The temporary default Git branch must be replaced with the verified reachable implementation commit after integration. No MedEx or Fabric package publication is part of this change.
+MedEx supplies capture and device contracts. Fabric owns patient and encounter
+identity, device enrollment and authorization, durable evidence and review,
+and the decision to export. PostgreSQL commits clinical acceptance and its
+FHIR outbox entries atomically. Optional monitor failures can interrupt
+listening while authoritative capture continues.
 
-[Handheld setup and process acceptance](guides/handheld_demo.md) · [Browser to record](guides/browser_to_record.md) · [Optional monitor service](guides/preview_isolation.md)
+## Run a local demonstration
+
+Use Elixir 1.20 with OTP 29 and ordinary Mix in the application directories.
+The committed locks select the SDK and provider revisions. Start with the
+[handheld guide](guides/handheld_demo.md) for dependencies, native PostgreSQL,
+a separate-terminal demo, and automated TLS replay and recovery checks.
+The [browser guide](guides/browser_to_record.md) covers the browser workflow.
+The [preview guide](guides/preview_isolation.md) covers the isolated monitor.
+
+The simulated runs exercise real software boundaries, including TLS,
+PostgreSQL, browser playback, and HAPI FHIR in the relevant suites. Physical
+peripherals, calibrated signals, clinical use, and production deployment
+require separate validation. See [architecture and qualification](guides/architecture_and_roadmap.md).
 
 ## Projects
 
@@ -27,8 +55,8 @@ Select the matching MedEx source and use ordinary Mix in each application. The t
 | --- | --- |
 | [core/domain](core/domain/README.md) | Validate audio and vital evidence constructors in pure Elixir |
 | [core/store](core/store/README.md) | Commit encounters, evidence, acceptance, and outbox intents atomically in PostgreSQL |
-| [core/interop](core/interop/README.md) | Map reviewed recordings and pulse rates to HL7 FHIR R4 and confirm idempotent delivery |
-| [apps/exam](apps/exam/README.md) | Boot Phoenix, authorize encounters, host talkback/preview/PCM sockets, and serve the review UI |
+| [core/interop](core/interop/README.md) | Map reviewed evidence to HL7 FHIR R4 and confirm idempotent delivery |
+| [apps/exam](apps/exam/README.md) | Admit devices, host acquisition and browser endpoints, and serve clinical review |
 | [apps/handheld](apps/handheld/README.md) | Standalone synthetic peripheral client, TLS transport and durable spool |
 | [apps/preview](apps/preview/README.md) | Optional isolated monitor encoding, RTC and signaling |
 
