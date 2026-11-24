@@ -38,20 +38,23 @@ defmodule MedFabric.Interop.Observation do
   # additional fractional zeroes. Only formatting is normalized; an actual
   # instant change, partial date, missing timezone or non-string stays different.
   defp normalize_instants(resource) do
-    Enum.reduce(["effectiveDateTime", "issued"], resource, fn key, acc ->
-      case acc[key] do
-        value when is_binary(value) ->
-          if Regex.match?(~r/\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})\z/, value) do
-            case DateTime.from_iso8601(value) do
-              {:ok, instant, _offset} -> Map.put(acc, key, {:instant_us, DateTime.to_unix(instant, :microsecond)})
-              _ -> acc
-            end
-          else
-            acc
-          end
-        _ -> acc
-      end
-    end)
+    Enum.reduce(["effectiveDateTime", "issued"], resource, &normalize_instant/2)
+  end
+
+  defp normalize_instant(key, resource) do
+    value = resource[key]
+
+    with true <- is_binary(value),
+         true <-
+           Regex.match?(
+             ~r/\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})\z/,
+             value
+           ),
+         {:ok, instant, _offset} <- DateTime.from_iso8601(value) do
+      Map.put(resource, key, {:instant_us, DateTime.to_unix(instant, :microsecond)})
+    else
+      _ -> resource
+    end
   end
 
   defp strip_reference_display(remote, field, expected) do
@@ -67,25 +70,34 @@ defmodule MedFabric.Interop.Observation do
   defp quantity_match?(%{"value" => left} = expected, %{"value" => right} = actual) do
     Map.drop(expected, ["value"]) == Map.drop(actual, ["value"]) and decimal_equal?(left, right)
   end
+
   defp quantity_match?(_, _), do: false
 
   defp decimal_equal?(left, right) when is_integer(left) and is_integer(right), do: left == right
+
   defp decimal_equal?(%Decimal{} = left, right) when is_integer(right),
     do: finite?(left) and Decimal.equal?(left, Decimal.new(right))
+
   defp decimal_equal?(left, %Decimal{} = right) when is_integer(left),
     do: finite?(right) and Decimal.equal?(Decimal.new(left), right)
+
   defp decimal_equal?(%Decimal{} = left, %Decimal{} = right),
     do: finite?(left) and finite?(right) and Decimal.equal?(left, right)
+
   defp decimal_equal?(_, _), do: false
   defp finite?(value), do: not Decimal.nan?(value) and not Decimal.inf?(value)
 
   defp required_metadata?(nil, _), do: true
+
   defp required_metadata?(expected, actual) when is_map(expected) and is_map(actual) do
     Enum.all?(expected, fn
       {key, values} when key in ["profile", "tag", "security"] and is_list(values) ->
         is_list(actual[key]) and Enum.all?(values, &(&1 in actual[key]))
-      {key, value} -> actual[key] == value
+
+      {key, value} ->
+        actual[key] == value
     end)
   end
+
   defp required_metadata?(_, _), do: false
 end

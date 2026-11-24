@@ -4,8 +4,11 @@ defmodule MedFabric.Store.JSONTest do
 
   test "JSONB codec preserves the exact outbox number without a float or string conversion" do
     value = Decimal.new("97.2000000000000001")
-    bytes = StoreJSON.encode_to_iodata!(%{"valueQuantity" => %{"value" => value}})
+
+    bytes =
+      StoreJSON.encode_to_iodata!(%{"valueQuantity" => %{"value" => value}})
       |> IO.iodata_to_binary()
+
     assert bytes == "{\"valueQuantity\":{\"value\":97.2000000000000001}}"
     decoded = StoreJSON.decode!(bytes)
     assert Decimal.equal?(decoded["valueQuantity"]["value"], value)
