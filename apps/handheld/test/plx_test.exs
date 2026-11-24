@@ -14,9 +14,13 @@ defmodule MedExHandheld.PLXAdapterTest do
   end
 
   test "SFLOAT preserves signed decimal resolution and all five special words" do
-    for {word, expected} <- [{0x07FE, :positive_infinity}, {0x07FF, :nan},
-                             {0x0800, :not_at_resolution}, {0x0801, :reserved},
-                             {0x0802, :negative_infinity}] do
+    for {word, expected} <- [
+          {0x07FE, :positive_infinity},
+          {0x07FF, :nan},
+          {0x0800, :not_at_resolution},
+          {0x0801, :reserved},
+          {0x0802, :negative_infinity}
+        ] do
       assert {:ok, %{spo2: {:special, ^expected}}} = PLX.spot_check(<<0, word::little-16, 0::16>>)
     end
 
@@ -39,7 +43,15 @@ defmodule MedExHandheld.PLXAdapterTest do
 
   test "features and RFU bits are retained without inventing supported statuses" do
     assert {:ok, f} = PLX.features(<<0x8F, 0x80, 0, 0x0A, 0, 0x88, 0x80>>)
-    assert f.supported == [:measurement_status, :device_status, :storage, :timestamp, :multiple_bonds]
+
+    assert f.supported == [
+             :measurement_status,
+             :device_status,
+             :storage,
+             :timestamp,
+             :multiple_bonds
+           ]
+
     assert f.device_status.set == [:sensor_off_user, :sensor_disconnected]
     assert f.device_status.raw == 0x808800
     assert {:ok, %{spo2: {:finite, 98, 0}}} = PLX.spot_check(<<0xE0, 98, 0, 70, 0>>)
@@ -47,8 +59,10 @@ defmodule MedExHandheld.PLXAdapterTest do
 
   test "truncated optional fields and trailing bytes cannot produce measurements" do
     full = <<0x0F, 98, 0, 70, 0, 2026::little-16, 11, 24, 9, 30, 15, 0::56>>
+
     for size <- 0..(byte_size(full) - 1),
         do: assert(PLX.spot_check(binary_part(full, 0, size)) == {:error, :invalid_length})
+
     assert {:error, :invalid_length} = PLX.spot_check(<<0, 98, 0, 70, 0, 0>>)
     assert {:error, :invalid_length} = PLX.features(<<3, 0, 0, 0, 0, 0>>)
   end
