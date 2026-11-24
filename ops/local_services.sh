@@ -104,22 +104,30 @@ build_hapi() {
 }
 
 hapi_pid() {
-  local pid
+  local pid expected_port="${1:-}"
   [[ -f "$state/hapi.pid" ]] || return 1
   read -r pid <"$state/hapi.pid"
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   local args
   args="$(ps -p "$pid" -o args=)" || return 1
   [[ "$args" == *"$hapi_archive"* && "$args" == *"--spring.datasource.url=jdbc:h2:file:$state/fhir "* ]] || return 1
+  [[ -z "$expected_port" || "$args" == *"--server.port=$expected_port "* ]] || return 1
   printf '%s\n' "$pid"
 }
 
 wait_hapi() {
-  local fhir_url="$1"
+  local fhir_url="$1" ownership="${2:-external}"
   local attempt
+  local direct=()
+  if [[ "$ownership" == local ]]; then direct=(--noproxy '*'); fi
   for ((attempt=0;attempt<90;attempt++)); do
-    if curl -fsS --max-time 2 -H 'Accept: application/fhir+json' "${fhir_url%/}/metadata" 2>/dev/null |
+    if [[ "$ownership" == local && "$attempt" != 0 ]] && ! hapi_pid "$hapi_port" >/dev/null; then
+      die "Owned HAPI exited before readiness. See $state/hapi.log."
+    fi
+    if curl -fsS --max-time 2 "${direct[@]}" -H 'Accept: application/fhir+json' "${fhir_url%/}/metadata" 2>/dev/null |
       jq -e '.fhirVersion == "4.0.1"' >/dev/null; then
+      [[ "$ownership" != local ]] || hapi_pid "$hapi_port" >/dev/null ||
+        die "FHIR response came without the owned HAPI process."
       return 0
     fi
     sleep 2
@@ -128,7 +136,20 @@ wait_hapi() {
   die "FHIR R4 metadata never became ready at $fhir_url. See $state/hapi.log for local HAPI."
 }
 
+require_free_hapi_port() {
+  local probe=0
+  command -v timeout >/dev/null || die "Install timeout to check the HAPI listener."
+  timeout 2 bash -c 'exec 3<>"/dev/tcp/127.0.0.1/$1"' _ "$hapi_port" 2>/dev/null || probe=$?
+  [[ "$probe" == 1 ]] || die "HAPI port $hapi_port is occupied or could not be checked."
+}
+
 start_hapi() {
+  if hapi_pid >/dev/null; then
+    hapi_pid "$hapi_port" >/dev/null || die "This state directory owns HAPI on a different port."
+    return 0
+  fi
+  require_free_hapi_port
+
   local java=java
   [[ -z "${JAVA_HOME:-}" ]] || java="$JAVA_HOME/bin/java"
   local javac
@@ -143,6 +164,7 @@ start_hapi() {
   fi
 
   if ! hapi_pid >/dev/null; then
+    require_free_hapi_port
     (
       cd "$state"
       nohup "$java" -Xms128m -Xmx1g -jar "$hapi_archive" \
@@ -157,9 +179,16 @@ start_hapi() {
 stop_hapi() {
   local pid attempt
   pid="$(hapi_pid)" || return 0
-  kill "$pid"
-  for ((attempt=0;attempt<60;attempt++)); do
-    hapi_pid >/dev/null || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  for ((attempt=0;attempt<30;attempt++)); do
+    [[ "$(hapi_pid)" == "$pid" ]] || return 0
+    sleep 1
+  done
+  if [[ "$(hapi_pid)" == "$pid" ]]; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  for ((attempt=0;attempt<10;attempt++)); do
+    [[ "$(hapi_pid)" == "$pid" ]] || return 0
     sleep 1
   done
   die "HAPI failed to stop"
@@ -185,8 +214,12 @@ case "${1:-}" in
     hapi_archive="$hapi_source/target/ROOT.war"
     [[ -n "${DATABASE_URL:-}" ]] || start_postgres
     if [[ "$1" == "start" ]]; then
-      [[ -n "${FHIR_BASE_URL:-}" ]] || start_hapi
-      wait_hapi "${FHIR_BASE_URL:-$native_fhir_url}"
+      if [[ -n "${FHIR_BASE_URL:-}" ]]; then
+        wait_hapi "$FHIR_BASE_URL"
+      else
+        start_hapi
+        wait_hapi "$native_fhir_url" local
+      fi
     fi
     print_env
     ;;
@@ -194,7 +227,7 @@ case "${1:-}" in
     hapi_pid >/dev/null || die "No owned HAPI process in $state"
     stop_hapi
     start_hapi
-    wait_hapi "$native_fhir_url"
+    wait_hapi "$native_fhir_url" local
     ;;
   env)
     if [[ -z "${DATABASE_URL:-}" && -s "$state/pg.pass" ]]; then

@@ -1,89 +1,156 @@
 defmodule MedFabric.BuildSources do
   @moduledoc false
+
+  @med_ex_apps [:med_ex, :med_ex_opus, :med_ex_rtc]
+  @med_ex_requirement "~> 0.2.0"
+  # Baseline provider revision. Repin this family after the verified MedEx push.
+  @med_ex_revision "3dbb770550ac1a4340eecb6951d5bf21c6f0fcb8"
   @repo_apps ~w(med_ex med_ex_opus med_ex_rtc mf_domain mf_store mf_interop)
-  @scm ~w(path in_umbrella git github ref branch tag subdir sparse submodules depth hex repo organization)a
+  @git_keys [:github, :git, :ref, :branch, :tag, :subdir]
+  @scm @git_keys ++ ~w(path in_umbrella sparse submodules depth hex repo organization)a
+  @mix_paths ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE)
 
-  # This is committed repository-owned code, never loaded from a user-provided executable path.
-  # Call once in project/0 and use both return values. Runtime apps do not call this module.
-  def resolve(defaults, project_dir, repo_root) do
+  def med_ex_dependency(app) when app in @med_ex_apps do
+    git = [github: "nshkrdotcom/med_ex", ref: @med_ex_revision]
+    options = if app == :med_ex, do: [override: true], else: [subdir: "extensions/#{app}"]
+    {app, @med_ex_requirement, git ++ options}
+  end
+
+  # Loaded only by the repository-owned Mix projects.
+  def resolve(defaults, project_dir, repo_root, options \\ []) do
     file = Path.join(repo_root, ".mix_sources.json")
-    overrides = if File.exists?(file), do: read_object!(file), else: %{}
+    profile = Keyword.get(options, :profile, :default)
+    declared = Enum.map(defaults, fn dep -> dep |> elem(0) |> Atom.to_string() end)
+    choices = selections!(file)
+    # Store is the only participating internal project with selectable deps.
+    # Its domain selection also changes the dependency consumer's closure.
+    effective_apps = if "mf_store" in declared, do: ["mf_domain" | declared], else: declared
+    active = Map.take(choices, effective_apps)
 
-    known =
-      Map.new(defaults, fn dep ->
-        {app, _, _} = split(dep)
-        {Atom.to_string(app), app}
-      end)
+    deps = Enum.map(defaults, &apply_choice!(&1, active))
 
-    allowed = MapSet.new(@repo_apps ++ Map.keys(known))
-
-    unless Enum.all?(Map.keys(overrides), &MapSet.member?(allowed, &1)),
-      do: Mix.raise("Unknown dependency in #{file}")
-
-    # The previous single-candidate flag is translated at the build boundary.
-    old = System.get_env("MF_MED_EX_PATH")
-    if old && map_size(overrides) > 0, do: Mix.raise("Choose .mix_sources.json or MF_MED_EX_PATH")
-    overrides = if old, do: %{"med_ex" => %{"path" => old}}, else: overrides
-
-    normalized =
-      Enum.map(defaults, fn dep ->
-        {app, requirement, policy} = split(dep)
-
-        case Map.fetch(overrides, Atom.to_string(app)) do
-          :error ->
-            dep
-
-          {:ok, choice} ->
-            source = source!(choice, Path.dirname(file))
-            if path = source[:path], do: check_identity!(app, path)
-
-            if Keyword.has_key?(source, :hex) and not is_binary(requirement),
-              do: Mix.raise("Hex selection requires a committed version requirement")
-
-            options = Keyword.drop(policy, @scm) ++ source
-            if requirement, do: {app, requirement, options}, else: {app, options}
-        end
-      end)
-
-    if map_size(overrides) == 0 do
-      {normalized, []}
+    if active == %{} and profile == :default do
+      {deps, []}
     else
-      for name <- ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE),
-          System.get_env(name) do
-        Mix.raise(
-          "#{name} conflicts with selected source isolation; unset it for this invocation"
-        )
-      end
-
-      frozen = for dep <- normalized, identity = artifact_identity(dep), do: identity
-
-      lock =
-        case File.read(Path.join(project_dir, "mix.lock")) do
-          {:ok, b} -> b
-          _ -> ""
-        end
-
-      identity =
-        {1, Path.expand(project_dir), normalized, frozen, digest(lock), System.version(),
-         :erlang.system_info(:otp_release), :erlang.system_info(:system_architecture), Mix.env(),
-         Mix.target()}
-
-      context = digest(:erlang.term_to_binary(identity))
-      root = Path.join([Path.expand(project_dir), "_build", "source_contexts", context])
-
-      {normalized,
-       [
-         lockfile: Path.join(root, "mix.lock"),
-         deps_path: Path.join(root, "deps"),
-         build_path: Path.join(root, "build")
-       ]}
+      {deps, context_paths!(deps, active, Path.expand(project_dir), profile)}
     end
   end
 
-  # Inspect only literal app declarations. Mix performs final dependency identity
-  # validation for projects with dynamically computed configuration.
+  defp selections!(file) do
+    input = File.read(file)
+    legacy = System.get_env("MF_MED_EX_PATH")
+
+    data =
+      case {input, legacy} do
+        {{:ok, _bytes}, path} when is_binary(path) ->
+          Mix.raise("Choose .mix_sources.json or the deprecated MF_MED_EX_PATH")
+
+        {{:ok, bytes}, nil} ->
+          read_object!(bytes, file)
+
+        {{:error, :enoent}, path} when is_binary(path) ->
+          %{"med_ex" => %{"path" => path}}
+
+        {{:error, :enoent}, nil} ->
+          %{}
+
+        {{:error, reason}, _} ->
+          Mix.raise("Cannot read #{file}: #{inspect(reason)}")
+      end
+
+    unless Enum.all?(Map.keys(data), &(&1 in @repo_apps)),
+      do: Mix.raise("Unknown dependency in #{file}")
+
+    Map.new(data, fn {app, choice} -> {app, source!(choice, Path.dirname(file))} end)
+  end
+
+  defp apply_choice!(dep, active) do
+    {app, requirement, policy} = split(dep)
+
+    case Map.fetch(active, Atom.to_string(app)) do
+      :error ->
+        dep
+
+      {:ok, source} ->
+        if path = source[:path], do: check_identity!(app, path)
+
+        if source[:hex] && !match?({:ok, _}, Version.parse_requirement(requirement || "")) do
+          Mix.raise("Hex selection requires a committed version requirement for #{app}")
+        end
+
+        options = Keyword.drop(policy, @scm) ++ source
+        if requirement, do: {app, requirement, options}, else: {app, options}
+    end
+  end
+
+  defp context_paths!(deps, active, project, profile) do
+    for name <- @mix_paths, System.get_env(name) do
+      Mix.raise("#{name} conflicts with source/profile isolation; unset it for this invocation")
+    end
+
+    normalized =
+      Enum.map(deps, fn dep ->
+        {app, requirement, options} = split(dep)
+        {app, requirement, Enum.sort(options)}
+      end)
+
+    frozen =
+      for {app, options} <- active, identity = artifact_identity(app, options), do: identity
+
+    lock = Path.join(project, "mix.lock")
+    lock_digest = if File.regular?(lock), do: lock |> File.read!() |> digest(), else: nil
+    otp = :erlang.system_info(:otp_release)
+    otp_file = Path.join([to_string(:code.root_dir()), "releases", to_string(otp), "OTP_VERSION"])
+
+    otp_version =
+      case File.read(otp_file) do
+        {:ok, bytes} -> String.trim(bytes)
+        _ -> :erlang.system_info(:system_version)
+      end
+
+    hex = if Enum.any?(active, fn {_app, options} -> options[:hex] end), do: hex_context()
+
+    identity =
+      {2, project, profile, normalized, Enum.sort(active), Enum.sort(frozen), hex, lock_digest,
+       System.version(), otp_version, :erlang.system_info(:system_architecture), Mix.env(),
+       Mix.target()}
+
+    context = digest(:erlang.term_to_binary(identity))
+    root = Path.join([project, "_build", "source_contexts", context])
+
+    [
+      lockfile: Path.join(root, "mix.lock"),
+      deps_path: Path.join(root, "deps"),
+      build_path: Path.join(root, "build")
+    ]
+  end
+
+  defp hex_context do
+    home = System.get_env("HEX_HOME", Path.join(System.user_home!(), ".hex")) |> Path.expand()
+
+    mirrors =
+      Enum.map(~w(HEX_MIRROR_URL HEX_TRUSTED_MIRROR_URL), fn name ->
+        if url = System.get_env(name) do
+          %URI{scheme: scheme, host: host, port: port, path: path} = URI.parse(url)
+          {scheme, host, port, path}
+        end
+      end)
+
+    {home, System.get_env("MIX_XDG"), System.get_env("XDG_CONFIG_HOME"),
+     System.get_env("XDG_DATA_HOME"), mirrors}
+  end
+
+  # Check literal app metadata without evaluating a selected project. Mix's
+  # ordinary dependency loader verifies dynamically declared app identities.
   defp check_identity!(app, path) do
-    ast = File.read!(Path.join(path, "mix.exs")) |> Code.string_to_quoted!()
+    mix = Path.join(path, "mix.exs")
+    unless File.regular?(mix), do: Mix.raise("Missing Mix project: #{path}")
+
+    ast =
+      case Code.string_to_quoted(File.read!(mix)) do
+        {:ok, tree} -> tree
+        {:error, _} -> Mix.raise("Cannot parse selected project: #{mix}")
+      end
 
     {_, apps} =
       Macro.prewalk(ast, [], fn
@@ -99,57 +166,72 @@ defmodule MedFabric.BuildSources do
   defp split({app, options}) when is_list(options), do: {app, nil, options}
 
   defp source!(%{"path" => path} = data, base) when map_size(data) == 1 and is_binary(path) do
-    expanded = Path.expand(path, base)
-
-    unless File.regular?(Path.join(expanded, "mix.exs")),
-      do: Mix.raise("Missing Mix project: #{expanded}")
-
-    [path: expanded]
+    unless coordinate?(path), do: Mix.raise("Invalid Mix source path")
+    [path: Path.expand(path, base)]
   end
 
   defp source!(%{"hex" => package} = data, _base) when is_binary(package) do
     keys!(data, ~w(hex repo))
     repo = Map.get(data, "repo", "hexpm")
-    unless is_binary(repo) and repo != "", do: Mix.raise("Invalid Hex repository")
+
+    unless Regex.match?(~r/\A[a-z][a-z0-9_]*\z/, package) and coordinate?(repo) and
+             Regex.match?(~r/\A[a-zA-Z0-9_:-]+\z/, repo) do
+      Mix.raise("Invalid Hex package or repository")
+    end
+
     [hex: package, repo: repo]
   end
 
-  defp source!(data, _base) when is_map(data) do
-    keys!(data, ~w(github git ref branch tag subdir))
+  defp source!(data, base) when is_map(data) do
+    keys!(data, Enum.map(@git_keys, &Atom.to_string/1))
     origins = Enum.filter(~w(github git), &Map.has_key?(data, &1))
     refs = Enum.filter(~w(ref branch tag), &Map.has_key?(data, &1))
 
     unless length(origins) == 1 and length(refs) == 1 and
-             Enum.all?(Map.values(data), &(is_binary(&1) and &1 != "")),
-           do: Mix.raise("Select one Git origin and one ref, tag or branch")
+             Enum.all?(Map.values(data), &coordinate?/1) and
+             not String.starts_with?(Map.get(data, hd(refs)), "-") do
+      Mix.raise("Select one Git origin and one ref, tag or branch")
+    end
+
+    if github = data["github"] do
+      unless Regex.match?(~r/\A[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\z/, github),
+        do: Mix.raise("GitHub selection requires owner/repository")
+    end
 
     if subdir = data["subdir"] do
       if Path.type(subdir) != :relative or ".." in Path.split(subdir),
         do: Mix.raise("Git subdir must stay inside the checkout")
     end
 
-    # Only this fixed whitelist can become atoms; input values never can.
-    for key <- ~w(github git ref branch tag subdir),
-        Map.has_key?(data, key),
-        do: {String.to_existing_atom(key), Map.fetch!(data, key)}
+    for key <- @git_keys, Map.has_key?(data, Atom.to_string(key)) do
+      value = Map.fetch!(data, Atom.to_string(key))
+      {key, if(key == :git, do: git_location(value, base), else: value)}
+    end
   end
 
   defp source!(_, _), do: Mix.raise("A source selection must be an object")
+
+  defp coordinate?(value) do
+    is_binary(value) and value != "" and String.trim(value) == value and
+      not String.contains?(value, [<<0>>, "\n", "\r"])
+  end
+
+  defp git_location(value, base) do
+    if Regex.match?(~r/\A[^\/]+:/, value), do: value, else: Path.expand(value, base)
+  end
 
   defp keys!(data, keys) do
     unless Enum.all?(Map.keys(data), &(&1 in keys)),
       do: Mix.raise("Unknown/conflicting source option")
   end
 
-  defp artifact_identity(dep) do
-    {app, _, options} = split(dep)
-
+  defp artifact_identity(app, options) do
     if path = options[:path] do
       marker = Path.join(path, "weld.provenance.json")
 
       if File.regular?(marker) do
-        case read_object!(marker) do
-          %{"kind" => "full", "artifact_id" => id} when is_binary(id) -> {app, id}
+        case read_object!(File.read!(marker), marker) do
+          %{"kind" => "full", "artifact_id" => id} when is_binary(id) and id != "" -> {app, id}
           %{"kind" => "live"} -> nil
           _ -> Mix.raise("Invalid projection identity at #{marker}")
         end
@@ -157,7 +239,7 @@ defmodule MedFabric.BuildSources do
     end
   end
 
-  defp read_object!(file) do
+  defp read_object!(bytes, file) do
     decoders = [
       object_start: fn _ -> %{} end,
       object_push: fn key, value, acc ->
@@ -167,7 +249,7 @@ defmodule MedFabric.BuildSources do
       object_finish: fn acc, parent -> {acc, parent} end
     ]
 
-    case JSON.decode(File.read!(file), nil, decoders) do
+    case JSON.decode(bytes, nil, decoders) do
       {value, nil, rest} when is_map(value) ->
         if String.trim(rest) != "", do: Mix.raise("Trailing JSON in #{file}")
         value
@@ -177,5 +259,5 @@ defmodule MedFabric.BuildSources do
     end
   end
 
-  defp digest(binary), do: :crypto.hash(:sha256, binary) |> Base.encode16(case: :lower)
+  defp digest(bytes), do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
 end

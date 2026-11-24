@@ -7,6 +7,24 @@ device contracts, PostgreSQL for authoritative clinical state, and an external
 HL7 FHIR R4 server for delivery. The domain, store, and interoperability
 libraries are independent of Exam.
 
+```mermaid
+flowchart TD
+  Handheld -->|TLS waveform and measurement ingestion| Exam
+  Exam --> Domain
+  Exam --> Store[(Store and PostgreSQL)]
+  Exam --> Interop
+  Store --> Domain
+  Interop --> FHIR[(FHIR R4)]
+  Exam -->|Bounded monitor feed| Preview
+  Preview -->|Optional live audio| Browser
+  Exam -->|Evidence review| Browser
+```
+
+Exam and Handheld use MedEx base in their default Mix projects. Preview
+has its own release and selects the base plus the Opus and RTC providers.
+The browser examination can instead use the explicit legacy media
+profile in Exam. The root workspace provides development orchestration.
+
 ## Handheld acquisition
 
 The standalone Handheld application owns its synthetic source clocks, local

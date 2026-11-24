@@ -2,15 +2,13 @@ Code.require_file("../../config/sources.exs", __DIR__)
 
 defmodule MedExHandheld.MixProject do
   use Mix.Project
+  alias MedFabric.BuildSources
 
   def project do
     {deps, paths} =
-      MedFabric.BuildSources.resolve(
+      BuildSources.resolve(
         [
-          {:med_ex, "~> 0.2.0",
-           github: "nshkrdotcom/med_ex",
-           ref: "c031a38a9e28fe6bccf1358d8f41fa419aa708d2",
-           override: true},
+          BuildSources.med_ex_dependency(:med_ex),
           {:gun, "~> 2.8.0"}
         ],
         __DIR__,

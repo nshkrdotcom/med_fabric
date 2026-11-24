@@ -4,50 +4,97 @@ Med Fabric records two independent reference-peripheral waveforms or a sparse PL
 
 ## Choose application sources
 
-The committed Mix locks select the verified MedEx Git revisions for the SDK base
-and optional providers. The published MedEx 0.1.0 package supports the legacy
-contract. The stream-v1 applications use the verified Git source at product
-version 0.2.0. Use a local source selection below when developing the SDK.
+The default SDK family uses one MedEx Git revision in `config/sources.exs`.
+The extensions use their own Git `subdir` and the host selects the shared
+base package. When changing the pin, resolve the ordinary default `mix.lock`
+in Exam, Handheld, and Preview with `mix deps.get`. Check the legacy media
+profile in its own context. Stream-v1 applications require the revision-1
+contract. A legacy SDK package with only browser capture cannot satisfy it.
 
-For a local implementation checkout, write this data file in the **Fabric root**:
+For local MedEx development, create `.mix_sources.json` in the **Fabric root**:
 
 ```json
 {
-  "med_ex": {"path":"../med_ex"},
-  "med_ex_opus": {"path":"../med_ex/extensions/med_ex_opus"},
-  "med_ex_rtc": {"path":"../med_ex/extensions/med_ex_rtc"}
+  "med_ex": {"path": "../med_ex"},
+  "med_ex_opus": {"path": "../med_ex/extensions/med_ex_opus"},
+  "med_ex_rtc": {"path": "../med_ex/extensions/med_ex_rtc"}
 }
 ```
 
-Name it `.mix_sources.json`. The build helper applies only dependencies declared by the current project. A path may also point to an explicitly chosen live/full Weld projection. Git source selections accept one GitHub/Git origin and one ref/branch/tag; Hex selection requires a versioned dependency. Source choices isolate **lockfile, deps and build paths** by project, toolchain and Mix environment. Remove the file to return to committed defaults. A simultaneous MF_MED_EX_PATH and selector file is rejected. The legacy environment variable supports existing automation during migration. Weld and MWS are maintainer tools and are absent from application dependencies.
+Paths resolve relative to this file. The build applies selections to declared
+dependencies. Exam and Handheld use the base entry in their default profiles.
+Preview and legacy Exam also use the two provider entries.
+The selector accepts the MedEx family and Fabric's three internal library
+names. Third-party dependencies continue to use their Mix declarations.
 
-Install Elixir 1.20.x/OTP 29, Hex/Rebar and the dependencies for each actual context. Leave MIX_BUILD_PATH, MIX_BUILD_ROOT, MIX_DEPS_PATH and MIX_LOCKFILE unset. From the Fabric root:
+| Transport | Source entry example for `med_ex_opus` |
+| --- | --- |
+| Live projection | `{"path":"../med_ex/.weld/live/med_ex_opus"}` |
+| Detached full projection | `{"path":"../med_ex/.weld/full/med_ex_opus/project"}` |
+| Prepared project | `{"path":"../med_ex/.weld/releases/med_ex_opus/<identity>/project"}` |
+| Pinned Git | `{"github":"nshkrdotcom/med_ex","ref":"<verified-full-sha>","subdir":"extensions/med_ex_opus"}` |
+| Versioned Hex | `{"hex":"med_ex_opus","repo":"hexpm"}` |
+
+Use the matching path or Git revision for each selected package. For the base
+Git choice omit `subdir`. Git entries accept one `github` or `git` origin and
+one `ref`, `branch`, or `tag`. A Hex choice uses the declaration's compatible
+version requirement and needs a registry that actually serves the packages.
+Installations from existing projections use ordinary Mix. Generate the views
+in MedEx before choosing them in Fabric.
+
+Selected sources and `MF_EXAM_LEGACY_MEDIA=1` get separate **lockfile,
+dependency, and build paths**, keyed by project, active sources, toolchain,
+Mix environment/target, and profile. Full and prepared content identities
+also distinguish regenerated candidates at the same path. Remove the source
+file and clear the legacy profile to return to default paths. Leave
+`MIX_BUILD_PATH`, `MIX_BUILD_ROOT`, `MIX_DEPS_PATH`, and `MIX_LOCKFILE` unset
+when selecting either isolated context. `MF_MED_EX_PATH` is a deprecated
+base-only translation for existing callers. Use it with no selector file.
+An explicit Hex choice includes its Hex home and mirror coordinates in
+the build context, allowing a private registry rehearsal to use the same
+repository name with separate state.
+
+Install Elixir 1.20/OTP 29 and Hex/Rebar. From the Fabric root:
 
 ```bash
 for project in core/domain core/store core/interop apps/exam apps/handheld; do
   (cd "$project" && mix deps.get && mix compile && MIX_ENV=test mix deps.get && MIX_ENV=test mix compile)
 done
-# Optional isolated native provider and legacy-browser contexts
+# Optional native monitoring and legacy browser profiles
 (cd apps/preview && mix deps.get && mix compile && MIX_ENV=test mix deps.get)
 (cd apps/exam && MF_EXAM_LEGACY_MEDIA=1 mix deps.get && MF_EXAM_LEGACY_MEDIA=1 mix compile)
 (cd apps/exam && MF_EXAM_LEGACY_MEDIA=1 MIX_ENV=test mix deps.get && MF_EXAM_LEGACY_MEDIA=1 MIX_ENV=test mix compile)
 elixir config/sources_test.exs
-MED_EX_SOURCE='{"med_ex":{"path":"/absolute/path/to/med_ex"}}' bash ops/qc_sources.sh
 ```
 
-The independent consumer script expects paths resolvable from its temporary consumer. Use an **absolute** checkout path in MED_EX_SOURCE. Repeat with a real reachable Git SHA, local/full and archive-cloned projection and released legacy Hex using EXPECT_MED_EX_CONTRACT=legacy. Record actual SHA, lock digest, default-lock restoration and native package versions during runtime QC.
+Check the family in fresh ordinary Mix consumers with `ops/qc_sources.sh`.
+The smoke command's temporary consumers need absolute local paths:
+
+```bash
+MED_EX_PROFILE=all MED_EX_SOURCE='{
+  "med_ex":{"path":"/absolute/path/to/med_ex"},
+  "med_ex_opus":{"path":"/absolute/path/to/med_ex/extensions/med_ex_opus"},
+  "med_ex_rtc":{"path":"/absolute/path/to/med_ex/extensions/med_ex_rtc"}
+}' ./ops/qc_sources.sh
+```
+
+Select `base`, `opus`, `rtc`, or `both` to run one profile. Repeat with live,
+full, prepared, verified Git, and genuine Hex sources as needed. The
+historical standalone SDK check uses `MED_EX_PROFILE=base`,
+`MED_EX_REQUIREMENT='== 0.1.0'`, and `EXPECT_MED_EX_CONTRACT=legacy` when
+that package is available from the selected registry.
 
 ## Process acceptance
 
 Put PostgreSQL server binaries on PATH. On Ubuntu with PostgreSQL 18, use
-`export PATH="/usr/lib/postgresql/18/bin:$PATH"`. The runner needs Python 3.10+, OpenSSL, util-linux flock, native PostgreSQL tools (initdb, postgres, psql on PATH), and bubblewrap with working unprivileged user and PID/mount namespaces on Linux. Run as a regular user. Preview and real browser gates also need Chromium, Playwright for Node and the matching Opus/RTC build prerequisites. Install the shared pinned browser dependencies with `(cd ops && npm ci && npx playwright install chromium)`. A spot-check gate uses a dedicated local HTTP HAPI R4 instance at FHIR_BASE_URL or starts a Docker HAPI container. MF_HAPI_IMAGE can specify the operator's verified HAPI image digest. FHIR integration creates synthetic Patient, Encounter and Device resources and checks an intentionally dropped POST response before retry.
+`export PATH="/usr/lib/postgresql/18/bin:$PATH"`. The retained process acceptance runner needs Python 3.10+, OpenSSL, util-linux flock, native PostgreSQL tools (initdb, postgres, psql on PATH), and bubblewrap with working unprivileged user and PID/mount namespaces on Linux. Run as a regular user. Preview and real browser gates also need Chromium, Playwright for Node and the matching Opus/RTC build prerequisites. Install the shared pinned browser dependencies with `(cd ops && npm ci && npx playwright install chromium)`. A spot-check gate uses a dedicated local HTTP HAPI R4 instance at FHIR_BASE_URL or starts a Docker HAPI container. MF_HAPI_IMAGE can specify the operator's verified HAPI image digest. FHIR integration creates synthetic Patient, Encounter and Device resources and checks an intentionally dropped POST response before retry.
 
 ```bash
-elixir ops/handheld_acceptance.exs --suite paired --preview off
-elixir ops/handheld_acceptance.exs --suite paired --preview isolated
-elixir ops/handheld_acceptance.exs --suite spot-check --fhir hapi
-elixir ops/handheld_acceptance.exs --suite legacy-browser
-elixir ops/handheld_acceptance.exs --suite all --preview isolated --fhir hapi --report /path/to/report.json
+python3 ops/handheld/acceptance.py acceptance --suite paired --preview off
+python3 ops/handheld/acceptance.py acceptance --suite paired --preview isolated
+python3 ops/handheld/acceptance.py acceptance --suite spot-check --fhir hapi
+python3 ops/handheld/acceptance.py acceptance --suite legacy-browser
+python3 ops/handheld/acceptance.py acceptance --suite all --preview isolated --fhir hapi --report /path/to/report.json
 ```
 
 Acceptance creates and removes a system temporary directory by default. Use `--report /path/to/report.json` to retain only the report or `--run-dir /path/to/new-lab` to retain the full run for investigation. The runner starts its own password-protected PostgreSQL cluster, Exam BEAM, client BEAM and a transparent loopback TLS proxy. Private per-role mounts hide the run tree, server artifacts, credentials, oracle and database from the handheld/sidecar. A 60-second baseline compares independently computed raw source and monitor bytes, verifies clock holdouts, cuts the uplink for ten seconds and proves audio and control make progress during a five-second ECG stall. Additional runs cover CRC/native formats, explicit 100-sample gap, source reboot interruption, capacity, stale generation, cross-encounter admission, conflicting replay and kill/restart at named file/journal/manifest/database boundaries. The spot-check runner kills the client after durable local ingestion, submits the final inventory before replay, loses an event response, exercises unusable/repeat/usable review and checks the two remote observations. Test-only barrier files under the private run directory are disabled in ordinary production runtime configuration.
@@ -60,13 +107,14 @@ Review report.json together with logs, chunk/index/manifest files, source identi
 elixir ops/handheld_demo.exs prepare --run-dir _build/handheld-demo
 ```
 
-Preparation creates fixture configuration and localhost TLS material. Start
+Preparation creates private synthetic fixture configuration and localhost TLS material.
+Export a synthetic lab `FHIR_BASE_URL` before preparation if you will exercise delivery. Start
 a private PostgreSQL cluster in the prepared directory. Run as a regular
 user with the PostgreSQL server binaries on PATH.
 
 ```bash
 lab="$PWD/_build/handheld-demo"
-pg_port=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["postgres_port"])' "$lab/server.json")
+pg_port=$(jq -er .postgres_port "$lab/server.json")
 
 initdb -D "$lab/pgdata" -U lab --auth-local=trust --auth-host=scram-sha-256 \
   --pwfile="$lab/postgres.credential" --no-locale
@@ -82,21 +130,13 @@ mix run --no-start --no-halt ../../ops/run_exam.exs --config ../../_build/handhe
 ```
 
 ```bash
-python3 - _build/handheld-demo/server.json <<'PYTHON'
-import json
-import pathlib
-import sys
-
-config_path = pathlib.Path(sys.argv[1])
-config = json.loads(config_path.read_text())
-sys.argv = [
-    "ops/handheld/proxy.py", str(config["proxy_port"]), str(config["tls_port"]),
-    str(config_path.parent / "outage"),
-]
-import runpy
-runpy.run_path(sys.argv[0], run_name="__main__")
-PYTHON
+elixir ops/handheld_demo.exs relay --run-dir _build/handheld-demo
 ```
+
+The relay forwards encrypted TCP to the Exam TLS listener. Create the
+`outage` file in the lab directory to close existing connections and reject
+new ones, and remove it to allow reconnect. The demo uses Elixir, OpenSSL,
+PostgreSQL tools, and `jq` for the commands above.
 
 ```bash
 cd apps/handheld

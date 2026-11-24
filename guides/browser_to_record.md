@@ -32,7 +32,15 @@ manual listening check, and optional local workspace SDK testing.
 Prepare the legacy media Exam context and browser dependencies using the [handheld runbook](handheld_demo.md). Run the browser gate against an isolated lab:
 
 ```bash
-elixir ops/handheld_acceptance.exs --suite legacy-browser
+./ops/verify_browser.sh
+./ops/verify_browser.sh --release
+```
+
+Use the retained native-process acceptance runner for its dedicated
+legacy browser scenario:
+
+```bash
+python3 ops/handheld/acceptance.py acceptance --suite legacy-browser
 ```
 
 ## Operate the exam
@@ -66,8 +74,9 @@ export MF_EXAM_LEGACY_MEDIA=1
 MF_LAB=1 "$MF_RELEASE_DIR/bin/mf_exam" start
 ```
 
-The legacy media profile has its own build directory, so switching back to
-headless Exam does not reuse native application metadata.
+The legacy profile has its own lock, dependency and build paths. Resolve
+each Mix environment you intend to use with `MF_EXAM_LEGACY_MEDIA=1`.
+The default Exam uses the base SDK and omits the native providers.
 
 Run the seed command sequentially for each synthetic encounter, changing the ID, actors and keys. It writes a private JSON array. Each entry carries its own patient/clinician actors, FHIR destination, Patient reference and Encounter reference. Boot binds those identifiers in PostgreSQL. Conflicting existing bindings fail startup. The lab seed marks its FHIR encounter in progress. To use existing resources, provision the file directly. Keep the file outside Git.
 
@@ -84,7 +93,11 @@ Set `MF_TURN_URLS` to comma-separated TURN URIs and `MF_TURN_SECRET` to the shar
 - `core/domain` runs pure evidence cases with `mix test`.
 - `core/store` runs native transaction and encounter-isolation cases with `mix test integration` and `DATABASE_URL`.
 - `core/interop` runs pure FHIR comparison cases with `mix test`. Run `mix test integration` with `FHIR_BASE_URL` for the native HAPI retry.
-- `apps/exam` runs artifact, range and proxy cases with `mix test`, and the interrupted recording scenarios with `env -u MF_LAB mix test integration` and `DATABASE_URL`. Select the matching source in `.mix_sources.json`.
+- `apps/exam` runs artifact, range and proxy cases with `mix test`. With
+  `DATABASE_URL` set, run
+  `env -u MF_LAB mix test integration/{recording,encounter_scope}_test.exs`
+  for interrupted recording and encounter scope. Select the matching SDK
+  family in `.mix_sources.json`.
 - The optional legacy media profile pins the dependency-constraint change from Ratio PR 131 at commit `05191db`. The lock resolves Numbers 5.2.5 and Decimal 3.2.0. Run `mix hex.audit` in the exam and review the pinned Git change separately. Remove the Git pin when a Hex Ratio release admits Decimal 3. MedEx itself continues to declare Hex dependencies. [Ratio PR 131](https://github.com/qqwy/elixir-rational/pull/131)
 
 See [Architecture and roadmap](architecture_and_roadmap.md) for storage ownership and clinical invariants.

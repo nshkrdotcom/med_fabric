@@ -22,6 +22,9 @@ commits acceptance and any FHIR delivery intent together. Run the default
 Exam alongside the standalone Handheld client using the
 [handheld guide](../../guides/handheld_demo.md). The
 [isolated Preview service](../../guides/preview_isolation.md) is optional.
+The default Exam compiles against the base MedEx SDK. Select
+`MF_EXAM_LEGACY_MEDIA=1` for the native browser providers and resolve,
+build, and run that profile in its independent Mix context.
 
 
 ## Browser-to-record path

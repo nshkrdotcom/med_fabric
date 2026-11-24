@@ -9,7 +9,8 @@ defmodule MedFabric.BuildSourcesTest do
   use ExUnit.Case, async: false
   alias MedFabric.BuildSources, as: Sources
 
-  @env ~w(MF_MED_EX_PATH MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE)
+  @env ~w(MF_MED_EX_PATH MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE
+           HEX_HOME HEX_MIRROR_URL HEX_TRUSTED_MIRROR_URL)
   @defaults [
     {:med_ex, "~> 0.2.0", override: true, runtime: true},
     {:mf_domain, path: "../../core/domain"},
@@ -45,6 +46,47 @@ defmodule MedFabric.BuildSourcesTest do
     assert {@defaults, []} == Sources.resolve(@defaults, c.project, c.root)
     refute File.exists?(Path.join(c.root, ".weld"))
     refute File.exists?(Path.join(c.project, "_build"))
+    assert File.read!(Path.join(c.project, "mix.lock")) == c.lock
+  end
+
+  test "the baseline MedEx family shares one revision, requirement and explicit subdirectories" do
+    {base, requirement, base_opts} = Sources.med_ex_dependency(:med_ex)
+    assert base == :med_ex
+    assert Version.match?("0.2.0", requirement)
+    assert base_opts[:github] == "nshkrdotcom/med_ex"
+    assert Regex.match?(~r/\A[0-9a-f]{40}\z/, base_opts[:ref])
+    assert base_opts[:override]
+    refute base_opts[:subdir]
+
+    for app <- [:med_ex_opus, :med_ex_rtc] do
+      assert {^app, ^requirement, options} = Sources.med_ex_dependency(app)
+      assert options[:ref] == base_opts[:ref]
+      assert options[:github] == base_opts[:github]
+      assert options[:subdir] == "extensions/#{app}"
+      refute options[:override]
+    end
+  end
+
+  test "legacy media without a source file isolates all mutable state by profile and Mix environment",
+       c do
+    profile = [profile: :legacy_media]
+    assert {@defaults, []} == Sources.resolve(@defaults, c.project, c.root)
+    assert {@defaults, legacy} = Sources.resolve(@defaults, c.project, c.root, profile)
+    assert Enum.sort(Keyword.keys(legacy)) == [:build_path, :deps_path, :lockfile]
+    assert length(Enum.uniq(Keyword.values(legacy))) == 3
+    assert legacy == elem(Sources.resolve(@defaults, c.project, c.root, profile), 1)
+
+    original = Mix.env()
+
+    try do
+      Mix.env(if original == :prod, do: :test, else: :prod)
+      assert legacy != elem(Sources.resolve(@defaults, c.project, c.root, profile), 1)
+    after
+      Mix.env(original)
+    end
+
+    System.put_env("MIX_DEPS_PATH", Path.join(c.root, "shared"))
+    assert_raise Mix.Error, fn -> Sources.resolve(@defaults, c.project, c.root, profile) end
     assert File.read!(Path.join(c.project, "mix.lock")) == c.lock
   end
 
@@ -124,20 +166,74 @@ defmodule MedFabric.BuildSourcesTest do
       "med_ex_rtc" => %{"path" => "not-installed-rtc"}
     })
 
-    {deps, _roots} = Sources.resolve(@defaults, c.project, c.root)
+    {deps, roots} = Sources.resolve(@defaults, c.project, c.root)
     assert deps == @defaults
+    assert roots == []
     refute Enum.any?(deps, fn tuple -> elem(tuple, 0) in [:med_ex_opus, :med_ex_rtc] end)
+  end
+
+  test "a nested Store shares the data file and its domain selection isolates the outer consumer",
+       c do
+    domain = make_project(c.root, "domain")
+    mix = Path.join(domain, "mix.exs")
+    File.write!(mix, String.replace(File.read!(mix), "app: :med_ex", "app: :mf_domain"))
+    store = Path.join(c.root, "core/store")
+    File.mkdir_p!(store)
+    store_defaults = [{:mf_domain, path: "../domain"}, {:postgrex, "~> 0.23"}]
+    outer_defaults = [{:mf_store, path: "../../core/store"}]
+    select(c, %{"med_ex" => %{"path" => "unused-sdk"}, "mf_domain" => %{"path" => "domain"}})
+
+    assert {[{:mf_domain, [path: ^domain]}, {:postgrex, "~> 0.23"}], [_ | _]} =
+             Sources.resolve(store_defaults, store, c.root)
+
+    assert {^outer_defaults, [_ | _]} = Sources.resolve(outer_defaults, c.project, c.root)
+    select(c, %{"med_ex" => %{"path" => "unused-sdk"}})
+    assert {^store_defaults, []} = Sources.resolve(store_defaults, store, c.root)
+    assert {^outer_defaults, []} = Sources.resolve(outer_defaults, c.project, c.root)
+  end
+
+  test "private and official repositories with the same Hex name isolate their state", c do
+    select(c, %{"med_ex" => %{"hex" => "med_ex", "repo" => "hexpm"}})
+    System.put_env("HEX_HOME", Path.join(c.root, "official-hex"))
+    {same_dependencies, official} = Sources.resolve(@defaults, c.project, c.root)
+    System.put_env("HEX_HOME", Path.join(c.root, "private-hex"))
+    assert {^same_dependencies, private} = Sources.resolve(@defaults, c.project, c.root)
+    assert private != official
+  end
+
+  test "documented Hex mirrors change every context path without retaining credentials", c do
+    select(c, %{"med_ex" => %{"hex" => "med_ex", "repo" => "hexpm"}})
+    {dependencies, official} = Sources.resolve(@defaults, c.project, c.root)
+
+    for name <- ~w(HEX_MIRROR_URL HEX_TRUSTED_MIRROR_URL) do
+      System.put_env(name, "https://first:token@mirror.example.test/packages?signature=one")
+      assert {^dependencies, first} = Sources.resolve(@defaults, c.project, c.root)
+
+      for key <- [:lockfile, :deps_path, :build_path], do: assert(first[key] != official[key])
+
+      System.put_env(name, "https://second:changed@mirror.example.test/packages?signature=two")
+      assert {^dependencies, ^first} = Sources.resolve(@defaults, c.project, c.root)
+
+      System.put_env(name, "https://mirror.example.test/other-packages")
+      assert {^dependencies, changed} = Sources.resolve(@defaults, c.project, c.root)
+      for key <- [:lockfile, :deps_path, :build_path], do: assert(changed[key] != first[key])
+      System.delete_env(name)
+    end
   end
 
   test "malformed, executable, conflicting and unknown selections fail closed", c do
     bad = [
       %{"surprise_app" => %{"path" => "."}},
+      %{"jason" => %{"hex" => "jason"}},
       %{"med_ex" => "Code.eval_file(\"anything\")"},
       %{"med_ex" => %{"path" => "absent"}},
+      %{"med_ex" => %{"path" => ""}},
       %{"med_ex" => %{"git" => "https://example.invalid/repo", "github" => "x/y", "ref" => "x"}},
+      %{"med_ex" => %{"github" => "not-an-owner-and-repo", "ref" => "x"}},
       %{"med_ex" => %{"github" => "x/y", "branch" => "main", "tag" => "v1"}},
       %{"med_ex" => %{"github" => "x/y", "ref" => "x", "subdir" => "../escape"}},
       %{"med_ex" => %{"hex" => "med_ex", "runtime" => false}},
+      %{"med_ex" => %{"hex" => " "}},
       %{"mf_domain" => %{"hex" => "mf_domain"}}
     ]
 
@@ -146,9 +242,20 @@ defmodule MedFabric.BuildSourcesTest do
       assert_raise Mix.Error, fn -> Sources.resolve(@defaults, c.project, c.root) end
     end
 
-    for bytes <- ["{\"med_ex\":{},\"med_ex\":{}}", "{} {}", "[]"] do
+    for bytes <- ["{\"med_ex\":{},\"med_ex\":{}}", "{} {}", "[]", "{"] do
       File.write!(Path.join(c.root, ".mix_sources.json"), bytes)
       assert_raise Mix.Error, fn -> Sources.resolve(@defaults, c.project, c.root) end
+    end
+  end
+
+  test "a candidate declaring a different application fails before Mix executes it", c do
+    sdk = make_project(c.root, "sdk")
+    mix = Path.join(sdk, "mix.exs")
+    File.write!(mix, String.replace(File.read!(mix), "app: :med_ex", "app: :some_other_sdk"))
+    select(c, %{"med_ex" => %{"path" => "sdk"}})
+
+    assert_raise Mix.Error, ~r/does not declare med_ex/, fn ->
+      Sources.resolve(@defaults, c.project, c.root)
     end
   end
 
@@ -158,9 +265,11 @@ defmodule MedFabric.BuildSourcesTest do
     {deps, roots} = Sources.resolve(@defaults, c.project, c.root)
     assert elem(hd(deps), 2)[:path] == sdk
     assert length(roots) == 3
-    select(c, %{"med_ex" => %{"path" => "sdk"}})
+    select(c, %{})
     assert_raise Mix.Error, fn -> Sources.resolve(@defaults, c.project, c.root) end
     System.delete_env("MF_MED_EX_PATH")
+
+    select(c, %{"med_ex" => %{"path" => "sdk"}})
 
     for name <- ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE) do
       System.put_env(name, Path.join(c.root, "shared-state"))

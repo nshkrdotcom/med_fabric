@@ -1,4 +1,4 @@
-"""Separate-process synthetic reference lab. Run using the Elixir entry points in ops/."""
+"""Native process acceptance fallback for the synthetic reference lab."""
 import argparse
 import contextlib
 import hashlib
@@ -115,6 +115,7 @@ class Lab:
         self.started=time.monotonic(); self.procs=[]; self.seq=0; self.server=None; self.preview=None
         self.env=dict(os.environ,PGHOST="127.0.0.1",PGPORT=str(self.cfg["postgres_port"]),PGUSER="lab",PGDATABASE="postgres",PGPASSWORD=(directory/"postgres.credential").read_text())
         self.env.pop("SSLKEYLOGFILE", None)
+        self.env.pop("MF_EXAM_LEGACY_MEDIA", None)
         self.browser=urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
         self.container=None
     def isolate(self,role,args,config=None):

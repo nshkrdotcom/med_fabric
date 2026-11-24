@@ -38,9 +38,10 @@ listening while authoritative capture continues.
 ## Run a local demonstration
 
 Use Elixir 1.20 with OTP 29 and ordinary Mix in the application directories.
-The committed locks select the SDK and provider revisions. Start with the
-[handheld guide](guides/handheld_demo.md) for dependencies, native PostgreSQL,
-a separate-terminal demo, and automated TLS replay and recovery checks.
+The default SDK and provider dependencies share a Git revision in
+`config/sources.exs`. The [handheld guide](guides/handheld_demo.md) covers
+resolving that pin, selecting local sources, starting a native PostgreSQL
+demo, and running TLS replay and recovery checks.
 The [browser guide](guides/browser_to_record.md) covers the browser workflow.
 The [preview guide](guides/preview_isolation.md) covers the isolated monitor.
 
@@ -48,6 +49,12 @@ The simulated runs exercise real software boundaries, including TLS,
 PostgreSQL, browser playback, and HAPI FHIR in the relevant suites. Physical
 peripherals, calibrated signals, clinical use, and production deployment
 require separate validation. See [architecture and qualification](guides/architecture_and_roadmap.md).
+
+The root Mix project provides optional Blitz orchestration. Run
+`mix deps.get`, `mix setup`, and `mix test` at the root for the standard
+workspace checks. Default Exam and Handheld use the base SDK. Build Preview
+in its own project when native monitoring is required, or explicitly enable
+legacy media in Exam for the browser examination.
 
 ## Projects
 

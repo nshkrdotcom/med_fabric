@@ -11,3 +11,5 @@ bin/mf_handheld eval 'Application.ensure_all_started(:mf_handheld); MedExHandhel
 ```
 
 Build that release with `MIX_ENV=prod mix deps.get` followed by `MIX_ENV=prod mix release`. Source-context paths for production are distinct from dev and test.
+Handheld selects the base MedEx SDK. Its release runs independently with
+its own TLS and device credentials, source configuration, and spool.

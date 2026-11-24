@@ -39,7 +39,13 @@ fi
 mix local.hex --force --if-missing
 mix local.rebar --force --if-missing
 mix deps.get --check-locked
-mix blitz.workspace deps_get -- --check-locked
+
+if [[ -e .mix_sources.json || -v MF_MED_EX_PATH || ${MF_EXAM_LEGACY_MEDIA:-} == 1 ]]; then
+  # Local sources and the legacy profile can have a fresh isolated lock.
+  mix setup
+else
+  mix blitz.workspace deps_get -- --check-locked
+fi
 
 if [[ "${1:-}" == "--integration" ]]; then
   (cd ops && npm ci --ignore-scripts && ./node_modules/.bin/playwright install chromium)

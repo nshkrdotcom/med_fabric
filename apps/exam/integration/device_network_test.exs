@@ -11,7 +11,8 @@ defmodule MedFabric.DeviceNetworkTest do
     suite = System.get_env("MF_NETWORK_SUITE", "paired")
 
     args = [
-      "ops/handheld_acceptance.exs",
+      "ops/handheld/acceptance.py",
+      "acceptance",
       "--suite",
       suite,
       "--report",
@@ -22,8 +23,8 @@ defmodule MedFabric.DeviceNetworkTest do
 
     args = if suite in ["spot-check", "all"], do: args ++ ["--fhir", "hapi"], else: args
 
-    {output, exit} =
-      System.cmd(System.find_executable("elixir"), args, cd: root, stderr_to_stdout: true)
+    python = System.find_executable("python3") || flunk("The native acceptance fallback requires Python 3")
+    {output, exit} = System.cmd(python, args, cd: root, stderr_to_stdout: true)
 
     assert exit == 0, output
 

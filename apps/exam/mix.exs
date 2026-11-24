@@ -2,20 +2,16 @@ Code.require_file("../../config/sources.exs", __DIR__)
 
 defmodule MedFabric.Exam.MixProject do
   use Mix.Project
+  alias MedFabric.BuildSources
 
   def project do
     legacy_media? = System.get_env("MF_EXAM_LEGACY_MEDIA") == "1"
+    profile = if legacy_media?, do: :legacy_media, else: :default
 
     {deps, paths} =
-      MedFabric.BuildSources.resolve(deps(legacy_media?), __DIR__, Path.expand("../..", __DIR__))
-
-    # Selected sources already get a build path keyed by their active dependencies.
-    paths =
-      if legacy_media? and paths == [] do
-        [build_path: "_build/legacy_media"]
-      else
-        paths
-      end
+      BuildSources.resolve(deps(legacy_media?), __DIR__, Path.expand("../..", __DIR__),
+        profile: profile
+      )
 
     [
       app: :mf_exam,
@@ -37,10 +33,7 @@ defmodule MedFabric.Exam.MixProject do
       {:mf_domain, path: "../../core/domain"},
       {:mf_store, path: "../../core/store"},
       {:mf_interop, path: "../../core/interop"},
-      {:med_ex, "~> 0.2.0",
-       github: "nshkrdotcom/med_ex",
-       ref: "c031a38a9e28fe6bccf1358d8f41fa419aa708d2",
-       override: true},
+      BuildSources.med_ex_dependency(:med_ex),
       {:decimal, "~> 3.2"},
       {:phoenix, "~> 1.8"},
       {:phoenix_html, "~> 4.2"},
@@ -57,14 +50,8 @@ defmodule MedFabric.Exam.MixProject do
            git: "https://github.com/robertbenavidez/elixir-rational.git",
            ref: "05191dbe8061b49a170352f3c35c21360bdbb328",
            override: true},
-          {:med_ex_opus, "~> 0.2.0",
-           github: "nshkrdotcom/med_ex",
-           ref: "3dbb770550ac1a4340eecb6951d5bf21c6f0fcb8",
-           subdir: "extensions/med_ex_opus"},
-          {:med_ex_rtc, "~> 0.2.0",
-           github: "nshkrdotcom/med_ex",
-           ref: "3dbb770550ac1a4340eecb6951d5bf21c6f0fcb8",
-           subdir: "extensions/med_ex_rtc"}
+          BuildSources.med_ex_dependency(:med_ex_opus),
+          BuildSources.med_ex_dependency(:med_ex_rtc)
         ],
         else: []
       )
