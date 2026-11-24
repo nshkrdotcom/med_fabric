@@ -50,7 +50,7 @@ file and clear the legacy profile to return to default paths. Leave
 `MIX_BUILD_PATH`, `MIX_BUILD_ROOT`, `MIX_DEPS_PATH`, and `MIX_LOCKFILE` unset
 when selecting either isolated context. `MF_MED_EX_PATH` is a deprecated
 base-only translation for existing callers. Use it with no selector file.
-An explicit Hex choice includes its Hex home and mirror coordinates in
+An explicit Hex choice includes its Hex home, public repository URL/signing-key coordinates and mirror coordinates in
 the build context, allowing a private registry rehearsal to use the same
 repository name with separate state.
 
@@ -86,18 +86,34 @@ that package is available from the selected registry.
 
 ## Process acceptance
 
-Put PostgreSQL server binaries on PATH. On Ubuntu with PostgreSQL 18, use
-`export PATH="/usr/lib/postgresql/18/bin:$PATH"`. The retained process acceptance runner needs Python 3.10+, OpenSSL, util-linux flock, native PostgreSQL tools (initdb, postgres, psql on PATH), and bubblewrap with working unprivileged user and PID/mount namespaces on Linux. Run as a regular user. Preview and real browser gates also need Chromium, Playwright for Node and the matching Opus/RTC build prerequisites. Install the shared pinned browser dependencies with `(cd ops && npm ci && npx playwright install chromium)`. A spot-check gate uses a dedicated local HTTP HAPI R4 instance at FHIR_BASE_URL or starts a Docker HAPI container. MF_HAPI_IMAGE can specify the operator's verified HAPI image digest. FHIR integration creates synthetic Patient, Encounter and Device resources and checks an intentionally dropped POST response before retry.
+The native Elixir runner is the supported entrypoint. The prior Python runner
+and relay remain a temporary parity fallback only; remove both after the full
+native lane and its independent oracle/process tests pass on the workstation.
+No Python dependency is needed by the native runner or ordinary demo.
 
 ```bash
-python3 ops/handheld/acceptance.py acceptance --suite paired --preview off
-python3 ops/handheld/acceptance.py acceptance --suite paired --preview isolated
-python3 ops/handheld/acceptance.py acceptance --suite spot-check --fhir hapi
-python3 ops/handheld/acceptance.py acceptance --suite legacy-browser
-python3 ops/handheld/acceptance.py acceptance --suite all --preview isolated --fhir hapi --report /path/to/report.json
+elixir ops/handheld/oracle_test.exs
+elixir ops/handheld/process_lab_test.exs
 ```
 
-Acceptance creates and removes a system temporary directory by default. Use `--report /path/to/report.json` to retain only the report or `--run-dir /path/to/new-lab` to retain the full run for investigation. The runner starts its own password-protected PostgreSQL cluster, Exam BEAM, client BEAM and a transparent loopback TLS proxy. Private per-role mounts hide the run tree, server artifacts, credentials, oracle and database from the handheld/sidecar. A 60-second baseline compares independently computed raw source and monitor bytes, verifies clock holdouts, cuts the uplink for ten seconds and proves audio and control make progress during a five-second ECG stall. Additional runs cover CRC/native formats, explicit 100-sample gap, source reboot interruption, capacity, stale generation, cross-encounter admission, conflicting replay and kill/restart at named file/journal/manifest/database boundaries. The spot-check runner kills the client after durable local ingestion, submits the final inventory before replay, loses an event response, exercises unusable/repeat/usable review and checks the two remote observations. Test-only barrier files under the private run directory are disabled in ordinary production runtime configuration.
+For alternate sources, use absolute paths or exact 40-hex Git commit IDs.
+Run `MED_EX_SOURCE="$(cat .mix_sources.json)" ./ops/qc_fabric_sources.sh`
+for actual Exam, Handheld, Preview and legacy Exam resolution and compilation,
+including removal/restoration of the selector in a disposable copy.
+
+
+Put PostgreSQL server binaries on PATH. On Ubuntu with PostgreSQL 18, use
+`export PATH="/usr/lib/postgresql/18/bin:$PATH"`. The native Elixir process acceptance runner needs OpenSSL, util-linux setsid and flock, native PostgreSQL tools (initdb, postgres, psql on PATH), and bubblewrap with working unprivileged user and PID/mount namespaces on Linux. Run as a regular user. Preview and real browser gates also need Chromium, Playwright for Node and the matching Opus/RTC build prerequisites. Install the shared pinned browser dependencies with `(cd ops && npm ci && npx playwright install chromium)`. A spot-check gate uses a dedicated local HTTP HAPI R4 instance at FHIR_BASE_URL or starts a Docker HAPI container. MF_HAPI_IMAGE can specify the operator's verified HAPI image digest. FHIR integration creates synthetic Patient, Encounter and Device resources and checks an intentionally dropped POST response before retry.
+
+```bash
+elixir ops/handheld_acceptance.exs --suite paired --preview off
+elixir ops/handheld_acceptance.exs --suite paired --preview isolated
+elixir ops/handheld_acceptance.exs --suite spot-check --fhir hapi
+elixir ops/handheld_acceptance.exs --suite legacy-browser
+elixir ops/handheld_acceptance.exs --suite all --preview isolated --fhir hapi --report /path/to/report.json
+```
+
+Successful acceptance creates and removes a system temporary directory by default; failures retain private diagnostic logs. Use `--report /path/to/report.json` to retain only the report or `--run-dir /path/to/new-lab` to retain the full run for investigation. The runner starts its own password-protected PostgreSQL cluster, Exam BEAM, client BEAM and a transparent loopback TLS proxy. Private per-role mounts hide the run tree, server artifacts, credentials, oracle and database from the handheld/sidecar. A 60-second baseline compares independently computed raw source and monitor bytes, verifies clock holdouts, cuts the uplink for ten seconds and proves audio and control make progress during a five-second ECG stall. Additional runs cover CRC/native formats, explicit 100-sample gap, source reboot interruption, capacity, stale generation, cross-encounter admission, conflicting replay and kill/restart at named file/journal/manifest/database boundaries. The spot-check runner kills the client after durable local ingestion, submits the final inventory before replay, loses an event response, exercises unusable/repeat/usable review and checks the two remote observations. Test-only barrier files under the private run directory are disabled in ordinary production runtime configuration.
 
 Review report.json together with logs, chunk/index/manifest files, source identity markers, per-stream receipts and the wall-clock/host-monotonic observation. Required skips, missing prerequisites, expired deadlines and wrong outcomes fail the gate. A failed run can contain secret-bearing server.json and credential files. Keep its directory private. The report is synthetic engineering evidence.
 

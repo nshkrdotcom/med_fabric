@@ -6,8 +6,8 @@ defmodule MedFabric.BuildSources do
   # Baseline provider revision. Repin this family after the verified MedEx push.
   @med_ex_revision "3dbb770550ac1a4340eecb6951d5bf21c6f0fcb8"
   @repo_apps ~w(med_ex med_ex_opus med_ex_rtc mf_domain mf_store mf_interop)
-  @git_keys [:github, :git, :ref, :branch, :tag, :subdir]
-  @scm @git_keys ++ ~w(path in_umbrella sparse submodules depth hex repo organization)a
+  @git_keys [:github, :git, :ref, :subdir]
+  @scm @git_keys ++ ~w(branch tag path in_umbrella sparse submodules depth hex repo organization)a
   @mix_paths ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE)
 
   def med_ex_dependency(app) when app in @med_ex_apps do
@@ -26,6 +26,15 @@ defmodule MedFabric.BuildSources do
     # Its domain selection also changes the dependency consumer's closure.
     effective_apps = if "mf_store" in declared, do: ["mf_domain" | declared], else: declared
     active = Map.take(choices, effective_apps)
+
+    # Validate the effective Store -> Domain choice even in its outer consumer.
+    if "mf_store" in declared and "mf_domain" not in declared and active["mf_domain"] do
+      choice = active["mf_domain"]
+      if path = choice[:path], do: check_identity!(:mf_domain, path, nil)
+
+      if choice[:hex],
+        do: Mix.raise("Hex selection requires a committed version requirement for mf_domain")
+    end
 
     deps = Enum.map(defaults, &apply_choice!(&1, active))
 
@@ -72,7 +81,11 @@ defmodule MedFabric.BuildSources do
         dep
 
       {:ok, source} ->
-        if path = source[:path], do: check_identity!(app, path)
+        if path = source[:path], do: check_identity!(app, path, requirement)
+
+        if source[:hex] && source[:hex] != Atom.to_string(app) do
+          Mix.raise("Selected Hex package must match #{app}")
+        end
 
         if source[:hex] && !match?({:ok, _}, Version.parse_requirement(requirement || "")) do
           Mix.raise("Hex selection requires a committed version requirement for #{app}")
@@ -108,10 +121,11 @@ defmodule MedFabric.BuildSources do
         _ -> :erlang.system_info(:system_version)
       end
 
-    hex = if Enum.any?(active, fn {_app, options} -> options[:hex] end), do: hex_context()
+    # Every isolated context can have transitive registry dependencies.
+    hex = hex_context()
 
     identity =
-      {2, project, profile, normalized, Enum.sort(active), Enum.sort(frozen), hex, lock_digest,
+      {3, project, profile, normalized, Enum.sort(active), Enum.sort(frozen), hex, lock_digest,
        System.version(), otp_version, :erlang.system_info(:system_architecture), Mix.env(),
        Mix.target()}
 
@@ -130,19 +144,80 @@ defmodule MedFabric.BuildSources do
 
     mirrors =
       Enum.map(~w(HEX_MIRROR_URL HEX_TRUSTED_MIRROR_URL), fn name ->
-        if url = System.get_env(name) do
-          %URI{scheme: scheme, host: host, port: port, path: path} = URI.parse(url)
-          {scheme, host, port, path}
-        end
+        safe_url(System.get_env(name))
       end)
 
+    # Hex's configuration is local Erlang terms. Only public registry identity
+    # coordinates (including the signing public key) enter the context, never
+    # auth keys, passwords, query strings, or request headers. Also consider the
+    # XDG config directory, which may differ from the cache/data directory.
+    xdg = System.get_env("XDG_CONFIG_HOME", Path.join(System.user_home!(), ".config"))
+    configs = [Path.join(home, "hex.config"), Path.join([xdg, "hex", "hex.config"])]
+    registries = Enum.map(Enum.uniq(configs), &registry_identity!/1)
+
     {home, System.get_env("MIX_XDG"), System.get_env("XDG_CONFIG_HOME"),
-     System.get_env("XDG_DATA_HOME"), mirrors}
+     System.get_env("XDG_DATA_HOME"), mirrors, registries}
   end
 
-  # Check literal app metadata without evaluating a selected project. Mix's
-  # ordinary dependency loader verifies dynamically declared app identities.
-  defp check_identity!(app, path) do
+  defp safe_url(nil), do: nil
+  defp safe_url(url) when is_list(url), do: safe_url(to_string(url))
+
+  defp safe_url(url) when is_binary(url) do
+    %URI{scheme: scheme, host: host, port: port, path: path} = URI.parse(url)
+    {scheme, host, port, path}
+  end
+
+  defp registry_identity!(path) do
+    case :file.consult(String.to_charlist(path)) do
+      {:error, :enoent} -> {path, :missing}
+      {:ok, terms} -> {path, registry_coordinates(terms)}
+      {:error, _reason} -> Mix.raise("Cannot read Hex registry configuration at #{path}")
+    end
+  end
+
+  defp registry_coordinates(value) when is_map(value),
+    do: registry_coordinates(Map.to_list(value))
+
+  defp registry_coordinates(value) when is_list(value) do
+    value
+    |> Enum.flat_map(fn
+      {key, url}
+      when key in [
+             :url,
+             :mirror_url,
+             :trusted_mirror_url,
+             "url",
+             "mirror_url",
+             "trusted_mirror_url"
+           ] and (is_binary(url) or is_list(url)) ->
+        [{to_string(key), safe_url(url)}]
+
+      {key, public_key} when key in [:public_key, "public_key"] ->
+        [{"public_key", digest(:erlang.term_to_binary(public_key))}]
+
+      {key, nested} when is_map(nested) or is_list(nested) ->
+        if is_atom(key) or is_binary(key) do
+          coordinates = registry_coordinates(nested)
+          if coordinates == [], do: [], else: [{to_string(key), coordinates}]
+        else
+          []
+        end
+
+      nested when is_map(nested) or is_list(nested) ->
+        registry_coordinates(nested)
+
+      _ ->
+        []
+    end)
+    |> Enum.sort()
+  end
+
+  defp registry_coordinates(_), do: []
+
+  # Static checks consider the project declaration, not unrelated keyword
+  # entries in application/dependency functions. Dynamic metadata is resolved
+  # by normal Mix dependency loading and checked by the consumer gate.
+  defp check_identity!(app, path, requirement) do
     mix = Path.join(path, "mix.exs")
     unless File.regular?(mix), do: Mix.raise("Missing Mix project: #{path}")
 
@@ -152,14 +227,54 @@ defmodule MedFabric.BuildSources do
         {:error, _} -> Mix.raise("Cannot parse selected project: #{mix}")
       end
 
-    {_, apps} =
+    {_, declarations} =
       Macro.prewalk(ast, [], fn
-        {:app, name} = node, acc when is_atom(name) -> {node, [name | acc]}
-        node, acc -> {node, acc}
+        {:def, _, [{:project, _, args}, [do: body]]} = node, acc when args in [nil, []] ->
+          {node, [body | acc]}
+
+        node, acc ->
+          {node, acc}
       end)
 
-    if apps != [] and app not in apps, do: Mix.raise("Selected project does not declare #{app}")
+    for body <- declarations do
+      metadata = literal_project_metadata(body)
+      apps = Keyword.get_values(metadata, :app) |> Enum.uniq()
+      if apps != [] and apps != [app], do: Mix.raise("Selected project does not declare #{app}")
+
+      for version <- Keyword.get_values(metadata, :version), is_binary(requirement) do
+        case Version.parse(version) do
+          {:ok, parsed} ->
+            unless Version.match?(parsed, requirement),
+              do:
+                Mix.raise(
+                  "Selected project version #{version} does not satisfy #{app} #{requirement}"
+                )
+
+          :error ->
+            Mix.raise("Invalid selected project version for #{app}")
+        end
+      end
+    end
   end
+
+  # Direct keyword result, the final expression of a block, or a concatenated
+  # declaration such as [app: ..., version: ...] ++ paths. More dynamic forms
+  # are left to actual Mix loading rather than misidentifying nested options.
+  defp literal_project_metadata({:__block__, _, expressions}),
+    do: literal_project_metadata(List.last(expressions))
+
+  defp literal_project_metadata({:++, _, [left, right]}),
+    do: literal_project_metadata(left) ++ literal_project_metadata(right)
+
+  defp literal_project_metadata(list) when is_list(list) do
+    Enum.filter(list, fn
+      {:app, value} -> is_atom(value)
+      {:version, value} -> is_binary(value)
+      _ -> false
+    end)
+  end
+
+  defp literal_project_metadata(_), do: []
 
   defp split({app, requirement, options}), do: {app, requirement, options}
   defp split({app, requirement}) when is_binary(requirement), do: {app, requirement, []}
@@ -185,13 +300,15 @@ defmodule MedFabric.BuildSources do
   defp source!(data, base) when is_map(data) do
     keys!(data, Enum.map(@git_keys, &Atom.to_string/1))
     origins = Enum.filter(~w(github git), &Map.has_key?(data, &1))
-    refs = Enum.filter(~w(ref branch tag), &Map.has_key?(data, &1))
+    ref = data["ref"]
 
-    unless length(origins) == 1 and length(refs) == 1 and
-             Enum.all?(Map.values(data), &coordinate?/1) and
-             not String.starts_with?(Map.get(data, hd(refs)), "-") do
-      Mix.raise("Select one Git origin and one ref, tag or branch")
+    unless length(origins) == 1 and is_binary(ref) and
+             Regex.match?(~r/\A[0-9a-fA-F]{40}\z/, ref) and
+             Enum.all?(Map.values(data), &coordinate?/1) do
+      Mix.raise("Select one Git origin and an exact 40-character commit SHA")
     end
+
+    data = Map.put(data, "ref", String.downcase(ref))
 
     if github = data["github"] do
       unless Regex.match?(~r/\A[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\z/, github),
@@ -199,8 +316,9 @@ defmodule MedFabric.BuildSources do
     end
 
     if subdir = data["subdir"] do
-      if Path.type(subdir) != :relative or ".." in Path.split(subdir),
-        do: Mix.raise("Git subdir must stay inside the checkout")
+      if Path.type(subdir) != :relative or String.contains?(subdir, "\\") or
+           Enum.any?(String.split(subdir, "/"), &(&1 in ["", ".", ".."])),
+         do: Mix.raise("Git subdir must stay inside the checkout")
     end
 
     for key <- @git_keys, Map.has_key?(data, Atom.to_string(key)) do

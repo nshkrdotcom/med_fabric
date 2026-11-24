@@ -18,7 +18,7 @@ trap 'rm -rf "$qc_dir"' EXIT
 unset MF_MED_EX_PATH MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE MIX_EXS
 export MIX_ENV=test
 export EXPECT_MED_EX_CONTRACT=${EXPECT_MED_EX_CONTRACT:-stream_v1}
-if [[ $EXPECT_MED_EX_CONTRACT == legacy && $profile != base ]]; then
+if [[ $EXPECT_MED_EX_CONTRACT =~ ^(legacy|reject_legacy)$ && $profile != base ]]; then
   echo 'The historical SDK can only be checked in the base profile.' >&2
   exit 2
 fi
@@ -86,6 +86,11 @@ if contract == "stream_v1" do
     unless (dep in deps) == wanted?, do: raise("Unexpected package #{dep} in #{profile}")
   end
 
+  if profile == "base" do
+    for app <- deps, String.starts_with?(Atom.to_string(app), "membrane_") or app in [:ex_webrtc, :ex_rtp, :ex_rtcp, :ex_srtp],
+      do: raise("Native media dependency leaked into base: #{app}")
+  end
+
   forbidden = [:weld, :mix_workspace_ops, :med_ex_maintainer, :med_core, :med_capture, :med_rtc]
   for app <- forbidden, app in deps, do: raise("Unexpected dependency #{app}")
   for module <- [MedEx.StreamSpec, MedEx.SampleFrame, MedEx.StreamWriter, MedEx.ClockAlign] do
@@ -129,7 +134,7 @@ for {app, requirement, source} <- Mix.Project.config()[:deps] do
     source[:git] || source[:github] ->
       {:git, _origin, revision, options} = Map.fetch!(lock, app)
       unless options[:subdir] == source[:subdir], do: raise("Unexpected Git subdir for #{app}")
-      if source[:ref] && Regex.match?(~r/\A[0-9a-f]{40}\z/, source[:ref]) && revision != source[:ref],
+      if revision != source[:ref],
         do: raise("Unexpected Git revision for #{app}")
       IO.puts("Resolved #{app} at #{revision}")
   end
@@ -148,9 +153,32 @@ for selected in "${profiles[@]}"; do
   (
     cd "$work"
     export MED_EX_PROFILE=$selected
-    mix deps.get
-    mix deps.tree
-    mix compile --warnings-as-errors
-    mix run prove.exs
+    if [[ $EXPECT_MED_EX_CONTRACT == reject_legacy ]]; then
+      # Prove the genuine historical package first, then attempt to consume
+      # exactly those downloaded bytes under the current stream-v1 requirement.
+      export MED_EX_REQUIREMENT='== 0.1.0' EXPECT_MED_EX_CONTRACT=legacy
+      mix deps.get
+      mix deps.tree
+      mix compile --warnings-as-errors
+      mix run prove.exs
+      legacy_path=$(mix run --no-start -e 'IO.puts(Map.fetch!(Mix.Project.deps_paths(), :med_ex))' | tail -n1)
+      test -f "$legacy_path/mix.exs"
+      elixir -e 'IO.puts(JSON.encode!(%{"med_ex" => %{"path" => hd(System.argv())}}))' -- "$legacy_path" > .mix_sources.json
+      unset MED_EX_REQUIREMENT
+      export EXPECT_MED_EX_CONTRACT=stream_v1
+      if (mix deps.get && mix compile --warnings-as-errors) > rejection.log 2>&1; then
+        cat rejection.log >&2
+        echo 'Historical SDK unexpectedly satisfied the stream-v1 consumer.' >&2
+        exit 1
+      fi
+      cat rejection.log
+      grep -Eiq 'does not satisfy med_ex|med_ex.*(0\.1\.0|version).*(does not match|does not satisfy|mismatch)|version.*mismatch.*med_ex|does not match the requirement' rejection.log
+      echo 'Verified historical package rejected by the stream-v1 consumer.'
+    else
+      mix deps.get
+      mix deps.tree
+      mix compile --warnings-as-errors
+      mix run prove.exs
+    fi
   )
 done

@@ -40,7 +40,7 @@ Use the retained native-process acceptance runner for its dedicated
 legacy browser scenario:
 
 ```bash
-python3 ops/handheld/acceptance.py acceptance --suite legacy-browser
+elixir ops/handheld_acceptance.exs --suite legacy-browser
 ```
 
 ## Operate the exam

@@ -9,7 +9,7 @@ browser dependencies and the legacy-media Exam context described in the
 [handheld runbook](handheld_demo.md):
 
 ```sh
-python3 ops/handheld/acceptance.py acceptance --suite legacy-browser
+elixir ops/handheld_acceptance.exs --suite legacy-browser
 ```
 
 The extended known-tone gate runs capture, restarts Exam, accepts and exports

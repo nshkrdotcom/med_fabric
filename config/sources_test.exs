@@ -10,7 +10,7 @@ defmodule MedFabric.BuildSourcesTest do
   alias MedFabric.BuildSources, as: Sources
 
   @env ~w(MF_MED_EX_PATH MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE
-           HEX_HOME HEX_MIRROR_URL HEX_TRUSTED_MIRROR_URL)
+           HEX_HOME HEX_MIRROR_URL HEX_TRUSTED_MIRROR_URL MIX_XDG XDG_CONFIG_HOME XDG_DATA_HOME)
   @defaults [
     {:med_ex, "~> 0.2.0", override: true, runtime: true},
     {:mf_domain, path: "../../core/domain"},
@@ -221,6 +221,43 @@ defmodule MedFabric.BuildSourcesTest do
     end
   end
 
+  test "changing a registry URL or signing key in the same Hex home changes isolation", c do
+    select(c, %{"med_ex" => %{"hex" => "med_ex", "repo" => "private"}})
+    home = Path.join(c.root, "hex")
+    File.mkdir_p!(home)
+    System.put_env("HEX_HOME", home)
+    config = Path.join(home, "hex.config")
+
+    write = fn url, key, auth ->
+      terms = [{:repos, %{"private" => %{url: url, public_key: key, auth_key: auth}}}]
+      File.write!(config, :io_lib.format(~c"~p.~n", [terms]))
+      elem(Sources.resolve(@defaults, c.project, c.root), 1)
+    end
+
+    first = write.("https://example.test/one", "signing-one", "secret-one")
+    assert first == write.("https://example.test/one", "signing-one", "secret-two")
+    second = write.("https://example.test/two", "signing-one", "secret-two")
+    assert first != second
+    assert second != write.("https://example.test/two", "signing-two", "secret-two")
+  end
+
+  test "incompatible literal versions and mismatched Hex identities are rejected", c do
+    sdk = make_project(c.root, "sdk")
+    mix = Path.join(sdk, "mix.exs")
+    File.write!(mix, String.replace(File.read!(mix), "0.2.0", "0.1.0"))
+    select(c, %{"med_ex" => %{"path" => "sdk"}})
+
+    assert_raise Mix.Error, ~r/does not satisfy/, fn ->
+      Sources.resolve(@defaults, c.project, c.root)
+    end
+
+    select(c, %{"med_ex" => %{"hex" => "another_package"}})
+
+    assert_raise Mix.Error, ~r/must match/, fn ->
+      Sources.resolve(@defaults, c.project, c.root)
+    end
+  end
+
   test "malformed, executable, conflicting and unknown selections fail closed", c do
     bad = [
       %{"surprise_app" => %{"path" => "."}},
@@ -231,6 +268,9 @@ defmodule MedFabric.BuildSourcesTest do
       %{"med_ex" => %{"git" => "https://example.invalid/repo", "github" => "x/y", "ref" => "x"}},
       %{"med_ex" => %{"github" => "not-an-owner-and-repo", "ref" => "x"}},
       %{"med_ex" => %{"github" => "x/y", "branch" => "main", "tag" => "v1"}},
+      %{"med_ex" => %{"github" => "x/y", "branch" => "main"}},
+      %{"med_ex" => %{"github" => "x/y", "tag" => "v1"}},
+      %{"med_ex" => %{"github" => "x/y", "ref" => "main"}},
       %{"med_ex" => %{"github" => "x/y", "ref" => "x", "subdir" => "../escape"}},
       %{"med_ex" => %{"hex" => "med_ex", "runtime" => false}},
       %{"med_ex" => %{"hex" => " "}},
