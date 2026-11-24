@@ -4,7 +4,8 @@
 # Example:
 # MED_EX_SOURCE='{"med_ex":{"path":"/absolute/path/to/med_ex"}}' bash ops/qc_sources.sh
 # Repeat with existing live/full/prepared paths, GitHub refs and Hex selections.
-# EXPECT_MED_EX_CONTRACT=legacy permits the existing legacy-only Hex package.
+# Set MED_EX_REQUIREMENT="== 0.1.0" for the published legacy contract.
+# EXPECT_MED_EX_CONTRACT=legacy checks the legacy API.
 set -euo pipefail
 repo_dir=$(cd "$(dirname "$0")/.." && pwd)
 qc_dir=$(mktemp -d)
@@ -16,6 +17,7 @@ fi
 unset MF_MED_EX_PATH MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE
 export MIX_ENV=test
 export EXPECT_MED_EX_CONTRACT=${EXPECT_MED_EX_CONTRACT:-stream_v1}
+export MED_EX_REQUIREMENT=${MED_EX_REQUIREMENT:-~> 0.2.0}
 cp "$repo_dir/config/sources.exs" "$qc_dir/sources.exs"
 printf '%s\n' "$MED_EX_SOURCE" > "$qc_dir/.mix_sources.json"
 printf '%%{}\n' > "$qc_dir/mix.lock"
@@ -25,7 +27,7 @@ defmodule SourceConsumer.MixProject do
   use Mix.Project
   def project do
     {deps, paths} = MedFabric.BuildSources.resolve(
-      [{:med_ex, "~> 0.2.0", override: true}], __DIR__, __DIR__)
+      [{:med_ex, System.fetch_env!("MED_EX_REQUIREMENT"), override: true}], __DIR__, __DIR__)
     [app: :source_consumer, version: "0.0.0", elixir: "~> 1.20", deps: deps] ++ paths
   end
 end

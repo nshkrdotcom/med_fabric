@@ -10,23 +10,34 @@ defmodule MedFabric.BuildSourcesTest do
   alias MedFabric.BuildSources, as: Sources
 
   @env ~w(MF_MED_EX_PATH MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE)
-  @defaults [{:med_ex, "~> 0.2.0", override: true, runtime: true},
-    {:mf_domain, path: "../../core/domain"}, {:jason, "~> 1.4"}]
+  @defaults [
+    {:med_ex, "~> 0.2.0", override: true, runtime: true},
+    {:mf_domain, path: "../../core/domain"},
+    {:jason, "~> 1.4"}
+  ]
 
   setup do
-    root = Path.join(System.tmp_dir!(), "mf-sources-" <> Integer.to_string(System.unique_integer([:positive])))
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "mf-sources-" <> Integer.to_string(System.unique_integer([:positive]))
+      )
+
     project = Path.join(root, "apps/exam")
     File.mkdir_p!(project)
     lock = "%{}\n"
     File.write!(Path.join(project, "mix.lock"), lock)
     previous = Map.new(@env, &{&1, System.get_env(&1)})
     Enum.each(@env, &System.delete_env/1)
+
     on_exit(fn ->
       Enum.each(previous, fn {key, value} ->
         if value, do: System.put_env(key, value), else: System.delete_env(key)
       end)
+
       File.rm_rf!(root)
     end)
+
     %{root: root, project: project, lock: lock}
   end
 
@@ -39,18 +50,26 @@ defmodule MedFabric.BuildSourcesTest do
 
   test "direct, live and full paths each isolate lock, build and dependency roots", c do
     candidates = ["sdk-a", ".weld/live/med_ex", ".weld/full/med_ex/project"]
-    paths = for candidate <- candidates do
-      make_project(c.root, candidate)
-      select(c, %{"med_ex" => %{"path" => candidate}})
-      {deps, roots} = Sources.resolve(@defaults, c.project, c.root)
-      assert {:med_ex, "~> 0.2.0", options} = hd(deps)
-      assert options[:path] == Path.join(c.root, candidate)
-      assert options[:override] and options[:runtime]
-      assert Enum.sort(Keyword.keys(roots)) == [:build_path, :deps_path, :lockfile]
-      assert Enum.all?(Keyword.values(roots), &String.starts_with?(&1, c.project <> "/_build/source_contexts/"))
-      assert roots == elem(Sources.resolve(@defaults, c.project, c.root), 1)
-      roots
-    end
+
+    paths =
+      for candidate <- candidates do
+        make_project(c.root, candidate)
+        select(c, %{"med_ex" => %{"path" => candidate}})
+        {deps, roots} = Sources.resolve(@defaults, c.project, c.root)
+        assert {:med_ex, "~> 0.2.0", options} = hd(deps)
+        assert options[:path] == Path.join(c.root, candidate)
+        assert options[:override] and options[:runtime]
+        assert Enum.sort(Keyword.keys(roots)) == [:build_path, :deps_path, :lockfile]
+
+        assert Enum.all?(
+                 Keyword.values(roots),
+                 &String.starts_with?(&1, c.project <> "/_build/source_contexts/")
+               )
+
+        assert roots == elem(Sources.resolve(@defaults, c.project, c.root), 1)
+        roots
+      end
+
     assert length(Enum.uniq(paths)) == 3
     assert File.read!(Path.join(c.project, "mix.lock")) == c.lock
     File.rm!(Path.join(c.root, ".mix_sources.json"))
@@ -58,15 +77,20 @@ defmodule MedFabric.BuildSourcesTest do
   end
 
   test "two Git refs and a Hex choice retain policy and replace only source coordinates", c do
-    contexts = for ref <- [String.duplicate("a", 40), String.duplicate("b", 40)] do
-      select(c, %{"med_ex" => %{"github" => "example/med_ex", "ref" => ref, "subdir" => "sdk"}})
-      {[{:med_ex, requirement, options} | _], roots} = Sources.resolve(@defaults, c.project, c.root)
-      assert requirement == "~> 0.2.0"
-      assert options[:ref] == ref and options[:subdir] == "sdk"
-      assert options[:override] and options[:runtime]
-      refute Keyword.has_key?(options, :path)
-      roots
-    end
+    contexts =
+      for ref <- [String.duplicate("a", 40), String.duplicate("b", 40)] do
+        select(c, %{"med_ex" => %{"github" => "example/med_ex", "ref" => ref, "subdir" => "sdk"}})
+
+        {[{:med_ex, requirement, options} | _], roots} =
+          Sources.resolve(@defaults, c.project, c.root)
+
+        assert requirement == "~> 0.2.0"
+        assert options[:ref] == ref and options[:subdir] == "sdk"
+        assert options[:override] and options[:runtime]
+        refute Keyword.has_key?(options, :path)
+        roots
+      end
+
     assert Enum.uniq(contexts) == contexts
     select(c, %{"med_ex" => %{"hex" => "med_ex", "repo" => "hexpm"}})
     {[{:med_ex, _, options} | _], roots} = Sources.resolve(@defaults, c.project, c.root)
@@ -95,8 +119,11 @@ defmodule MedFabric.BuildSourcesTest do
   end
 
   test "recognized inactive provider selections never activate optional media dependencies", c do
-    select(c, %{"med_ex_opus" => %{"path" => "not-installed-opus"},
-      "med_ex_rtc" => %{"path" => "not-installed-rtc"}})
+    select(c, %{
+      "med_ex_opus" => %{"path" => "not-installed-opus"},
+      "med_ex_rtc" => %{"path" => "not-installed-rtc"}
+    })
+
     {deps, _roots} = Sources.resolve(@defaults, c.project, c.root)
     assert deps == @defaults
     refute Enum.any?(deps, fn tuple -> elem(tuple, 0) in [:med_ex_opus, :med_ex_rtc] end)
@@ -113,10 +140,12 @@ defmodule MedFabric.BuildSourcesTest do
       %{"med_ex" => %{"hex" => "med_ex", "runtime" => false}},
       %{"mf_domain" => %{"hex" => "mf_domain"}}
     ]
+
     for selection <- bad do
       select(c, selection)
       assert_raise Mix.Error, fn -> Sources.resolve(@defaults, c.project, c.root) end
     end
+
     for bytes <- ["{\"med_ex\":{},\"med_ex\":{}}", "{} {}", "[]"] do
       File.write!(Path.join(c.root, ".mix_sources.json"), bytes)
       assert_raise Mix.Error, fn -> Sources.resolve(@defaults, c.project, c.root) end
@@ -132,6 +161,7 @@ defmodule MedFabric.BuildSourcesTest do
     select(c, %{"med_ex" => %{"path" => "sdk"}})
     assert_raise Mix.Error, fn -> Sources.resolve(@defaults, c.project, c.root) end
     System.delete_env("MF_MED_EX_PATH")
+
     for name <- ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE) do
       System.put_env(name, Path.join(c.root, "shared-state"))
       assert_raise Mix.Error, fn -> Sources.resolve(@defaults, c.project, c.root) end
@@ -139,11 +169,18 @@ defmodule MedFabric.BuildSourcesTest do
     end
   end
 
-  defp select(c, value), do: File.write!(Path.join(c.root, ".mix_sources.json"), JSON.encode!(value))
+  defp select(c, value),
+    do: File.write!(Path.join(c.root, ".mix_sources.json"), JSON.encode!(value))
+
   defp make_project(root, relative) do
     path = Path.join(root, relative)
     File.mkdir_p!(path)
-    File.write!(Path.join(path, "mix.exs"), "defmodule SourceFixture.MixProject do\n  use Mix.Project\n  def project, do: [app: :med_ex, version: \"0.2.0\"]\nend\n")
+
+    File.write!(
+      Path.join(path, "mix.exs"),
+      "defmodule SourceFixture.MixProject do\n  use Mix.Project\n  def project, do: [app: :med_ex, version: \"0.2.0\"]\nend\n"
+    )
+
     path
   end
 end

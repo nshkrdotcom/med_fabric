@@ -4,7 +4,10 @@ Med Fabric records two independent reference-peripheral waveforms or a sparse PL
 
 ## Choose application sources
 
-Use the repository’s existing VERSION and standard Mix lockfiles. The provisional dependency tuples point to nshkrdotcom/med_ex on main. Select a local checkout with the stream-v1 implementation until that source is reachable upstream. After qualification, pin the verified 40-character commit in Exam, handheld, preview and the MedEx extension consumers, then resolve and commit their default locks. The old Hex 0.2 contract supports the legacy path only. No product version change is required.
+The committed Mix locks select the verified MedEx Git revisions for the SDK base
+and optional providers. The published MedEx 0.1.0 package supports the legacy
+contract. The stream-v1 applications use the verified Git source at product
+version 0.2.0. Use a local source selection below when developing the SDK.
 
 For a local implementation checkout, write this data file in the **Fabric root**:
 

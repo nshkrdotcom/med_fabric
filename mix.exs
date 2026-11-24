@@ -47,13 +47,15 @@ defmodule MedFabric.Workspace.MixProject do
 
   defp docs do
     guides =
-      ~w(guides/browser_to_record.md guides/media_verification.md guides/architecture_and_roadmap.md)
+      ~w(guides/browser_to_record.md guides/media_verification.md guides/architecture_and_roadmap.md guides/handheld_demo.md guides/preview_isolation.md)
 
     projects = [
       {"core/domain/README.md", filename: "domain", title: "Domain"},
       {"core/store/README.md", filename: "store", title: "Store"},
       {"core/interop/README.md", filename: "interop", title: "Interop"},
-      {"apps/exam/README.md", filename: "exam", title: "Exam"}
+      {"apps/exam/README.md", filename: "exam", title: "Exam"},
+      {"apps/handheld/README.md", filename: "handheld", title: "Handheld"},
+      {"apps/preview/README.md", filename: "preview", title: "Preview"}
     ]
 
     [
