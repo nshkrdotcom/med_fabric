@@ -255,6 +255,7 @@ const liveSocket = new LiveSocket("/live", Socket, {
           return response.json();
         };
         this.el.querySelector("button").onclick = async () => {
+          output.textContent = "Connecting";
           try {
             this.peer?.close();
             const ice = await fetch(this.el.dataset.endpoint.split("/devices/")[0] + "/ice").then(r => r.json());

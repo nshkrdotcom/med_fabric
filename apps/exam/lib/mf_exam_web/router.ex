@@ -33,9 +33,28 @@ defmodule MedFabric.ExamWeb.Router do
     get("/encounters/:encounter_id/attempts/:acquisition", __MODULE__.State, :attempt)
     get("/encounters/:encounter_id/ice", __MODULE__.State, :ice)
     live("/encounters/:encounter_id/devices", MedFabric.ExamWeb.DeviceLive, :show)
-    match(:get, "/encounters/:encounter_id/devices/:id/segment/:stream/:sha", MedFabric.ExamWeb.DeviceSegment, [])
-    match(:post, "/encounters/:encounter_id/devices/:id/action", MedFabric.ExamWeb.DeviceAction, [])
-    match(:post, "/encounters/:encounter_id/devices/:id/preview", MedFabric.ExamWeb.DevicePreview, [])
+
+    match(
+      :get,
+      "/encounters/:encounter_id/devices/:id/segment/:stream/:sha",
+      MedFabric.ExamWeb.DeviceSegment,
+      []
+    )
+
+    match(
+      :post,
+      "/encounters/:encounter_id/devices/:id/action",
+      MedFabric.ExamWeb.DeviceAction,
+      []
+    )
+
+    match(
+      :post,
+      "/encounters/:encounter_id/devices/:id/preview",
+      MedFabric.ExamWeb.DevicePreview,
+      []
+    )
+
     live("/encounters/:encounter_id", MedFabric.ExamWeb.ExamLive, :show)
     match(:get, "/encounters/:encounter_id/recordings/:acquisition", __MODULE__.Recording, [])
   end

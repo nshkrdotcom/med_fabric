@@ -3,7 +3,7 @@ defmodule MedFabric.Exam.Application do
   use Application
 
   alias MedFabric.Exam
-  alias MedFabric.Exam.Recordings
+  alias MedFabric.Exam.{DeviceManifest, Recordings}
   alias MedFabric.ExamWeb.Endpoint
   alias MedFabric.Store.{Encounters, Postgres}
 
@@ -17,16 +17,21 @@ defmodule MedFabric.Exam.Application do
           []
 
         lab ->
-          device=if lab[:device_enabled],do: [
-            {MedFabric.Exam.DeviceRootLock,lab.artifact_dir},
-            MedFabric.Exam.PreviewGateway,
-            {Registry,keys: :unique,name: MedFabric.Exam.DeviceRegistry}
-          ],else: []
-          device ++ [
-            {Postgres, url: lab.database_url, name: Postgres, pool_size: 12},
-            %{id: :schema, start: {__MODULE__, :schema, []}},
-            {DynamicSupervisor, strategy: :one_for_one, name: MedFabric.Exam.Captures}
-          ] ++ if(lab[:device_enabled],do: [MedFabric.Exam.DeviceExpiry],else: [])
+          device =
+            if lab[:device_enabled],
+              do: [
+                {MedFabric.Exam.DeviceRootLock, lab.artifact_dir},
+                MedFabric.Exam.PreviewGateway,
+                {Registry, keys: :unique, name: MedFabric.Exam.DeviceRegistry}
+              ],
+              else: []
+
+          device ++
+            [
+              {Postgres, url: lab.database_url, name: Postgres, pool_size: 12},
+              %{id: :schema, start: {__MODULE__, :schema, []}},
+              {DynamicSupervisor, strategy: :one_for_one, name: MedFabric.Exam.Captures}
+            ] ++ if(lab[:device_enabled], do: [MedFabric.Exam.DeviceExpiry], else: [])
       end
 
     Supervisor.start_link(children ++ lab_children ++ [Endpoint],
@@ -50,8 +55,8 @@ defmodule MedFabric.Exam.Application do
     end
   end
 
-  defp recover_devices(%{device_enabled: true}),do: MedFabric.Exam.DeviceManifest.recover()
-  defp recover_devices(_),do: :ok
+  defp recover_devices(%{device_enabled: true}), do: DeviceManifest.recover()
+  defp recover_devices(_), do: :ok
 
   defp open_encounters(encounters) do
     Enum.reduce_while(encounters, :ok, fn {_id, entry}, :ok ->

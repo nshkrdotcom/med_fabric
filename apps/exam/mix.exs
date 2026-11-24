@@ -5,6 +5,7 @@ defmodule MedFabric.Exam.MixProject do
 
   def project do
     {deps, paths} = MedFabric.BuildSources.resolve(deps(), __DIR__, Path.expand("../..", __DIR__))
+
     [
       app: :mf_exam,
       version: __DIR__ |> Path.join("../../VERSION") |> File.read!() |> String.trim(),
@@ -25,7 +26,10 @@ defmodule MedFabric.Exam.MixProject do
       {:mf_domain, path: "../../core/domain"},
       {:mf_store, path: "../../core/store"},
       {:mf_interop, path: "../../core/interop"},
-      {:med_ex,"~> 0.2.0",github: "nshkrdotcom/med_ex",branch: "main",override: true},
+      {:med_ex, "~> 0.2.0",
+       github: "nshkrdotcom/med_ex",
+       ref: "83defa6d16e5062b3b027cb0e1dbec98bac38705",
+       override: true},
       # Ratio PR 131 widens its optional Decimal constraint. Keep this pin in the
       # deployable application until Hex ships that change.
       {:ratio,
@@ -40,8 +44,19 @@ defmodule MedFabric.Exam.MixProject do
       {:websock_adapter, "~> 0.5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
-    ] ++ if(System.get_env("MF_EXAM_LEGACY_MEDIA")=="1",
-      do: [{:med_ex_opus,"~> 0.2.0",github: "nshkrdotcom/med_ex",branch: "main",subdir: "extensions/med_ex_opus"},{:med_ex_rtc,"~> 0.2.0",github: "nshkrdotcom/med_ex",branch: "main",subdir: "extensions/med_ex_rtc"}], else: [])
+    ] ++
+      if(System.get_env("MF_EXAM_LEGACY_MEDIA") == "1",
+        do: [
+          {:med_ex_opus, "~> 0.2.0",
+           github: "nshkrdotcom/med_ex",
+           ref: "6e69605f256925ea2f7e03a377fca9ad5bc6bce0",
+           subdir: "extensions/med_ex_opus"},
+          {:med_ex_rtc, "~> 0.2.0",
+           github: "nshkrdotcom/med_ex",
+           ref: "6e69605f256925ea2f7e03a377fca9ad5bc6bce0",
+           subdir: "extensions/med_ex_rtc"}
+        ],
+        else: []
+      )
   end
-
 end
