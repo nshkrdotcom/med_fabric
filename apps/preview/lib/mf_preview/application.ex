@@ -1,4 +1,6 @@
 defmodule MedFabric.Preview.Application do
+  @moduledoc "Starts the loopback HTTP listener and supervises preview peers."
+
   use Application
 
   def start(_, _) do
@@ -18,6 +20,10 @@ end
 
 defmodule MedFabric.Preview.Endpoint do
   import Plug.Conn
+
+  alias MedEx.Wire.FrameV1
+  alias MedFabric.Preview.Peer
+
   def init(o), do: o
 
   def call(c, _) do
@@ -37,7 +43,7 @@ defmodule MedFabric.Preview.Endpoint do
 
   defp dispatch("POST", ["feed"], id, raw, _) do
     with {:ok, %{stream_number: 3, sample_count: 960, payload: pcm} = f} <-
-           MedEx.Wire.FrameV1.decode(raw),
+           FrameV1.decode(raw),
          true <- byte_size(pcm) == 1920 do
       if Registry.lookup(MedFabric.Preview.Registry, id) != [],
         do: :ets.insert(:mf_preview_feed, {id, System.monotonic_time(:millisecond), f})
@@ -56,7 +62,7 @@ defmodule MedFabric.Preview.Endpoint do
          true <- Plug.Crypto.secure_compare(mac, :crypto.mac(:hmac, :sha256, secret, payload)),
          {:ok, %{"acquisition" => ^id, "viewer" => actor, "exp" => exp}} <- JSON.decode(payload),
          true <- exp >= System.system_time(:second) do
-      MedFabric.Preview.Peer.action(id, actor, op, m)
+      Peer.action(id, actor, op, m)
     else
       _ -> {:error, :denied}
     end
@@ -66,8 +72,11 @@ defmodule MedFabric.Preview.Endpoint do
 end
 
 defmodule MedFabric.Preview.Peer do
+  @moduledoc "Manages WebRTC signaling and live Opus audio for one acquisition."
+
   use GenServer, restart: :temporary
-  alias MedEx.{Preview, Opus}
+
+  alias MedEx.{Opus, Preview}
 
   def start_link(id),
     do:
@@ -115,7 +124,7 @@ defmodule MedFabric.Preview.Peer do
   end
 
   def handle_call({"offer", actor, %{"sdp" => sdp, "ice" => ice}}, _, s)
-      when byte_size(sdp) <= 32768 do
+      when byte_size(sdp) <= 32_768 do
     if s.peer, do: Preview.close(s.peer)
     policy = if ice["iceTransportPolicy"] == "relay", do: :relay, else: :all
 
