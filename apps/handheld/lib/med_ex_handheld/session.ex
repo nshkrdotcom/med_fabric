@@ -112,7 +112,7 @@ defmodule MedExHandheld.Session do
     if profile == "plx_spot_check" do
       collect(c, spool)
 
-      if c["hold_after_ingestion"] and not resuming,
+      if c["hold_after_ingestion"] == true and not resuming,
         do: wait_for_release(root, System.monotonic_time(:second) + 45)
     end
 
