@@ -476,11 +476,16 @@ defmodule MedExHandheld.Paired do
         true = durable_seq == sent_seq
 
         {:ok, %{"type" => "stream_finished"}} =
-          Transport.request(s, "finish", %{
-            "sequence" => to_string(durable_seq),
-            "sample" => to_string(state["sample"]),
-            "interruption" => state["interruption"]
-          })
+          Transport.request(
+            s,
+            "finish",
+            %{
+              "sequence" => to_string(durable_seq),
+              "sample" => to_string(state["sample"]),
+              "interruption" => state["interruption"]
+            },
+            35_000
+          )
 
         :ok
 

@@ -448,7 +448,9 @@ defmodule MedExHandheld.Session do
   end
 
   defp finish(%{"profile" => "paired_exam"}, s) do
-    {:ok, %{"type" => "sealed", "digest" => d}} = Transport.request(s, "finish_acquisition")
+    {:ok, %{"type" => "sealed", "digest" => d}} =
+      Transport.request(s, "finish_acquisition", %{}, 35_000)
+
     d
   end
 
@@ -456,10 +458,15 @@ defmodule MedExHandheld.Session do
     inv = Spool.read_json(Path.join(c["spool"], "inventory.json"), [])
 
     {:ok, %{"type" => "sealed", "digest" => d}} =
-      Transport.request(s, "collection_finish", %{
-        "count" => to_string(length(inv)),
-        "digest" => J.digest(inv)
-      })
+      Transport.request(
+        s,
+        "collection_finish",
+        %{
+          "count" => to_string(length(inv)),
+          "digest" => J.digest(inv)
+        },
+        35_000
+      )
 
     d
   end

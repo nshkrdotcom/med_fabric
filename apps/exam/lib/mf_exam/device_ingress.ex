@@ -281,7 +281,7 @@ defmodule MedFabric.Exam.DeviceIngress do
   defp execute_scoped(tx, op, s), do: record_result(tx, op, act(op, s), s)
 
   defp record_result(tx, _op, {:ok, %StreamIndex{} = index}, s) do
-    {^index, receipt} = store_sealed(tx, s)
+    {^index, receipt} = store_sealed_index(tx, index, s)
     {:sealed, receipt}
   end
 
@@ -385,6 +385,48 @@ defmodule MedFabric.Exam.DeviceIngress do
   end
 
   defp observe_transport(_, _, _), do: :ok
+
+  defp store_sealed_index(tx, %StreamIndex{} = index, s) do
+    await_dead(s.writer)
+    dir = DeviceManifest.attempt_dir(s.bind.id, s.name, s.fence)
+    bytes = Serialization.bytes(index)
+    hash = Serialization.sha256(bytes)
+    index_path = Path.join(dir, hash <> ".index.mej1")
+
+    with true <-
+           index.fence == s.fence and index.journal_id == s.receipt.journal_id and
+             index.journal_generation > s.receipt.journal_generation,
+         {:ok, ^bytes} <- File.read(index_path) do
+      receipt = %{
+        stream_id: index.stream.stream_id,
+        source_epoch: index.stream.source_epoch,
+        descriptor_ref: index.stream.descriptor_ref,
+        fence: index.fence,
+        journal_id: index.journal_id,
+        journal_generation: index.journal_generation,
+        journal_digest: index.journal_digest,
+        durable_sequence: index.next_sequence,
+        durable_sample: index.next_sample,
+        accepted_sequence: index.next_sequence,
+        accepted_sample: index.next_sample
+      }
+
+      S.rows(
+        tx,
+        "UPDATE stream_attempts SET sealed_index=$2,index_digest=$3,receipt=$4 WHERE fence=$1",
+        [
+          s.fence,
+          Serialization.to_map(index),
+          hash,
+          Serialization.to_map(receipt)
+        ]
+      )
+
+      {index, receipt}
+    else
+      _ -> store_sealed(tx, s)
+    end
+  end
 
   defp store_sealed(tx, s) do
     await_dead(s.writer)

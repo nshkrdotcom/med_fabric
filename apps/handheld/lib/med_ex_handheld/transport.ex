@@ -82,8 +82,8 @@ defmodule MedExHandheld.Transport do
 
   def recv_nowait(s), do: recv(s, 0)
 
-  def request(s, type, body \\ %{}) do
-    with :ok <- send_json(s, type, body), do: recv(s)
+  def request(s, type, body \\ %{}, timeout \\ 6000) do
+    with :ok <- send_json(s, type, body), do: recv(s, timeout)
   end
 
   def close({pid, _}), do: :gun.close(pid)
