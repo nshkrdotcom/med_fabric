@@ -58,6 +58,12 @@ defmodule MedExHandheld.Transport do
 
   def recv({pid, ref}, timeout \\ 6000) do
     case :gun.await(pid, ref, timeout) do
+      {:ws, {:text, "device_request_denied"}} ->
+        {:error, :denied}
+
+      {:ws, {:close, 1008, _}} ->
+        {:error, :denied}
+
       {:ws, {:text, bytes}} when byte_size(bytes) <= 16_384 ->
         types =
           ~w(admitted durable accepted stream_finished replay monitor_credit heartbeat command state_query result_saved quarantined probe recorded sealed inventory_pending)

@@ -157,13 +157,25 @@ defmodule MedExHandheld.Session do
   end
 
   defp initial_admission!(c, sources) do
-    {:ok, s} = Transport.connect(c, "control")
+    case Transport.connect(c, "control") do
+      {:ok, s} ->
+        try do
+          case Transport.request(s, "hello", hello(c, sources)) do
+            {:ok, %{"type" => "admitted", "phase" => "capturing", "credit_frames" => 1}} ->
+              :ok
 
-    try do
-      {:ok, %{"type" => "admitted", "phase" => "capturing", "credit_frames" => 1}} =
-        Transport.request(s, "hello", hello(c, sources))
-    after
-      Transport.close(s)
+            {:error, :denied} ->
+              raise "Admission refused by Exam for #{c["profile"]} (#{c["device"]}): no unused clinician grant. Confirm readiness in the clinician UI (/encounters/#{c["encounter"]}/devices) first."
+
+            other ->
+              raise "Unexpected Exam admission response for #{c["profile"]} (#{c["device"]}): #{inspect(other)}"
+          end
+        after
+          Transport.close(s)
+        end
+
+      {:error, reason} ->
+        raise "Could not connect to Exam control socket (#{c["server"]}): #{inspect(reason)}"
     end
   end
 
@@ -431,10 +443,20 @@ defmodule MedExHandheld.CLI do
 
     task =
       Task.Supervisor.async_nolink(MedExHandheld.Tasks, fn ->
-        MedExHandheld.Session.run(cfg, scenario)
+        try do
+          {:ok, MedExHandheld.Session.run(cfg, scenario)}
+        rescue
+          e in RuntimeError -> {:error, Exception.message(e)}
+        end
       end)
 
-    Task.await(task, :infinity)
-    IO.puts("Synthetic acquisition sealed")
+    case Task.await(task, :infinity) do
+      {:ok, _} ->
+        IO.puts("Synthetic acquisition sealed")
+
+      {:error, message} ->
+        IO.puts(:stderr, "error: #{message}")
+        System.halt(1)
+    end
   end
 end
