@@ -372,7 +372,7 @@ defmodule MedExHandheld.Paired do
   def upload(c, spool, b, n, spec) do
     credit =
       case b["credit_frames"] do
-        v when is_integer(v) and v in 1..16 -> v
+        v when is_integer(v) and v in 1..15 -> v
         _ -> 1
       end
 
@@ -515,8 +515,12 @@ defmodule MedExHandheld.Paired do
         {:ok, durable_seq, in_flight}
 
       {:ok, %{"type" => "durable"} = r} ->
-        :ok = Spool.ack(spool, n, gen, r)
         next_durable = String.to_integer(r["durable_sequence"])
+
+        true =
+          next_durable == durable_seq or Enum.any?(in_flight, fn {_, q} -> q == next_durable end)
+
+        :ok = Spool.ack(spool, n, gen, r)
         remaining = Enum.drop_while(in_flight, fn {_q, next_q} -> next_q <= next_durable end)
         {:ok, next_durable, remaining}
 

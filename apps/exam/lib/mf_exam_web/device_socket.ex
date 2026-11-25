@@ -74,11 +74,17 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
 
         reply("accepted", accepted, next_state)
 
-      {:durable, r} ->
+      {:durable, accepted, durable} ->
         Barrier.hit("durable_before_ack", s.stream)
-        s = cancel_flush_timer(%{s | in_flight: 0})
-        accepted = Map.put(J.to_map(r), "transport_sha256", S.hash(raw))
-        push_many([{"accepted", accepted}, {"durable", J.to_map(r)}], s)
+        s = cancel_flush_timer(s)
+        pending = if accepted.accepted_sequence > durable.durable_sequence, do: 1, else: 0
+        s = if pending > 0, do: arm_flush_timer(s), else: s
+        accepted = Map.put(J.to_map(accepted), "transport_sha256", S.hash(raw))
+
+        push_many([{"accepted", accepted}, {"durable", J.to_map(durable)}], %{
+          s
+          | in_flight: pending
+        })
 
       {:capacity, receipt} ->
         stream_finished(receipt, s)
@@ -209,7 +215,7 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
   defp handle("gap", m, %{kind: :stream, writer: pid, in_flight: in_flight, credit: credit} = s)
        when is_pid(pid) and in_flight < credit do
     case DeviceIngress.call(pid, {:gap, m}) do
-      {:durable, r} ->
+      {:durable, _, r} ->
         Barrier.hit("durable_before_ack", s.stream)
         s = cancel_flush_timer(%{s | in_flight: 0})
         push_many([{"accepted", %{}}, {"durable", J.to_map(r)}], s)
@@ -379,10 +385,8 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
     S.fact(tx, id, type, body)
   end
 
-  def handle_info(:flush_batch, %{in_flight: n} = s) when n > 0,
+  def handle_info({:flush_batch, token}, %{flush_timer: {_, token}, in_flight: n} = s) when n > 0,
     do: handle_info(:checkpoint, %{s | flush_timer: nil})
-
-  def handle_info(:flush_batch, s), do: {:ok, %{s | flush_timer: nil}}
 
   def handle_info(:checkpoint, %{writer: pid, in_flight: n} = s) when is_pid(pid) and n > 0 do
     s = cancel_flush_timer(s)
@@ -413,14 +417,16 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
   defp negotiated_credit(v) when is_integer(v) and v > 15, do: 15
   defp negotiated_credit(_), do: 1
 
-  defp arm_flush_timer(%{flush_timer: nil} = s),
-    do: %{s | flush_timer: Process.send_after(self(), :flush_batch, 250)}
+  defp arm_flush_timer(%{flush_timer: nil} = s) do
+    token = make_ref()
+    %{s | flush_timer: {Process.send_after(self(), {:flush_batch, token}, 250), token}}
+  end
 
   defp arm_flush_timer(s), do: s
 
   defp cancel_flush_timer(%{flush_timer: nil} = s), do: s
 
-  defp cancel_flush_timer(%{flush_timer: timer} = s) do
+  defp cancel_flush_timer(%{flush_timer: {timer, _}} = s) do
     Process.cancel_timer(timer)
     %{s | flush_timer: nil}
   end

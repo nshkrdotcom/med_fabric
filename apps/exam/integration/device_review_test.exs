@@ -198,6 +198,38 @@ defmodule MedFabric.Exam.DeviceReviewTest do
 
     assert {:ok, bind} = S.reserve(c.bind.device, c.enc, id, "paired_exam", "boot-a", descriptors)
 
+    digest = descriptors["audio"]["descriptor_ref"]
+    assert {:ok, stale, previous} = DeviceIngress.open(bind, "audio", digest)
+
+    {:ok, first} =
+      FrameV1.encode(%FrameV1{
+        stream_number: 1,
+        source_epoch: 0,
+        config_epoch: 0,
+        sequence: 0,
+        first_sample: 0,
+        sample_count: 1,
+        payload: <<0, 0>>
+      })
+
+    assert {:ok, %{accepted_sequence: 1, durable_sequence: 0}} =
+             DeviceIngress.call(stale, {:frame, first})
+
+    S.rows(c.db, "UPDATE device_credentials SET revoked=true WHERE device_id=$1", [c.bind.device])
+    assert {:error, :stale_lease} = DeviceIngress.call(stale, :checkpoint)
+
+    S.rows(c.db, "UPDATE device_credentials SET revoked=false WHERE device_id=$1", [c.bind.device])
+
+    assert {:ok, bind} = S.reserve(c.bind.device, c.enc, id, "paired_exam", "boot-a", descriptors)
+    assert {:error, :stale_lease} = DeviceIngress.call(stale, :checkpoint)
+    assert {:ok, _, %{durable_sequence: 0}} = DeviceIngress.open(bind, "audio", digest)
+
+    {:ok, spec} = Serialization.stream_spec(descriptors["audio"])
+    old_dir = MedFabric.Exam.DeviceManifest.attempt_dir(id, "audio", previous.fence)
+
+    assert {:ok, %{terminal_recorded: false, receipt: ^previous}} =
+             MedEx.Storage.File.recover(old_dir, stream: spec, fence: previous.fence)
+
     for {name, number} <- [{"audio", 1}, {"ecg", 2}] do
       digest = descriptors[name]["descriptor_ref"]
       assert {:ok, ingress, _} = DeviceIngress.open(bind, name, digest)
@@ -214,27 +246,50 @@ defmodule MedFabric.Exam.DeviceReviewTest do
         payload: <<0, 0>>
       }
 
-      state = %{kind: :stream, bind: bind, stream: name, writer: ingress, pending: false}
+      state = %{
+        kind: :stream,
+        bind: bind,
+        stream: name,
+        writer: ingress,
+        in_flight: 0,
+        credit: 1,
+        flush_timer: nil
+      }
 
       state =
-        Enum.reduce(0..1, state, fn q, state ->
-          epoch = if number == 1, do: q, else: 0
-
-          {:ok, raw} =
-            FrameV1.encode(%{frame | sequence: q, first_sample: q, config_epoch: epoch})
+        if number == 1 do
+          {:ok, second} = FrameV1.encode(%{frame | sequence: 1, first_sample: 1, config_epoch: 1})
 
           assert {:push, {:text, _}, pending} =
-                   DeviceSocket.handle_in({raw, [opcode: :binary]}, state)
+                   DeviceSocket.handle_in({first, [opcode: :binary]}, %{state | credit: 15})
 
-          assert_receive :checkpoint
+          assert {:push, [{:text, accepted}, {:text, durable}], pending} =
+                   DeviceSocket.handle_in({second, [opcode: :binary]}, pending)
+
+          assert %{"accepted_sequence" => "2", "durable_sequence" => "1"} =
+                   Jason.decode!(accepted)
+
+          assert %{"accepted_sequence" => "1", "durable_sequence" => "1"} = Jason.decode!(durable)
+          assert pending.in_flight == 1
           assert {:push, {:text, _}, state} = DeviceSocket.handle_info(:checkpoint, pending)
           state
-        end)
+        else
+          Enum.reduce(0..1, state, fn q, state ->
+            {:ok, raw} = FrameV1.encode(%{frame | sequence: q, first_sample: q})
+
+            assert {:push, {:text, _}, pending} =
+                     DeviceSocket.handle_in({raw, [opcode: :binary]}, state)
+
+            assert_receive :checkpoint
+            assert {:push, {:text, _}, state} = DeviceSocket.handle_info(:checkpoint, pending)
+            state
+          end)
+        end
 
       [[prior_receipt]] =
         S.rows(
           c.db,
-          "SELECT receipt FROM stream_attempts WHERE acquisition_id=$1 AND stream=$2",
+          "SELECT receipt FROM stream_attempts WHERE acquisition_id=$1 AND stream=$2 ORDER BY generation DESC LIMIT 1",
           [id, name]
         )
 
@@ -258,7 +313,7 @@ defmodule MedFabric.Exam.DeviceReviewTest do
           {Jason.encode!(gap), [opcode: :text]}
         end
 
-      assert {:push, {:text, reply}, %{writer: nil, pending: false}} =
+      assert {:push, {:text, reply}, %{writer: nil, in_flight: 0}} =
                DeviceSocket.handle_in(input, state)
 
       refute_received :checkpoint

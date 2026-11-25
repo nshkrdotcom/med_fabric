@@ -62,17 +62,18 @@ defmodule MedFabric.Exam.DeviceIngress do
 
       old && old.bind.generation == b.generation && old.digest == digest &&
           Process.alive?(old.writer) ->
-        {:reply, StreamWriter.receipt(old.writer), %{old | socket: socket}}
+        reopen_socket(b, old, socket)
 
       true ->
         reserve_and_open(b, n, digest, socket, old)
     end
   end
 
+  def handle_call(:expire, _, nil), do: {:stop, :normal, :ok, nil}
+
   def handle_call(:expire, _, %{writer: writer} = s) do
-    result = StreamWriter.interrupt(writer, "resume_deadline")
-    if match?({:ok, _}, result), do: await_dead(writer)
-    {:stop, :normal, result, s}
+    :ok = stop_writer(writer)
+    {:stop, :normal, :ok, s}
   end
 
   def handle_call(op, {socket, _}, %{socket: socket} = s) do
@@ -94,13 +95,26 @@ defmodule MedFabric.Exam.DeviceIngress do
     end
 
     case result do
-      {:ok, {:sealed, r}} -> {:stop, :normal, {:ok, r}, s}
-      {:ok, {:capacity, r}} -> {:stop, :normal, {:capacity, r}, s}
-      {:ok, {:durable, r}} -> {:reply, {:durable, r}, %{s | receipt: r}}
-      {:ok, {:receipt, r}} -> {:reply, {:ok, r}, %{s | receipt: r}}
-      {:ok, {:error, :duplicate_conflict} = error} -> {:stop, :normal, error, s}
-      {:ok, error} -> {:reply, error, s}
-      error -> {:reply, error, s}
+      {:ok, {:sealed, r}} ->
+        {:stop, :normal, {:ok, r}, s}
+
+      {:ok, {:capacity, r}} ->
+        {:stop, :normal, {:capacity, r}, s}
+
+      {:ok, {:durable, accepted, durable}} ->
+        {:reply, {:durable, accepted, durable}, %{s | receipt: durable}}
+
+      {:ok, {:receipt, r}} ->
+        {:reply, {:ok, r}, %{s | receipt: r}}
+
+      {:ok, {:error, :duplicate_conflict} = error} ->
+        {:stop, :normal, error, s}
+
+      {:ok, error} ->
+        {:reply, error, s}
+
+      error ->
+        {:reply, error, s}
     end
   end
 
@@ -110,6 +124,30 @@ defmodule MedFabric.Exam.DeviceIngress do
     do: previous != socket and Process.alive?(previous)
 
   defp active_socket?(_, _, _), do: false
+
+  defp reopen_socket(bind, s, socket) do
+    result =
+      S.scoped(bind, fn tx, session ->
+        unless session.phase in ["capturing", "finalizing"], do: S.abort(tx, :inactive)
+
+        case StreamWriter.receipt(s.writer) do
+          {:ok, receipt} when receipt == s.receipt -> {:receipt, receipt}
+          {:ok, _} -> execute_scoped(tx, :checkpoint, s)
+          error -> error
+        end
+      end)
+
+    case result do
+      {:ok, {:receipt, receipt}} ->
+        {:reply, {:ok, receipt}, %{s | socket: socket, receipt: receipt}}
+
+      {:ok, error} ->
+        {:reply, error, s}
+
+      error ->
+        {:reply, error, s}
+    end
+  end
 
   defp reserve_and_open(bind, name, digest, socket, old) do
     case S.scoped(bind, &reserve(&1, &2, bind, name, digest, old), :update) do
@@ -149,7 +187,7 @@ defmodule MedFabric.Exam.DeviceIngress do
 
     {:ok, spec} = Serialization.stream_spec(session.descriptors[name])
     if spec.descriptor_ref != digest, do: S.abort(tx, :descriptor_changed)
-    quiesce(tx, old)
+    if old, do: stop_writer(old.writer)
 
     previous =
       S.rows(
@@ -177,15 +215,13 @@ defmodule MedFabric.Exam.DeviceIngress do
     end
   end
 
-  defp quiesce(_tx, nil), do: :ok
-
-  defp quiesce(tx, %{writer: writer}) do
-    if Process.alive?(writer) do
-      case StreamWriter.interrupt(writer, "transport_generation_rotated") do
-        {:ok, _} -> await_dead(writer)
-        _ -> S.abort(tx, :cannot_quiesce)
-      end
-    end
+  defp stop_writer(writer) do
+    # Rotation and expiry have already fenced this attempt. Its volatile tail
+    # belongs to the client spool and must not be flushed during handoff.
+    GenServer.stop(writer, :normal, 30_000)
+  catch
+    :exit, :noproc -> :ok
+    :exit, {:noproc, _} -> :ok
   end
 
   defp open_writer(bind, name, fence, spec, previous) do
@@ -198,16 +234,19 @@ defmodule MedFabric.Exam.DeviceIngress do
       fault_hook: fn stage -> Barrier.hit(to_string(stage), name) end
     ]
 
-    with {:ok, writer} <- StreamWriter.start_link(opts ++ previous),
-         {:ok, receipt} <- StreamWriter.receipt(writer),
-         {:ok, _} <-
-           S.scoped(bind, fn tx, _ ->
+    case S.scoped(bind, fn tx, _ ->
+           with {:ok, writer} <- StreamWriter.start_link(opts ++ previous),
+                {:ok, receipt} <- StreamWriter.receipt(writer) do
              S.rows(tx, "UPDATE stream_attempts SET receipt=$2 WHERE fence=$1", [
                fence,
                Serialization.to_map(receipt)
              ])
-           end) do
-      {:ok, writer, receipt}
+
+             {:ok, writer, receipt}
+           end
+         end) do
+      {:ok, result} -> result
+      error -> error
     end
   end
 
@@ -296,12 +335,14 @@ defmodule MedFabric.Exam.DeviceIngress do
     )
 
     if flushed? do
+      durable = durable_prefix(receipt)
+
       S.rows(tx, "UPDATE stream_attempts SET receipt=$2 WHERE fence=$1", [
         s.fence,
-        Serialization.to_map(receipt)
+        Serialization.to_map(durable)
       ])
 
-      {:durable, receipt}
+      {:durable, receipt, durable}
     else
       {:receipt, receipt}
     end
@@ -322,6 +363,14 @@ defmodule MedFabric.Exam.DeviceIngress do
   end
 
   defp record_result(_, _, error, _), do: error
+
+  defp durable_prefix(receipt) do
+    %{
+      receipt
+      | accepted_sequence: receipt.durable_sequence,
+        accepted_sample: receipt.durable_sample
+    }
+  end
 
   defp observe_transport(tx, {:frame, raw, frame, _payload}, s) do
     if s.name == "ecg" and :ets.whereis(:mf_live_ecg) != :undefined do
