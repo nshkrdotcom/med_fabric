@@ -37,6 +37,17 @@ listening while authoritative capture continues.
 
 ## Run a local demonstration
 
+Start the local dev lab (PostgreSQL, TLS certs, and Preview secret) and run
+Preview, Exam, and Handheld in three terminals:
+
+```bash
+./ops/dev.sh up         # prepares _build/handheld-demo and starts PostgreSQL
+./ops/dev.sh preview    # Terminal 1: isolated mf_preview sidecar
+./ops/dev.sh exam       # Terminal 2: mf_exam Phoenix server
+./ops/dev.sh handheld   # Terminal 3: TLS relay + mf_handheld (paired_exam)
+./ops/dev.sh down       # stops PostgreSQL when done
+```
+
 Use Elixir 1.20 with OTP 29 and ordinary Mix in the application directories.
 The default SDK and provider dependencies resolve from Hex using the ranges in
 `config/sources.exs`. The [handheld guide](guides/handheld_demo.md) covers
