@@ -235,8 +235,8 @@ defmodule MedFabric.HandheldAcceptance do
     # embedded credentials). Git status is recorded only if a real repo exists.
     identities =
       for repo <- ~w(weld med_ex med_fabric),
-          path = Path.join(Path.dirname(@root), repo),
-          File.dir?(Path.join(path, ".git")),
+          path = if(repo == "med_fabric", do: @root, else: Path.join(Path.dirname(@root), repo)),
+          File.exists?(Path.join(path, ".git")),
           into: %{} do
         {repo,
          %{

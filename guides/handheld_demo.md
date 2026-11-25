@@ -37,15 +37,18 @@ names. Third-party dependencies continue to use their Mix declarations.
 
 Use the matching path or Git revision for each selected package. For the base
 Git choice omit `subdir`. Git entries accept one `github` or `git` origin and
-one `ref`, `branch`, or `tag`. A Hex choice uses the declaration's compatible
+an exact 40-character commit in `ref`. A Hex choice uses the declaration's compatible
 version requirement and needs a registry that actually serves the packages.
 Installations from existing projections use ordinary Mix. Generate the views
 in MedEx before choosing them in Fabric.
 
 Selected sources and `MF_EXAM_LEGACY_MEDIA=1` get separate **lockfile,
 dependency, and build paths**, keyed by project, active sources, toolchain,
-Mix environment/target, and profile. Full and prepared content identities
-also distinguish regenerated candidates at the same path. Remove the source
+Mix environment/target, native build flags, and profile. Dependency declarations,
+locks, and composition inputs select a new resolution when the graph changes.
+Ordinary editable library source uses Mix incremental compilation. Full and
+prepared projects also fingerprint their actual compiler, asset, and verification
+inputs, including regenerated candidates at the same path. Remove the source
 file and clear the legacy profile to return to default paths. Leave
 `MIX_BUILD_PATH`, `MIX_BUILD_ROOT`, `MIX_DEPS_PATH`, and `MIX_LOCKFILE` unset
 when selecting either isolated context. `MF_MED_EX_PATH` is a deprecated
@@ -97,6 +100,54 @@ For alternate sources, use absolute paths or exact 40-hex Git commit IDs.
 Run `MED_EX_SOURCE="$(cat .mix_sources.json)" ./ops/qc_fabric_sources.sh`
 for actual Exam, Handheld, Preview and legacy Exam resolution and compilation,
 including removal/restoration of the selector in a disposable copy.
+
+
+### Inspect and reuse source qualification
+
+From an application, inspect the source type and actual Mix state paths without fetching
+dependencies.
+
+```bash
+(cd apps/exam && elixir ../../ops/source_context.exs)
+(cd apps/exam && MF_EXAM_LEGACY_MEDIA=1 elixir ../../ops/source_context.exs)
+```
+
+Fabric reuses Hex's verified archives at download time. Each alternate profile keeps
+its writable dependencies and BEAMs in its own context. Compiled dependencies may
+embed absolute filenames and build inputs. The qualification cache reuses a verified
+whole workspace at its original path, with an exclusive lock and content checks.
+It accepts local paths, GitHub coordinates, and Hex selectors. Use `--no-cache`
+for raw Git URLs.
+
+```bash
+export MF_SOURCE_QC_CACHE="$HOME/.cache/med-fabric-source-lanes"
+MED_EX_SOURCE="$(cat .mix_sources.json)" ops/qc_fabric_sources.sh
+MED_EX_SOURCE="$(cat .mix_sources.json)" ops/qc_fabric_sources.sh --no-cache
+ops/qc_fabric_sources.sh --prune <printed-lane-digest>
+```
+
+The optional cache applies to the qualification command. Ordinary Mix development
+keeps its existing private paths. Cache writes are scoped to owned entries and
+the command removes temporary source selectors when it exits.
+
+### Run native qualification with owned services
+
+The following command creates an isolated PostgreSQL 18 database and digest-pinned
+HAPI R4 container and reuses those processes across the native and browser checks
+within the run. It also runs the detached three-release acquisition with a
+separate database and role credentials.
+
+```bash
+ops/qc_native.sh --evidence /private/path/to/new-evidence
+ops/qc_services.sh run -- bash -c 'cd core/interop && mix test integration'
+```
+
+Each invocation provisions fresh data and credentials. The wrapper verifies
+loopback service readiness and cleans up its own PostgreSQL and container on
+success, failure, or interruption. Add `--keep-failure` to retain private
+diagnostic state. For the pinned source-built JDK route, use
+`ops/local_services.sh start`, `status`, `env`, `restart-hapi`, and `stop`
+with a dedicated `MF_SERVICE_STATE`.
 
 
 Put PostgreSQL server binaries on PATH. On Ubuntu with PostgreSQL 18, use

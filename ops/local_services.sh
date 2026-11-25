@@ -235,6 +235,25 @@ case "${1:-}" in
     fi
     print_env
     ;;
+  status)
+    if [[ -s "$state/pgdata/PG_VERSION" ]] &&
+      "$(pg_bin)/pg_ctl" -D "$state/pgdata" status >/dev/null 2>&1; then
+      printf '%s\n' 'PostgreSQL: running'
+    else
+      printf '%s\n' 'PostgreSQL: stopped'
+    fi
+
+    if hapi_pid "$hapi_port" >/dev/null; then
+      if curl --noproxy '*' --max-time 2 -fsS "$native_fhir_url/metadata" 2>/dev/null |
+        jq -e '.fhirVersion == "4.0.1"' >/dev/null; then
+        printf '%s\n' 'HAPI R4: ready'
+      else
+        printf '%s\n' 'HAPI: starting'
+      fi
+    else
+      printf '%s\n' 'HAPI: stopped'
+    fi
+    ;;
   stop)
     stop_hapi
     if [[ -s "$state/pgdata/PG_VERSION" ]]; then
@@ -245,6 +264,6 @@ case "${1:-}" in
     fi
     ;;
   *)
-    die 'Usage: ops/local_services.sh start|postgres|env|restart-hapi|stop'
+    die 'Usage: ops/local_services.sh start|postgres|status|env|restart-hapi|stop'
     ;;
 esac
