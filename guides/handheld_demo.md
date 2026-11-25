@@ -86,10 +86,7 @@ that package is available from the selected registry.
 
 ## Process acceptance
 
-The native Elixir runner is the supported entrypoint. The prior Python runner
-and relay remain a temporary parity fallback only; remove both after the full
-native lane and its independent oracle/process tests pass on the workstation.
-No Python dependency is needed by the native runner or ordinary demo.
+The Elixir acceptance runner starts the synthetic lab and its TLS relay.
 
 ```bash
 elixir ops/handheld/oracle_test.exs
@@ -163,7 +160,7 @@ mix run -e 'MedExHandheld.CLI.main(System.argv())' -- \
 For review, open
 `http://localhost:<http_port>/encounters/<exam>?key=<clinician_key>`
 using the first encounter in `server.json`. After the demo, stop Exam and the
-proxy with Ctrl-C and stop PostgreSQL with
+relay with Ctrl-C and stop PostgreSQL with
 `pg_ctl -D _build/handheld-demo/pgdata stop`.
 
 For a remote handheld, set the server URL to a reachable DNS name and provision
