@@ -42,10 +42,14 @@ for app in exam handheld preview; do
 done
 (
   cd apps/exam
-  export MIX_ENV=test MF_EXAM_LEGACY_MEDIA=1 MF_SOURCE_QC_PROFILE=legacy-exam
-  mix deps.get
-  mix compile --warnings-as-errors
-  mix run --no-start ../../ops/prove_fabric_sources.exs
+  export MF_EXAM_LEGACY_MEDIA=1 MF_SOURCE_QC_PROFILE=legacy-exam
+  for env in dev test; do
+    export MIX_ENV=$env
+    mix deps.get
+    mix deps.get --check-locked
+    mix compile --warnings-as-errors
+    mix run --no-start ../../ops/prove_fabric_sources.exs
+  done
 )
 elixir ops/handheld/oracle_test.exs
 elixir ops/handheld/process_lab_test.exs
