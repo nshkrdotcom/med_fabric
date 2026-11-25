@@ -22,7 +22,9 @@ defmodule MedFabric.DeviceNetworkTest do
 
     args = if suite in ["spot-check", "all"], do: args ++ ["--fhir", "hapi"], else: args
 
-    elixir = System.find_executable("elixir") || flunk("The native acceptance runner requires Elixir")
+    elixir =
+      System.find_executable("elixir") || flunk("The native acceptance runner requires Elixir")
+
     {output, exit} = System.cmd(elixir, args, cd: root, stderr_to_stdout: true)
 
     assert exit == 0, output
@@ -37,15 +39,19 @@ defmodule MedFabric.DeviceNetworkTest do
       assert e["bounds_respected"] and e["unknown_command_outcome_exercised"]
       assert e["monitor_trace_digest"] == e["monitor_oracle_trace_digest"]
       assert e["scenarios"]["handheld-restart"]["second_owner_refused"]
+
       if System.get_env("MF_NETWORK_PREVIEW") == "isolated" do
         assert e["preview_os_process_killed"] and e["preview_role_isolation_verified"]
       end
     end
+
     if suite in ["spot-check", "all"] do
       assert e["scenarios"]["plx"]["local_ingestion_before_ack"]
       assert e["scenarios"]["plx"]["committed_event_replayed"]
       assert length(e["fhir_external_ids"]) == 2
     end
-    if suite in ["legacy-browser", "all"], do: assert(e["scenarios"]["legacy-browser"]["actual_browser_playback"])
+
+    if suite in ["legacy-browser", "all"],
+      do: assert(e["scenarios"]["legacy-browser"]["actual_browser_playback"])
   end
 end

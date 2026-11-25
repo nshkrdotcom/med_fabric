@@ -21,6 +21,7 @@ defmodule MedFabric.HandheldDemo do
       {:ok, %{type: :directory}} -> :ok
       _ -> raise "Unsafe demo directory"
     end
+
     unless File.ls!(directory) == [], do: raise("Choose a new empty demo directory")
     File.chmod!(directory, 0o700)
 
@@ -54,8 +55,15 @@ defmodule MedFabric.HandheldDemo do
     }
 
     second_exam = "secondary-#{tag}"
-    secondary = %{encounter | exam: second_exam, patient_key: token(40), clinician_key: token(40),
-      patient_ref: "Patient/#{second_exam}", encounter_ref: "Encounter/#{second_exam}"}
+
+    secondary = %{
+      encounter
+      | exam: second_exam,
+        patient_key: token(40),
+        clinician_key: token(40),
+        patient_ref: "Patient/#{second_exam}",
+        encounter_ref: "Encounter/#{second_exam}"
+    }
 
     server = %{
       http_port: http,
@@ -73,8 +81,10 @@ defmodule MedFabric.HandheldDemo do
       preview_url: nil,
       preview_credential_file: preview_credential,
       authorize_scenarios: true,
-      devices: [%{id: device, credential_file: device_credential, exam: exam},
-        %{id: "secondary-gateway", credential_file: secondary_credential, exam: second_exam}]
+      devices: [
+        %{id: device, credential_file: device_credential, exam: exam},
+        %{id: "secondary-gateway", credential_file: secondary_credential, exam: second_exam}
+      ]
     }
 
     handheld = %{
