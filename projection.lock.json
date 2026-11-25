@@ -14,7 +14,7 @@
       "core/interop",
       "core/store"
     ],
-    "digest": "05952e78308f53bccb88e21538a6f0b97484e88746791c215c7b4bdf7154f011",
+    "digest": "8a7195983b34087c7cb7765656542b04ca3955421d6dd75daa418355f1603df8",
     "edges": [
       {
         "app": "mf_domain",
@@ -70,11 +70,11 @@
     "violations": []
   },
   "manifest": {
-    "digest": "34b57f1bb00e799556c6d06807f20a5172c73989f449ebe0876af39f2339b36c",
+    "digest": "f4c5537a89014dfa29bcbac2bf32d6ece1e7396f85c02f90f622c83ff85bfef8",
     "path": "build_support/weld.exs"
   },
   "projection": {
-    "artifact_id": "94cad528f4896d70e2ea55857d350ecbd10722f22a1ba90bf1cf1103af63705a",
+    "artifact_id": "1477f24a901193c4ce4afb1e73d493adf062ca3703cf3a8a48a1a704dc053b6d",
     "build_path": ".weld/full/mf_exam/project",
     "config_warnings": [
       {
@@ -90,7 +90,6 @@
       "README.md",
       "apps/exam/CHANGELOG.md",
       "apps/exam/LICENSE",
-      "apps/exam/README.md",
       "apps/exam/assets/exam.svg",
       "apps/exam/guides/architecture.md",
       "apps/exam/guides/browser_to_record.md",
@@ -174,7 +173,7 @@
       "test/test_helper.exs"
     ],
     "file_remaps": [],
-    "git_revision": "e45b66313dcb35b10bd092340c137d7f51ae9770",
+    "git_revision": "7827f765d695ade0ea332204c90db35f490ce69b",
     "helper_transformations": [
       {
         "exunit_options": [],
@@ -214,7 +213,6 @@
       "README.md",
       "apps/exam/CHANGELOG.md",
       "apps/exam/LICENSE",
-      "apps/exam/README.md",
       "apps/exam/assets",
       "apps/exam/guides/architecture.md",
       "apps/exam/guides/browser_to_record.md",
@@ -409,13 +407,12 @@
       }
     ],
     "test_support_projects": [],
-    "tree_digest": "ab1688382fa602c5206f5580adf7c9f3bf7ec2c52947858b08175900cbab3ff9",
+    "tree_digest": "b38be5d71cb15cceed1252a4b6b20ae9c4e04a0016fc7a063ee946c092cb4bfa",
     "verification_files": [
       ".formatter.exs",
       "README.md",
       "apps/exam/CHANGELOG.md",
       "apps/exam/LICENSE",
-      "apps/exam/README.md",
       "apps/exam/assets/exam.svg",
       "apps/exam/guides/architecture.md",
       "apps/exam/guides/browser_to_record.md",
@@ -498,7 +495,7 @@
       "test/support/weld_helpers/core_store_test_helper.exs",
       "test/test_helper.exs"
     ],
-    "verification_input_identity": "d36575fb3ad53398f2bd2d51835a760aca7db88fbca3061669cac75cf39255cb"
+    "verification_input_identity": "e3cd70b448e4a148601f6fa2bc0539e0477fd07df2e82f41b55ac36c98c88518"
   },
   "source": {
     "inventory": [
@@ -517,6 +514,15 @@
         "operation": "link_or_copy",
         "owner": "apps/exam",
         "publish": true,
+        "source": "apps/exam/README.md",
+        "target": "README.md"
+      },
+      {
+        "directory": false,
+        "kind": "docs",
+        "operation": "link_or_copy",
+        "owner": "apps/exam",
+        "publish": true,
         "source": "apps/exam/CHANGELOG.md",
         "target": "apps/exam/CHANGELOG.md"
       },
@@ -528,15 +534,6 @@
         "publish": true,
         "source": "apps/exam/LICENSE",
         "target": "apps/exam/LICENSE"
-      },
-      {
-        "directory": false,
-        "kind": "docs",
-        "operation": "link_or_copy",
-        "owner": "apps/exam",
-        "publish": true,
-        "source": "apps/exam/README.md",
-        "target": "apps/exam/README.md"
       },
       {
         "directory": false,
@@ -1652,10 +1649,15 @@
         "target": ".formatter.exs"
       },
       {
-        "generated_digest": "150122a78049d4892023122ef06c3d7b8c1b3652474996147b6321b7c9d85d2e",
-        "inputs": [],
+        "generated_digest": null,
+        "inputs": [
+          {
+            "owner": "apps/exam",
+            "source": "apps/exam/README.md"
+          }
+        ],
         "kind": "docs",
-        "operation": "generate",
+        "operation": "link_or_copy",
         "publish": true,
         "target": "README.md"
       },
@@ -1684,19 +1686,6 @@
         "operation": "link_or_copy",
         "publish": true,
         "target": "apps/exam/LICENSE"
-      },
-      {
-        "generated_digest": null,
-        "inputs": [
-          {
-            "owner": "apps/exam",
-            "source": "apps/exam/README.md"
-          }
-        ],
-        "kind": "docs",
-        "operation": "link_or_copy",
-        "publish": true,
-        "target": "apps/exam/README.md"
       },
       {
         "generated_digest": null,
@@ -1999,7 +1988,7 @@
         "target": "lib/mf_exam.ex"
       },
       {
-        "generated_digest": "f547ffb52e5df99069a17a97c52b823e1bb548d16152e900f35f7c69cff98e43",
+        "generated_digest": "a82b463474907738b0e2d581c4c41fea387cbc3370a4ff7f1e811dcaa684a9e1",
         "inputs": [
           {
             "owner": "apps/exam",
@@ -2601,7 +2590,7 @@
         "target": "lib/mf_store/records.ex"
       },
       {
-        "generated_digest": "76513cd291af371945ca26396dcbbfa4eddcc4484ef37da9fc7a54982aab74cd",
+        "generated_digest": "77d263e0ea0a73e870a5a1693204606a2ae42955a44bc39256c83a3f21620180",
         "inputs": [
           {
             "owner": "apps/exam",

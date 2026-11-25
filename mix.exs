@@ -54,7 +54,6 @@ defmodule MfExam.MixProject do
         "README.md",
         "apps/exam/CHANGELOG.md",
         "apps/exam/LICENSE",
-        "apps/exam/README.md",
         "apps/exam/assets",
         "apps/exam/guides/architecture.md",
         "apps/exam/guides/browser_to_record.md",
@@ -72,14 +71,14 @@ defmodule MfExam.MixProject do
     Keyword.put(
       [
         assets: %{"apps/exam/assets" => "assets"},
-        source_ref: "mf_exam-v0.1.0",
+        source_ref: "mf_exam-v0.1.0-readme",
         source_url: "https://github.com/nshkrdotcom/med_fabric",
         logo: "apps/exam/assets/exam.svg",
         main: "readme",
         extras: [
+          "README.md",
           "apps/exam/CHANGELOG.md",
           "apps/exam/LICENSE",
-          "apps/exam/README.md",
           "apps/exam/guides/architecture.md",
           "apps/exam/guides/browser_to_record.md",
           "apps/exam/guides/getting_started.md",
