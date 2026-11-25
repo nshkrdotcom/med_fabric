@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200" role="img" aria-labelledby="title desc">
+  <title id="title">Remote exam</title>
+  <desc id="desc">Encounter clipboard with a patient and review checklist inside a beveled hexagonal frame.</desc>
+  <defs>
+    <linearGradient id="metal" x2=".82" y2="1"><stop stop-color="#CED8E9"/><stop offset=".28" stop-color="#93AFCD"/><stop offset=".48" stop-color="#456B95"/><stop offset=".53" stop-color="#7290BE"/><stop offset="1" stop-color="#456B95"/></linearGradient>
+    <linearGradient id="light" gradientUnits="userSpaceOnUse" x1="48" y1="60" x2="152" y2="140"><stop stop-color="#F2F6F9"/><stop offset=".45" stop-color="#93AFCD"/><stop offset="1" stop-color="#6086B0"/></linearGradient>
+    <radialGradient id="field" cx=".37" cy=".28" r=".85"><stop stop-color="#132338"/><stop offset=".65" stop-color="#0B1320"/><stop offset="1" stop-color="#04070D"/></radialGradient>
+    <pattern id="etch" width="12" height="12" patternUnits="userSpaceOnUse"><path d="M0 12 12 0" stroke="#7290BE" stroke-opacity=".08"/><circle cx="6" cy="6" r=".8" fill="#7290BE" opacity=".25"/></pattern>
+  </defs>
+  <path d="M100 1 185.736515 50.5 185.736515 149.5 100 199 14.263485 149.5 14.263485 50.5Z" fill="url(#metal)"/>
+  <g transform="translate(100 100) scale(.945) translate(-100 -100)">
+    <path d="M100 1 185.736515 50.5 185.736515 149.5 100 199 14.263485 149.5 14.263485 50.5Z" fill="url(#field)"/><path d="M100 1 185.736515 50.5 185.736515 149.5 100 199 14.263485 149.5 14.263485 50.5Z" fill="url(#etch)"/>
+    <path d="M100 10 177.942286 55 177.942286 145 100 190 22.0577137 145 22.0577137 55Z" fill="none" stroke="#7290BE" opacity=".38"/>
+  </g>
+  <g fill="none" stroke-linejoin="round" stroke-linecap="round">
+    <rect x="62" y="56" width="76" height="96" rx="7" fill="url(#metal)" stroke="#CED8E9" stroke-width="1.5"/>
+    <rect x="68" y="65" width="64" height="80" rx="4" fill="#0B1320" stroke="url(#light)" stroke-width="3"/>
+    <rect x="84" y="51" width="32" height="11" rx="4" fill="url(#metal)" stroke="#CED8E9" stroke-width="1.5"/>
+    <circle cx="87" cy="86" r="7" fill="url(#metal)" stroke="#CED8E9" stroke-width="1.5"/>
+    <path d="M74 104q1-17 13-17t13 17Z" fill="url(#metal)" stroke="#CED8E9" stroke-width="1.5"/>
+    <path d="M107 83h17m-17 7h12M77 118l4 4 8-10m7 6h26m-45 14 4 4 8-10m7 6h20" stroke="url(#light)" stroke-width="2.5"/>
+  </g>
+</svg>
