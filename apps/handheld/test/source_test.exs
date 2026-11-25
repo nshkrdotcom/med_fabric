@@ -6,7 +6,8 @@ defmodule MedExHandheld.SourceTest do
     :ok
   end
 
-  alias MedExHandheld.{ReferencePeripheral, RDP1, Spool, Monitor, PLXPeripheral}
+  alias MedEx.Wire.FrameV1
+  alias MedExHandheld.{Monitor, PLXPeripheral, RDP1, ReferencePeripheral, Spool}
 
   test "RDP1 independent CRC vector survives every split and coalesced reads" do
     bytes = File.read!(Path.join(__DIR__, "fixtures/rdp1_waveform.bin"))
@@ -68,7 +69,7 @@ defmodule MedExHandheld.SourceTest do
       )
 
     {:ok, raw} =
-      MedEx.Wire.FrameV1.encode(%MedEx.Wire.FrameV1{
+      FrameV1.encode(%FrameV1{
         stream_number: 1,
         source_epoch: 0,
         config_epoch: 0,
@@ -141,8 +142,8 @@ defmodule MedExHandheld.SourceTest do
     assert :pending = GenServer.call(p, {:command, c})
     assert %{"status" => "pending"} = GenServer.call(p, {:state, c})
 
-    assert {"1", <<-16384::little-signed-16, 0::little-16>>} =
-             GenServer.call(p, {:frame, 960, <<-32768::little-signed-16, -1::little-signed-16>>})
+    assert {"1", <<-16_384::little-signed-16, 0::little-16>>} =
+             GenServer.call(p, {:frame, 960, <<-32_768::little-signed-16, -1::little-signed-16>>})
 
     assert {:result, r} = GenServer.call(p, {:command, c})
     assert r["first_sample"] == "960"

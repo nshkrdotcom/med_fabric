@@ -1,4 +1,5 @@
 defmodule MedExHandheld.SourceAdapter do
+  @moduledoc "Contract for incremental source decoders."
   @callback decode(binary(), binary()) :: {:ok, binary(), [map()]} | {:error, atom(), binary()}
 end
 
@@ -33,26 +34,17 @@ defmodule MedExHandheld.RDP1 do
         {:ok, all, Enum.reverse(events)}
 
       true ->
-        <<payload::binary-size(^len), crc::little-32, tail::binary>> = rest
+        base = %{
+          kind: k,
+          source: s,
+          boot: boot,
+          sequence: q,
+          first_sample: i,
+          sample_count: n,
+          config_epoch: if(c == 65_535, do: :unknown, else: c)
+        }
 
-        if :erlang.crc32(binary_part(all, 0, 32 + len)) != crc do
-          {:error, :bad_crc, <<>>}
-        else
-          base = %{
-            kind: k,
-            source: s,
-            boot: boot,
-            sequence: q,
-            first_sample: i,
-            sample_count: n,
-            config_epoch: if(c == 65535, do: :unknown, else: c)
-          }
-
-          case unpack(k, payload, base) do
-            {:ok, v} -> parse(tail, [v | events], searched)
-            _ -> {:error, :invalid_payload, <<>>}
-          end
-        end
+        parse_payload(all, rest, len, base, events, searched)
     end
   end
 
@@ -66,6 +58,18 @@ defmodule MedExHandheld.RDP1 do
     do: parse(tail, acc, searched + 1)
 
   defp parse(_, _, _), do: {:error, :framing_limit, <<>>}
+
+  defp parse_payload(all, rest, len, base, events, searched) do
+    <<payload::binary-size(^len), crc::little-32, tail::binary>> = rest
+
+    with true <- :erlang.crc32(binary_part(all, 0, 32 + len)) == crc,
+         {:ok, event} <- unpack(base.kind, payload, base) do
+      parse(tail, [event | events], searched)
+    else
+      false -> {:error, :bad_crc, <<>>}
+      _ -> {:error, :invalid_payload, <<>>}
+    end
+  end
 
   defp unpack(1, <<t::little-64, pcm::binary>>, b) when b.sample_count > 0 and byte_size(pcm) > 0,
     do: {:ok, Map.merge(b, %{tick: t, payload: pcm})}

@@ -6,8 +6,8 @@ defmodule MedExHandheld.SpoolReceiptTest do
     :ok
   end
 
-  alias MedExHandheld.{Paired, Spool}
   alias MedEx.Wire.FrameV1
+  alias MedExHandheld.{Paired, Spool}
 
   @tag :tmp_dir
   test "initial out-of-range receipt cannot retire even locally present unsaved source data", %{

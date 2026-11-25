@@ -10,7 +10,8 @@ defmodule MedExHandheld.ReferencePeripheral do
       "source" => if(audio, do: "audio", else: "ecg"),
       "encoding" => if(variant, do: "s24le", else: "s16le"),
       "channels" => if(variant, do: 2, else: 1),
-      "sample_rate" => if(variant, do: [30000, 1001], else: [if(audio, do: 48000, else: 250), 1]),
+      "sample_rate" =>
+        if(variant, do: [30_000, 1001], else: [if(audio, do: 48_000, else: 250), 1]),
       "tick_rate" => 48_000_000,
       "calibration" => if(audio, do: "unknown", else: "synthetic_adc_1uV"),
       "replay_capacity_frames" => 16
@@ -41,27 +42,31 @@ defmodule MedExHandheld.ReferencePeripheral do
             }
           ]} <- RDP1.decode(<<>>, bytes),
          true <- source == p.source and is_binary(id) and byte_size(id) in 1..96 and is_map(args) do
-      case p.commands[id] do
-        {^body, resp} ->
-          {p, resp}
-
-        nil when map_size(p.commands) < 4096 ->
-          {p, status, res, extra} =
-            if boot == p.boot or (boot == 0 and op == "capabilities"),
-              do: operation(p, op, args),
-              else: {p, "error", "wrong_boot", []}
-
-          reply = answer(p, id, status, res) ++ extra
-          {%{p | commands: Map.put(p.commands, id, {body, reply})}, reply}
-
-        nil ->
-          {p, answer(p, id, "error", "command_cache_full")}
-
-        _ ->
-          {p, answer(p, id, "error", "request_conflict")}
-      end
+      reply_to_request(p, id, body, boot, op, args)
     else
       _ -> {:error, :invalid_request}
+    end
+  end
+
+  defp reply_to_request(p, id, body, boot, op, args) do
+    case p.commands[id] do
+      {^body, resp} ->
+        {p, resp}
+
+      nil when map_size(p.commands) < 4096 ->
+        {p, status, res, extra} =
+          if boot == p.boot or (boot == 0 and op == "capabilities"),
+            do: operation(p, op, args),
+            else: {p, "error", "wrong_boot", []}
+
+        reply = answer(p, id, status, res) ++ extra
+        {%{p | commands: Map.put(p.commands, id, {body, reply})}, reply}
+
+      nil ->
+        {p, answer(p, id, "error", "command_cache_full")}
+
+      _ ->
+        {p, answer(p, id, "error", "request_conflict")}
     end
   end
 
@@ -112,7 +117,7 @@ defmodule MedExHandheld.ReferencePeripheral do
 
     pcm =
       for index <- p.first..(p.first + count - 1), channel <- 1..p.caps["channels"], into: <<>> do
-        raw = rem(index * 37 + seed * 17 + channel * 13 + p.source * 101, 65536) - 32768
+        raw = rem(index * 37 + seed * 17 + channel * 13 + p.source * 101, 65_536) - 32_768
         <<raw::little-signed-size(bits)>>
       end
 

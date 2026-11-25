@@ -67,20 +67,7 @@ defmodule MedExHandheld.PLXPeripheral do
   end
 
   def validate_sdk(e, c) do
-    metrics =
-      Map.new(e["metrics"], fn {k, v} ->
-        metric =
-          case v do
-            %{"missing" => reason} ->
-              {:missing, reason}
-
-            %{"mantissa" => m, "exponent" => x} ->
-              {:value, String.to_integer(m), String.to_integer(x),
-               if(k == "spo2", do: "%", else: "/min")}
-          end
-
-        {k, metric}
-      end)
+    metrics = Map.new(e["metrics"], fn {name, value} -> {name, sdk_metric(name, value)} end)
 
     MedEx.MeasurementEvent.validate(%MedEx.MeasurementEvent{
       event_id: e["event_id"],
@@ -101,6 +88,17 @@ defmodule MedExHandheld.PLXPeripheral do
       device_status: Map.reject(e["source_status"], fn {_, v} -> is_nil(v) end),
       provenance: [%{name: "simulated", origin: :observed, value: true}]
     })
+  end
+
+  defp sdk_metric(name, value) do
+    case value do
+      %{"missing" => reason} ->
+        {:missing, reason}
+
+      %{"mantissa" => mantissa, "exponent" => exponent} ->
+        unit = if name == "spo2", do: "%", else: "/min"
+        {:value, String.to_integer(mantissa), String.to_integer(exponent), unit}
+    end
   end
 
   defp metric({:finite, m, e}), do: %{"mantissa" => to_string(m), "exponent" => to_string(e)}

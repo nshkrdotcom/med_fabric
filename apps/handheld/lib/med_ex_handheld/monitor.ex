@@ -20,23 +20,7 @@ defmodule MedExHandheld.Monitor do
         {:reply, {:result, r}, s}
 
       nil ->
-        cond do
-          s.pending == c ->
-            {:reply, :pending, s}
-
-          map_size(s.state["cache"]) >= 4096 ->
-            {:reply, {:error, :command_cache_exhausted}, s}
-
-          not is_nil(s.pending) or c["expected_epoch"] != s.state["epoch"] or
-            c["boot"] != s.state["boot"] or c["gain"] not in ["unity", "half"] ->
-            rejected = Map.merge(Map.take(c, ~w(id fingerprint boot)), %{"status" => "rejected"})
-            next = put_in(s.state, ["cache", c["id"]], rejected)
-            Spool.write!(s.file, JSON.encode!(next))
-            {:reply, {:result, rejected}, %{s | state: next}}
-
-          true ->
-            {:reply, :pending, %{s | pending: c}}
-        end
+        accept_command(c, s)
 
       _ ->
         {:reply, {:error, :conflict}, s}
@@ -85,6 +69,26 @@ defmodule MedExHandheld.Monitor do
       end
 
     {:reply, result, s}
+  end
+
+  defp accept_command(c, s) do
+    cond do
+      s.pending == c ->
+        {:reply, :pending, s}
+
+      map_size(s.state["cache"]) >= 4096 ->
+        {:reply, {:error, :command_cache_exhausted}, s}
+
+      not is_nil(s.pending) or c["expected_epoch"] != s.state["epoch"] or
+        c["boot"] != s.state["boot"] or c["gain"] not in ["unity", "half"] ->
+        rejected = Map.merge(Map.take(c, ~w(id fingerprint boot)), %{"status" => "rejected"})
+        next = put_in(s.state, ["cache", c["id"]], rejected)
+        Spool.write!(s.file, JSON.encode!(next))
+        {:reply, {:result, rejected}, %{s | state: next}}
+
+      true ->
+        {:reply, :pending, %{s | pending: c}}
+    end
   end
 
   def transform(bytes, "unity"), do: bytes

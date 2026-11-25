@@ -3,9 +3,9 @@ defmodule MedExHandheld.Paired do
     do: raise("Select the MedEx stream-v1 source checkout in .mix_sources.json")
 
   @moduledoc "Reference peripheral acquisition runs independently of server connectivity."
-  alias MedExHandheld.{ReferencePeripheral, Spool, Transport}
-  alias MedEx.{StreamSpec, Serialization}
+  alias MedEx.{Serialization, StreamSpec}
   alias MedEx.Wire.FrameV1
+  alias MedExHandheld.{ReferencePeripheral, Spool, Transport}
 
   def sources(c) do
     for {n, s} <- [{"audio", 1}, {"ecg", 2}], into: %{} do
@@ -80,14 +80,7 @@ defmodule MedExHandheld.Paired do
     target = div((c["seconds"] || 60) * rn, rd)
     stop = Agent.get(hub, & &1.stop)
 
-    reset =
-      if c["reset"] == true and n == "ecg" and p.seq == 3 do
-        rebooted = ReferencePeripheral.new(p.source, p.boot + 1)
-        {_, discovery, []} = ReferencePeripheral.transact(rebooted, "state")
-        discovery["boot"] != to_string(p.boot) and discovery["sequence"] == "0"
-      else
-        false
-      end
+    reset = source_reset?(c, n, p)
 
     if p.first >= target or stop or reset do
       {_, res, []} = ReferencePeripheral.transact(p, "stop")
@@ -99,120 +92,151 @@ defmodule MedExHandheld.Paired do
         "interruption" => if(reset, do: "source_reset", else: nil)
       })
     else
-      delta = div(p.first * 1_000_000 * rd, rn)
+      capture_frame(c, spool, monitor, hub, n, p, spec, target)
+    end
+  end
 
-      # The fixture oscillator has an explicit origin, fixed rate perturbation and acquisition ticks.
-      planned = c["origin_us"] + div(delta * (1_000_000 + ppm(n)), 1_000_000)
-      delay = planned - System.system_time(:microsecond)
-      if delay > 0, do: Process.sleep(div(delay, 1000))
+  defp source_reset?(c, n, p) do
+    if c["reset"] == true and n == "ecg" and p.seq == 3 do
+      rebooted = ReferencePeripheral.new(p.source, p.boot + 1)
+      {_, discovery, []} = ReferencePeripheral.transact(rebooted, "state")
+      discovery["boot"] != to_string(p.boot) and discovery["sequence"] == "0"
+    else
+      false
+    end
+  end
 
-      step =
-        cond do
-          c["variant"] -> 4
-          n == "audio" -> 960
-          true -> 25
+  defp capture_frame(c, spool, monitor, hub, n, p, spec, target) do
+    {rn, rd} = spec.sample_rate
+    wait_for_sample(c, n, p.first, spec.sample_rate)
+    step = frame_step(c, n)
+    gap = n == "audio" and c["gap"] == true and p.seq == 2
+    count = min(if(gap, do: 100, else: step), target - p.first)
+    tick = 8_640_000 + div(p.first * 48_000_000 * rd, rn)
+    {next, packet} = ReferencePeripheral.emit(p, count, tick, c["seed"])
+    frame = decode_frame(p, packet, count)
+    {:ok, raw} = FrameV1.encode(frame)
+
+    {next, record} =
+      if gap, do: lost_frame(c, p, next, step, target, spec.sample_rate), else: {next, raw}
+
+    case Spool.put(spool, n, p.seq, record) do
+      :ok ->
+        if not gap and {n, spec.encoding} == {"audio", :s16le} do
+          publish_monitor_frame(c, monitor, hub, frame)
         end
 
-      gap = n == "audio" and c["gap"] == true and p.seq == 2
-      count = min(if(gap, do: 100, else: step), target - p.first)
-      tick = 8_640_000 + div(p.first * 48_000_000 * rd, rn)
-      {next, packet} = ReferencePeripheral.emit(p, count, tick, c["seed"])
-      event = ReferencePeripheral.fragmented(packet)
+        save_cursor(c, n, %{"sequence" => next.seq, "sample" => next.first, "done" => false})
+        loop(c, spool, monitor, hub, n, next, spec)
 
-      true =
-        event.boot == p.boot and event.source == p.source and event.sequence == p.seq and
-          event.sample_count == count and event.first_sample == p.first
+      {:error, :spool_full} ->
+        Agent.update(hub, &Map.put(&1, :stop, true))
 
-      frame = %FrameV1{
-        stream_number: p.source,
-        source_epoch: 0,
-        config_epoch: event.config_epoch,
-        sequence: event.sequence,
-        first_sample: event.first_sample,
-        sample_count: count,
-        payload: event.payload
+        save_cursor(c, n, %{
+          "sequence" => p.seq,
+          "sample" => p.first,
+          "done" => true,
+          "interruption" => "spool_full"
+        })
+    end
+  end
+
+  defp wait_for_sample(c, n, first, {rn, rd}) do
+    delta = div(first * 1_000_000 * rd, rn)
+
+    # The fixture oscillator has an explicit origin, fixed rate perturbation and acquisition ticks.
+    planned = c["origin_us"] + div(delta * (1_000_000 + ppm(n)), 1_000_000)
+    delay = planned - System.system_time(:microsecond)
+    if delay > 0, do: Process.sleep(div(delay, 1000))
+  end
+
+  defp frame_step(c, n) do
+    cond do
+      c["variant"] -> 4
+      n == "audio" -> 960
+      true -> 25
+    end
+  end
+
+  defp decode_frame(p, packet, count) do
+    event = ReferencePeripheral.fragmented(packet)
+
+    true =
+      event.boot == p.boot and event.source == p.source and event.sequence == p.seq and
+        event.sample_count == count and event.first_sample == p.first
+
+    %FrameV1{
+      stream_number: p.source,
+      source_epoch: 0,
+      config_epoch: event.config_epoch,
+      sequence: event.sequence,
+      first_sample: event.first_sample,
+      sample_count: count,
+      payload: event.payload
+    }
+  end
+
+  defp lost_frame(c, p, next, step, target, {rn, rd}) do
+    # Evict the missing source packet, request its original bytes, then use
+    # the next CRC-verified hardware counter to establish the right boundary.
+    lost = %{next | history: Map.delete(next.history, p.seq)}
+
+    {lost, %{"state" => "unavailable"}, []} =
+      ReferencePeripheral.transact(lost, "replay", %{"first" => p.seq, "next" => p.seq + 1})
+
+    next_tick = 8_640_000 + div(lost.first * 48_000_000 * rd, rn)
+
+    {_, witness} =
+      ReferencePeripheral.emit(lost, min(step, target - lost.first), next_tick, c["seed"])
+
+    boundary = ReferencePeripheral.fragmented(witness)
+    true = boundary.boot == p.boot and boundary.sequence == lost.seq
+
+    {lost,
+     JSON.encode!(%{
+       "id" => "loss-" <> to_string(p.seq),
+       "irreversible" => true,
+       "cause" => "reference_buffer_exhausted",
+       "first" => to_string(p.first),
+       "end" => to_string(boundary.first_sample),
+       "first_sequence" => to_string(p.seq),
+       "next_sequence" => to_string(boundary.sequence)
+     })}
+  end
+
+  defp publish_monitor_frame(c, monitor, hub, frame) do
+    {epoch, pcm} = GenServer.call(monitor, {:frame, frame.first_sample, frame.payload})
+
+    trace_monitor(c, frame, epoch, pcm)
+
+    {:ok, derived} =
+      FrameV1.encode(%{
+        frame
+        | stream_number: 3,
+          config_epoch: String.to_integer(epoch),
+          payload: pcm
+      })
+
+    Agent.update(
+      hub,
+      &Map.put(&1, :latest, {System.monotonic_time(:millisecond), derived})
+    )
+  end
+
+  defp trace_monitor(c, frame, epoch, pcm) do
+    if c["trace_monitor"] do
+      trace = %{
+        "first" => frame.first_sample,
+        "count" => frame.sample_count,
+        "epoch" => epoch,
+        "sha256" => Serialization.sha256(pcm)
       }
 
-      {:ok, raw} = FrameV1.encode(frame)
-
-      {next, record} =
-        if gap do
-          # Evict the missing source packet, request its original bytes, then use
-          # the next CRC-verified hardware counter to establish the right boundary.
-          lost = %{next | history: Map.delete(next.history, p.seq)}
-
-          {lost, %{"state" => "unavailable"}, []} =
-            ReferencePeripheral.transact(lost, "replay", %{"first" => p.seq, "next" => p.seq + 1})
-
-          next_tick = 8_640_000 + div(lost.first * 48_000_000 * rd, rn)
-
-          {_, witness} =
-            ReferencePeripheral.emit(lost, min(step, target - lost.first), next_tick, c["seed"])
-
-          boundary = ReferencePeripheral.fragmented(witness)
-          true = boundary.boot == p.boot and boundary.sequence == lost.seq
-
-          {lost,
-           JSON.encode!(%{
-             "id" => "loss-" <> to_string(p.seq),
-             "irreversible" => true,
-             "cause" => "reference_buffer_exhausted",
-             "first" => to_string(p.first),
-             "end" => to_string(boundary.first_sample),
-             "first_sequence" => to_string(p.seq),
-             "next_sequence" => to_string(boundary.sequence)
-           })}
-        else
-          {next, raw}
-        end
-
-      case Spool.put(spool, n, p.seq, record) do
-        :ok ->
-          if n == "audio" and spec.encoding == :s16le and not gap do
-            {epoch, pcm} = GenServer.call(monitor, {:frame, p.first, event.payload})
-
-            if c["trace_monitor"] do
-              trace = %{
-                "first" => p.first,
-                "count" => count,
-                "epoch" => epoch,
-                "sha256" => Serialization.sha256(pcm)
-              }
-
-              File.write!(
-                Path.join(c["spool"], "monitor-truth.jsonl"),
-                [JSON.encode!(trace), "\n"],
-                [:append]
-              )
-            end
-
-            {:ok, derived} =
-              FrameV1.encode(%{
-                frame
-                | stream_number: 3,
-                  config_epoch: String.to_integer(epoch),
-                  payload: pcm
-              })
-
-            Agent.update(
-              hub,
-              &Map.put(&1, :latest, {System.monotonic_time(:millisecond), derived})
-            )
-          end
-
-          save_cursor(c, n, %{"sequence" => next.seq, "sample" => next.first, "done" => false})
-          loop(c, spool, monitor, hub, n, next, spec)
-
-        {:error, :spool_full} ->
-          Agent.update(hub, &Map.put(&1, :stop, true))
-
-          save_cursor(c, n, %{
-            "sequence" => p.seq,
-            "sample" => p.first,
-            "done" => true,
-            "interruption" => "spool_full"
-          })
-      end
+      File.write!(
+        Path.join(c["spool"], "monitor-truth.jsonl"),
+        [JSON.encode!(trace), "\n"],
+        [:append]
+      )
     end
   end
 
@@ -265,39 +289,47 @@ defmodule MedExHandheld.Paired do
       :absent ->
         {sequence, sample}
 
-      {:ok, <<"MEX1", _::binary>> = wire} ->
-        number = if n == "audio", do: 1, else: 2
-
-        with {:ok, f} <- FrameV1.decode(wire),
-             true <-
-               f.stream_number == number and f.source_epoch == spec.source_epoch and
-                 f.sequence == sequence and f.first_sample == sample and
-                 f.sample_count <= spec.capabilities.max_frame_samples and
-                 byte_size(f.payload) ==
-                   f.sample_count * length(spec.channels) *
-                     StreamSpec.bytes_per_value(spec.encoding) do
-          recover_local_tail(spool, n, spec, sequence + 1, sample + f.sample_count)
-        else
-          _ -> raise "invalid durable source tail"
-        end
-
       {:ok, wire} ->
-        with {:ok,
-              %{
-                "irreversible" => true,
-                "first" => a,
-                "end" => b,
-                "first_sequence" => q,
-                "next_sequence" => r
-              }} <- JSON.decode(wire),
-             true <- a == to_string(sample) and q == to_string(sequence),
-             {next, ""} <- Integer.parse(r),
-             {right, ""} <- Integer.parse(b),
-             true <- next > sequence and right > sample do
-          recover_local_tail(spool, n, spec, next, right)
-        else
-          _ -> raise "invalid durable source gap"
-        end
+        {next, right} = advance_source_tail(wire, n, spec, sequence, sample)
+        recover_local_tail(spool, n, spec, next, right)
+    end
+  end
+
+  defp advance_source_tail(<<"MEX1", _::binary>> = wire, n, spec, sequence, sample) do
+    number = if n == "audio", do: 1, else: 2
+
+    with {:ok, f} <- FrameV1.decode(wire),
+         true <-
+           {f.stream_number, f.source_epoch, f.sequence, f.first_sample} ==
+             {number, spec.source_epoch, sequence, sample},
+         true <- f.sample_count <= spec.capabilities.max_frame_samples,
+         true <-
+           byte_size(f.payload) ==
+             f.sample_count * length(spec.channels) * StreamSpec.bytes_per_value(spec.encoding) do
+      {sequence + 1, sample + f.sample_count}
+    else
+      _ -> raise "invalid durable source tail"
+    end
+  end
+
+  defp advance_source_tail(wire, _, _, sequence, sample) do
+    first = to_string(sample)
+    first_sequence = to_string(sequence)
+
+    with {:ok,
+          %{
+            "irreversible" => true,
+            "first" => ^first,
+            "end" => ending,
+            "first_sequence" => ^first_sequence,
+            "next_sequence" => next_sequence
+          }} <- JSON.decode(wire),
+         {next, ""} <- Integer.parse(next_sequence),
+         {right, ""} <- Integer.parse(ending),
+         true <- next > sequence and right > sample do
+      {next, right}
+    else
+      _ -> raise "invalid durable source gap"
     end
   end
 

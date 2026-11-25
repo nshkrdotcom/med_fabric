@@ -1,6 +1,8 @@
 defmodule MedExHandheld.Spool do
   @moduledoc "Single device budget. Sync exact bytes before acknowledging local ingestion, persist receipts before reclaiming."
   use GenServer
+  alias MedEx.Wire.FrameV1
+
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
   def init(opts) do
@@ -144,18 +146,7 @@ defmodule MedExHandheld.Spool do
          :ok <- verify_coverage(s, name, last, r) do
       write!(receipt, JSON.encode!(MedEx.Serialization.to_map(r)))
       # Also reap any covered files left by a crash after the receipt was synced.
-      bytes =
-        Enum.reduce(Path.wildcard(Path.join([s.root, name, "*.rec"])), s.bytes, fn path, bytes ->
-          q = path |> Path.basename(".rec") |> String.to_integer()
-
-          if q < r.durable_sequence do
-            size = File.stat!(path).size
-            File.rm!(path)
-            bytes - size
-          else
-            bytes
-          end
-        end)
+      bytes = reap_covered_records(s, name, r.durable_sequence)
 
       sync_dir!(Path.dirname(receipt))
       {:reply, :ok, %{s | bytes: bytes}}
@@ -199,6 +190,23 @@ defmodule MedExHandheld.Spool do
 
   def handle_call(:stats, _, s), do: {:reply, Map.take(s, [:bytes, :maximum, :limit]), s}
 
+  defp reap_covered_records(s, name, sequence) do
+    Enum.reduce(stream_records(s, name), s.bytes, fn {q, path}, bytes ->
+      if q < sequence do
+        size = File.stat!(path).size
+        File.rm!(path)
+        bytes - size
+      else
+        bytes
+      end
+    end)
+  end
+
+  defp stream_records(s, name) do
+    Path.wildcard(Path.join([s.root, name, "*.rec"]))
+    |> Stream.map(fn path -> {path |> Path.basename(".rec") |> String.to_integer(), path} end)
+  end
+
   defp parse_receipt(wire) when is_map(wire) do
     if Map.get(wire, "type", "durable") in ["durable", "stream_finished"] and
          Map.get(wire, "schema", "medex.device.v1") == "medex.device.v1" do
@@ -224,8 +232,6 @@ defmodule MedExHandheld.Spool do
   end
 
   defp verify_progress(last, r) do
-    same_fence = Map.get(last, :fence) == r.fence
-
     cond do
       r.accepted_sequence != r.durable_sequence or r.accepted_sample != r.durable_sample ->
         {:error, :not_durable_receipt}
@@ -238,17 +244,25 @@ defmodule MedExHandheld.Spool do
             {r.stream_id, r.source_epoch, r.descriptor_ref} ->
         {:error, :receipt_identity}
 
-      same_fence and
-          (r.journal_id != last.journal_id or r.journal_generation < last.journal_generation) ->
+      Map.get(last, :fence) == r.fence ->
+        verify_journal_progress(last, r)
+
+      true ->
+        :ok
+    end
+  end
+
+  defp verify_journal_progress(last, r) do
+    cond do
+      r.journal_id != last.journal_id or r.journal_generation < last.journal_generation ->
         {:error, :receipt_rollback}
 
-      same_fence and r.journal_generation == last.journal_generation and
+      r.journal_generation == last.journal_generation and
           {r.journal_digest, r.durable_sequence, r.durable_sample} !=
             {last.journal_digest, last.durable_sequence, last.durable_sample} ->
         {:error, :receipt_conflict}
 
-      same_fence and r.journal_generation > last.journal_generation and
-          r.journal_digest == last.journal_digest ->
+      r.journal_generation > last.journal_generation and r.journal_digest == last.journal_digest ->
         {:error, :receipt_conflict}
 
       true ->
@@ -265,56 +279,60 @@ defmodule MedExHandheld.Spool do
 
     with true <- is_integer(source["sequence"]) and is_integer(source["sample"]),
          true <- next <= source["sequence"] and r.durable_sample <= source["sample"] do
-      paths =
-        Path.wildcard(Path.join([s.root, name, "*.rec"]))
-        |> Enum.map(fn p -> {p |> Path.basename(".rec") |> String.to_integer(), p} end)
+      stream_number = if name == "audio", do: 1, else: 2
+      expected_end = {next, r.durable_sample}
 
-      {seq, sample} =
-        paths
-        |> Enum.filter(fn {q, _} -> q >= first and q < next end)
-        |> Enum.sort()
-        |> Enum.reduce({first, last.durable_sample}, fn {q, path}, {expected, left} ->
-          if q != expected, do: throw(:hole)
+      covered_end =
+        covered_range(s, name, {first, last.durable_sample}, next, stream_number, r.source_epoch)
 
-          case read_record!(path) do
-            <<"MEX1", _::binary>> = b ->
-              {:ok, f} = MedEx.Wire.FrameV1.decode(b)
-              number = if name == "audio", do: 1, else: 2
-
-              if f.sequence != q or f.first_sample != left or f.source_epoch != r.source_epoch or
-                   f.stream_number != number do
-                throw(:hole)
-              end
-
-              {q + 1, left + f.sample_count}
-
-            wire ->
-              with %{
-                     "irreversible" => true,
-                     "first" => a,
-                     "end" => ending,
-                     "first_sequence" => first,
-                     "next_sequence" => next
-                   } <- JSON.decode!(wire),
-                   true <-
-                     a == to_string(left) and first == to_string(q) and is_binary(next) and
-                       is_binary(ending),
-                   {right_seq, ""} <- Integer.parse(next),
-                   {right_sample, ""} <- Integer.parse(ending),
-                   true <- right_seq > q and right_sample > left do
-                {right_seq, right_sample}
-              else
-                _ -> throw(:hole)
-              end
-          end
-        end)
-
-      if seq == next and sample == r.durable_sample, do: :ok, else: {:error, :uncovered_receipt}
+      if covered_end == expected_end, do: :ok, else: {:error, :uncovered_receipt}
     else
       _ -> {:error, :uncovered_receipt}
     end
   catch
     :hole -> {:error, :uncovered_receipt}
+  end
+
+  defp covered_range(s, name, {first, sample}, next, stream_number, epoch) do
+    stream_records(s, name)
+    |> Enum.filter(fn {q, _} -> q >= first and q < next end)
+    |> Enum.sort()
+    |> Enum.reduce({first, sample}, fn {q, path}, {expected, left} ->
+      if q != expected, do: throw(:hole)
+      advance_coverage(read_record!(path), q, left, stream_number, epoch)
+    end)
+  end
+
+  defp advance_coverage(<<"MEX1", _::binary>> = wire, q, left, stream_number, epoch) do
+    {:ok, frame} = FrameV1.decode(wire)
+
+    if frame.sequence != q or frame.first_sample != left or frame.source_epoch != epoch or
+         frame.stream_number != stream_number do
+      throw(:hole)
+    end
+
+    {q + 1, left + frame.sample_count}
+  end
+
+  defp advance_coverage(wire, q, left, _, _) do
+    first = to_string(left)
+    first_sequence = to_string(q)
+
+    with %{
+           "irreversible" => true,
+           "first" => ^first,
+           "end" => ending,
+           "first_sequence" => ^first_sequence,
+           "next_sequence" => next
+         }
+         when is_binary(next) and is_binary(ending) <- JSON.decode!(wire),
+         {right_seq, ""} <- Integer.parse(next),
+         {right_sample, ""} <- Integer.parse(ending),
+         true <- right_seq > q and right_sample > left do
+      {right_seq, right_sample}
+    else
+      _ -> throw(:hole)
+    end
   end
 
   def terminate(_, s) do

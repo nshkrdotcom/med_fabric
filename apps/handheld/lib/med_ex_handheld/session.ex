@@ -1,4 +1,5 @@
 defmodule MedExHandheld.Application do
+  @moduledoc "Starts the supervisor for Handheld CLI tasks."
   use Application
 
   def start(_, _),
@@ -10,8 +11,8 @@ end
 
 defmodule MedExHandheld.Session do
   @moduledoc "Standalone producer. Source capture persists through upload disconnects and reauthentication."
-  alias MedExHandheld.{Paired, PLXPeripheral, PLXAdapter, Spool, Transport, Monitor}
   alias MedEx.Serialization, as: J
+  alias MedExHandheld.{Monitor, Paired, PLXAdapter, PLXPeripheral, Spool, Transport}
 
   def run(config, profile) when profile in ["paired_exam", "plx_spot_check"] do
     for key <- ~w(acquisition device encounter) do
@@ -50,26 +51,7 @@ defmodule MedExHandheld.Session do
         {Spool, [root: root, limit: config["spool_limit"] || 67_108_864]}
       )
 
-    marker = Path.join(root, "identity.json")
-
-    identity =
-      Spool.read_json(marker, %{
-        "encounter" => config["encounter"],
-        "boot" => Base.url_encode64(:crypto.strong_rand_bytes(18)),
-        "origin_us" => System.system_time(:microsecond),
-        "device" => config["device"],
-        "profile" => profile,
-        "acquisition" => config["acquisition"]
-      })
-
-    if identity["profile"] != profile or identity["device"] != config["device"] or
-         identity["encounter"] != config["encounter"] or
-         identity["acquisition"] != config["acquisition"] do
-      raise "spool identity mismatch"
-    end
-
-    Spool.write!(marker, JSON.encode!(identity))
-    c = config |> Map.merge(identity) |> Map.put("spool", root)
+    c = load_identity(config, profile, root)
     {:ok, monitor} = Supervisor.start_child(resources, {Monitor, {root, c["boot"]}})
     {:ok, hub} = Supervisor.start_child(resources, {Agent, fn -> %{latest: nil, stop: false} end})
     # Stop producers before closing their monitor and durable spool.
@@ -78,43 +60,10 @@ defmodule MedExHandheld.Session do
     marker = Path.join(root, "source_started.json")
     resuming = File.exists?(marker)
 
-    unless resuming do
-      # A new collection must first receive an authenticated grant and accept
-      # its immutable descriptors. A recovered source may upload retained data.
-      initial_admission!(c, sources)
-    end
+    c = prepare_source(c, sources, marker, resuming)
 
-    c = if resuming, do: c, else: Map.put(c, "origin_us", System.system_time(:microsecond))
-
-    unless resuming do
-      Spool.write!(
-        Path.join(root, "identity.json"),
-        JSON.encode!(Map.take(c, ~w(encounter boot origin_us device profile acquisition)))
-      )
-
-      Spool.write!(
-        marker,
-        JSON.encode!(%{"boot" => c["boot"], "acquisition" => c["acquisition"]})
-      )
-    end
-
-    if resuming and profile == "paired_exam" do
-      for {n, {_, spec}} <- sources, do: Paired.interrupt_after_restart(c, spool, n, spec)
-    end
-
-    tasks =
-      for {name, source} <- sources do
-        Task.Supervisor.async(producers, fn ->
-          Paired.produce(c, spool, monitor, hub, name, source)
-        end)
-      end
-
-    if profile == "plx_spot_check" do
-      collect(c, spool)
-
-      if c["hold_after_ingestion"] == true and not resuming,
-        do: wait_for_release(root, System.monotonic_time(:second) + 45)
-    end
+    tasks = start_producers(c, spool, monitor, hub, producers, sources, resuming)
+    if profile == "plx_spot_check", do: collect_spot_check(c, spool, resuming)
 
     digest =
       connect(
@@ -141,6 +90,68 @@ defmodule MedExHandheld.Session do
 
     Spool.write!(Path.join(root, "result.json"), JSON.encode!(report))
     report
+  end
+
+  defp load_identity(config, profile, root) do
+    marker = Path.join(root, "identity.json")
+
+    identity =
+      Spool.read_json(marker, %{
+        "encounter" => config["encounter"],
+        "boot" => Base.url_encode64(:crypto.strong_rand_bytes(18)),
+        "origin_us" => System.system_time(:microsecond),
+        "device" => config["device"],
+        "profile" => profile,
+        "acquisition" => config["acquisition"]
+      })
+
+    if identity["profile"] != profile or identity["device"] != config["device"] or
+         identity["encounter"] != config["encounter"] or
+         identity["acquisition"] != config["acquisition"] do
+      raise "spool identity mismatch"
+    end
+
+    Spool.write!(marker, JSON.encode!(identity))
+    config |> Map.merge(identity) |> Map.put("spool", root)
+  end
+
+  defp prepare_source(c, _sources, _marker, true), do: c
+
+  defp prepare_source(c, sources, marker, false) do
+    # A new collection must receive an authenticated grant and accept its descriptors.
+    initial_admission!(c, sources)
+    c = Map.put(c, "origin_us", System.system_time(:microsecond))
+
+    Spool.write!(
+      Path.join(c["spool"], "identity.json"),
+      JSON.encode!(Map.take(c, ~w(encounter boot origin_us device profile acquisition)))
+    )
+
+    Spool.write!(
+      marker,
+      JSON.encode!(%{"boot" => c["boot"], "acquisition" => c["acquisition"]})
+    )
+
+    c
+  end
+
+  defp start_producers(c, spool, monitor, hub, producers, sources, resuming) do
+    if resuming do
+      for {n, {_, spec}} <- sources, do: Paired.interrupt_after_restart(c, spool, n, spec)
+    end
+
+    for {name, source} <- sources do
+      Task.Supervisor.async(producers, fn ->
+        Paired.produce(c, spool, monitor, hub, name, source)
+      end)
+    end
+  end
+
+  defp collect_spot_check(c, spool, resuming) do
+    collect(c, spool)
+
+    if c["hold_after_ingestion"] == true and not resuming,
+      do: wait_for_release(c["spool"], System.monotonic_time(:second) + 45)
   end
 
   defp wait_for_release(root, deadline) do
@@ -269,45 +280,52 @@ defmodule MedExHandheld.Session do
       if reply["stop_requested"], do: Agent.update(hub, &Map.put(&1, :stop, true))
 
       case reply["type"] do
-        "command" ->
-          case GenServer.call(monitor, {:command, reply}) do
-            {:result, r} -> Transport.request(s, "result", r)
-            _ -> :ok
-          end
-
-          if !c["lose_command_ack"] do
-            Process.sleep(25)
-            state = GenServer.call(monitor, {:state, reply})
-            if state["status"] == "applied", do: Transport.request(s, "result", state)
-          end
-
-        "state_query" ->
-          state = GenServer.call(monitor, {:state, reply})
-          if state["status"] != "pending", do: Transport.request(s, "result", state)
-
-        "heartbeat" ->
-          :ok
+        "command" -> apply_monitor_command(reply, c, s, monitor)
+        "state_query" -> reconcile_monitor_state(reply, s, monitor)
+        "heartbeat" -> :ok
       end
 
       if rem(iteration, 5) == 0 do
-        for n <- ["audio", "ecg"] do
-          {:ok, %{"type" => "probe", "id" => id}} =
-            Transport.request(s, "probe", %{"stream" => n})
-
-          d2 = Paired.device_us(c, n)
-
-          {:ok, %{"type" => "recorded"}} =
-            Transport.request(s, "probe_reply", %{
-              "id" => id,
-              "d2" => to_string(d2),
-              "d3" => to_string(Paired.device_us(c, n))
-            })
-        end
+        record_clock_probes(c, s)
       end
 
       Process.sleep(100)
       control(c, s, monitor, hub, active, iteration + 1)
     end
+  end
+
+  defp record_clock_probes(c, s) do
+    for n <- ["audio", "ecg"] do
+      {:ok, %{"type" => "probe", "id" => id}} =
+        Transport.request(s, "probe", %{"stream" => n})
+
+      d2 = Paired.device_us(c, n)
+
+      {:ok, %{"type" => "recorded"}} =
+        Transport.request(s, "probe_reply", %{
+          "id" => id,
+          "d2" => to_string(d2),
+          "d3" => to_string(Paired.device_us(c, n))
+        })
+    end
+  end
+
+  defp apply_monitor_command(reply, c, s, monitor) do
+    case GenServer.call(monitor, {:command, reply}) do
+      {:result, result} -> Transport.request(s, "result", result)
+      _ -> :ok
+    end
+
+    if !c["lose_command_ack"] do
+      Process.sleep(25)
+      state = GenServer.call(monitor, {:state, reply})
+      if state["status"] == "applied", do: Transport.request(s, "result", state)
+    end
+  end
+
+  defp reconcile_monitor_state(reply, s, monitor) do
+    state = GenServer.call(monitor, {:state, reply})
+    if state["status"] != "pending", do: Transport.request(s, "result", state)
   end
 
   defp monitor_feed(c, bind, hub) do
@@ -352,31 +370,33 @@ defmodule MedExHandheld.Session do
 
       {entries, _} =
         Enum.map_reduce(Enum.with_index(records), nil, fn {raw, i}, prior ->
-          event =
-            case Spool.get(spool, "events", i) do
-              {:ok, b} ->
-                JSON.decode!(b)
-
-              :absent ->
-                ev =
-                  PLXPeripheral.event(
-                    raw,
-                    Base.url_encode64(:crypto.strong_rand_bytes(18)),
-                    i,
-                    prior,
-                    :fixed_fixture_utc
-                  )
-
-                :ok = PLXPeripheral.validate_sdk(ev, c)
-                :ok = Spool.put(spool, "events", i, JSON.encode!(ev))
-                ev
-            end
-
+          event = collect_event(c, spool, raw, i, prior)
           {[event["event_id"], J.digest(event)], event["event_id"]}
         end)
 
       {_, <<6, 0, 1, 1>>} = PLXPeripheral.complete(p)
       Spool.write!(file, JSON.encode!(entries))
+    end
+  end
+
+  defp collect_event(c, spool, raw, sequence, prior) do
+    case Spool.get(spool, "events", sequence) do
+      {:ok, bytes} ->
+        JSON.decode!(bytes)
+
+      :absent ->
+        event =
+          PLXPeripheral.event(
+            raw,
+            Base.url_encode64(:crypto.strong_rand_bytes(18)),
+            sequence,
+            prior,
+            :fixed_fixture_utc
+          )
+
+        :ok = PLXPeripheral.validate_sdk(event, c)
+        :ok = Spool.put(spool, "events", sequence, JSON.encode!(event))
+        event
     end
   end
 
@@ -432,6 +452,7 @@ defmodule MedExHandheld.Session do
 end
 
 defmodule MedExHandheld.CLI do
+  @moduledoc "Command-line entry point for Handheld acquisition sessions."
   def main(args) do
     {opt, _, []} =
       OptionParser.parse(Enum.reject(args, &(&1 == "--")),

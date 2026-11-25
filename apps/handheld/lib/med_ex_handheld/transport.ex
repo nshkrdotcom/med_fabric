@@ -1,5 +1,7 @@
 defmodule MedExHandheld.Transport do
   @moduledoc "Peer-verified TLS, one Gun connection per control or stream owner."
+  alias MedEx.Wire.Control
+
   def connect(config, route) do
     %URI{scheme: "wss", host: host, port: port, path: path} = URI.new!(config["server"])
 
@@ -68,7 +70,7 @@ defmodule MedExHandheld.Transport do
         types =
           ~w(admitted durable accepted stream_finished replay monitor_credit heartbeat command state_query result_saved quarantined probe recorded sealed inventory_pending)
 
-        MedEx.Wire.Control.decode(bytes, types)
+        Control.decode(bytes, types)
 
       other ->
         {:error, {:transport, other}}
