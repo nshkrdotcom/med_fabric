@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/handheld.svg" alt="Med Fabric Handheld logo" width="200" />
+  <img src="https://raw.githubusercontent.com/nshkrdotcom/med_fabric/main/apps/handheld/assets/handheld.svg" alt="Med Fabric Handheld logo" width="200" />
 </p>
 
 <h1 align="center">Med Fabric Handheld</h1>
@@ -56,13 +56,13 @@ bin/mf_handheld eval \
 
 ## Guides
 
-- [Getting Started](guides/getting_started.md) — Fixture configuration, TLS
+- [Getting Started](https://mf-handheld.hexdocs.pm/0.1.0/getting_started.html) — Fixture configuration, TLS
   credentials, and CLI scenarios.
-- [Spool & Recovery](guides/spool_and_recovery.md) — Disk spool layout, journal
+- [Spool & Recovery](https://mf-handheld.hexdocs.pm/0.1.0/spool_and_recovery.html) — Disk spool layout, journal
   sync guarantees, and reconnect replay.
-- [Deployment](guides/deployment.md) — Building and shipping a standalone Mix
+- [Deployment](https://mf-handheld.hexdocs.pm/0.1.0/deployment.html) — Building and shipping a standalone Mix
   release without a server checkout.
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Released under the [MIT License](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/handheld/LICENSE).

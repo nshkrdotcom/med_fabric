@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/preview.svg" alt="Med Fabric Preview logo" width="200" />
+  <img src="https://raw.githubusercontent.com/nshkrdotcom/med_fabric/main/apps/preview/assets/preview.svg" alt="Med Fabric Preview logo" width="200" />
 </p>
 
 <h1 align="center">Med Fabric Preview</h1>
@@ -58,11 +58,11 @@ mix run --no-halt
 
 ## Guides
 
-- [Getting Started](guides/getting_started.md) — Environment variables,
+- [Getting Started](https://mf-preview.hexdocs.pm/0.1.0/getting_started.html) — Environment variables,
   credentials, and Mix release startup.
-- [Isolation Model](guides/isolation_model.md) — Process, credential, and
+- [Isolation Model](https://mf-preview.hexdocs.pm/0.1.0/isolation_model.html) — Process, credential, and
   failure isolation from `mf_exam`.
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Released under the [MIT License](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/preview/LICENSE).

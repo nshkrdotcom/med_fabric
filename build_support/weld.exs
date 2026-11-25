@@ -1,11 +1,17 @@
 root = Path.expand("..", __DIR__)
 version = root |> Path.join("apps/exam/VERSION") |> File.read!() |> String.trim()
 source_url = "https://github.com/nshkrdotcom/med_fabric"
-exam_docs = ~w(
-  apps/exam/LICENSE apps/exam/CHANGELOG.md
-  apps/exam/guides/getting_started.md apps/exam/guides/browser_to_record.md
-  apps/exam/guides/handheld_integration.md apps/exam/guides/architecture.md
-)
+
+guides = [
+  {"apps/exam/guides/getting_started.md", "Getting Started"},
+  {"apps/exam/guides/browser_to_record.md", "Browser to Record"},
+  {"apps/exam/guides/handheld_integration.md", "Handheld Integration"},
+  {"apps/exam/guides/architecture.md", "Architecture"}
+]
+
+guide_paths = Enum.map(guides, &elem(&1, 0))
+release_docs = ["apps/exam/CHANGELOG.md", "apps/exam/LICENSE"]
+exam_docs = guide_paths ++ release_docs
 
 [
   workspace: [root: "..", project_globs: ["apps/exam", "core/*"]],
@@ -29,7 +35,21 @@ exam_docs = ~w(
           logo: "apps/exam/assets/exam.svg",
           assets: %{"apps/exam/assets" => "assets"},
           source_url: source_url,
-          source_ref: "mf_exam-v#{version}-readme",
+          source_ref: "mf_exam-v#{version}-docs",
+          extra_titles:
+            Map.new(
+              guides ++
+                [
+                  {"README.md", "Overview"},
+                  {"apps/exam/CHANGELOG.md", "Changelog"},
+                  {"apps/exam/LICENSE", "License"}
+                ]
+            ),
+          groups_for_extras: [
+            Overview: ["README.md"],
+            Guides: guide_paths,
+            Release: release_docs
+          ],
           mermaid: true
         ]
       ],
