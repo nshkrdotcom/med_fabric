@@ -48,13 +48,13 @@ and outbox storage, and the base `med_ex ~> 0.2.0` SDK.
 
 ## Guides
 
-- [Getting Started](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/guides/getting_started.md) — Prerequisites, configuration,
+- [Getting Started](https://mf-exam.hexdocs.pm/0.1.0/getting_started.html) — Prerequisites, configuration,
   and Mix release startup.
-- [Browser to Record](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/guides/browser_to_record.md) — Two-way talkback, lossless
+- [Browser to Record](https://mf-exam.hexdocs.pm/0.1.0/browser_to_record.html) — Two-way talkback, lossless
   WAV capture, review, and FHIR R4 export.
-- [Handheld Integration](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/guides/handheld_integration.md) — Device admission,
+- [Handheld Integration](https://mf-exam.hexdocs.pm/0.1.0/handheld_integration.html) — Device admission,
   TLS replay, and spot-check review.
-- [Architecture](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/guides/architecture.md) — Domain, store, interop, and web
+- [Architecture](https://mf-exam.hexdocs.pm/0.1.0/architecture.html) — Domain, store, interop, and web
   boundaries.
 
 ## Optional Legacy Media Profile

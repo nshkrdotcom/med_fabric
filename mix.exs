@@ -70,19 +70,30 @@ defmodule MfExam.MixProject do
   defp docs do
     Keyword.put(
       [
+        groups_for_extras: [
+          {"Overview", ["README.md"]},
+          {"Guides",
+           [
+             "apps/exam/guides/getting_started.md",
+             "apps/exam/guides/browser_to_record.md",
+             "apps/exam/guides/handheld_integration.md",
+             "apps/exam/guides/architecture.md"
+           ]},
+          {"Release", ["apps/exam/CHANGELOG.md", "apps/exam/LICENSE"]}
+        ],
         assets: %{"apps/exam/assets" => "assets"},
-        source_ref: "mf_exam-v0.1.0-readme",
+        source_ref: "mf_exam-v0.1.0-docs",
         source_url: "https://github.com/nshkrdotcom/med_fabric",
         logo: "apps/exam/assets/exam.svg",
         main: "readme",
         extras: [
-          "README.md",
-          "apps/exam/CHANGELOG.md",
-          "apps/exam/LICENSE",
-          "apps/exam/guides/architecture.md",
-          "apps/exam/guides/browser_to_record.md",
-          "apps/exam/guides/getting_started.md",
-          "apps/exam/guides/handheld_integration.md"
+          {"README.md", [title: "Overview"]},
+          {"apps/exam/CHANGELOG.md", [title: "Changelog"]},
+          {"apps/exam/LICENSE", [title: "License"]},
+          {"apps/exam/guides/architecture.md", [title: "Architecture"]},
+          {"apps/exam/guides/browser_to_record.md", [title: "Browser to Record"]},
+          {"apps/exam/guides/getting_started.md", [title: "Getting Started"]},
+          {"apps/exam/guides/handheld_integration.md", [title: "Handheld Integration"]}
         ]
       ],
       :before_closing_body_tag,

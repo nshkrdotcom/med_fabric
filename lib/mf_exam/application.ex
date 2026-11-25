@@ -25,12 +25,12 @@ defmodule MfExam.Application do
   @bootstrapped_sources [
     %{
       config_path: "config/runtime_sources/apps_exam/config.exs",
-      runtime_path: "config/runtime_sources/apps_exam/runtime.exs",
       env_path_fallbacks: %{
         dev: nil,
         prod: nil,
         test: "config/runtime_sources/apps_exam/test.exs"
-      }
+      },
+      runtime_path: "config/runtime_sources/apps_exam/runtime.exs"
     }
   ]
 
