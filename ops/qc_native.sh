@@ -54,7 +54,7 @@ ops/qc_services.sh run "${options[@]}" -- bash -euc '
   (cd apps/exam && mix test integration/{device_review,device_root_lock}_test.exs)
   timeout --signal=TERM --kill-after=30s 1600s elixir ops/handheld_acceptance.exs \
     --suite all --preview isolated --fhir hapi --report "$evidence/native.json"
-  jq -e ".runner == \"elixir-native\" and .passed and .skipped_required == []" "$evidence/native.json"
+  jq -e -f ops/verify_native_report.jq "$evidence/native.json"
   # This verifier includes Store, Interop, and Exam recording/encounter integration.
   export MF_HTTP_PORT=$(elixir -e '\''{:ok,s}=:gen_tcp.listen(0,ip: {127,0,0,1}); {:ok,{_,p}}=:inet.sockname(s); IO.write(p); :gen_tcp.close(s)'\'')
   timeout --signal=TERM --kill-after=30s 460s ops/verify_browser.sh --release
