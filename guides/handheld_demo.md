@@ -156,7 +156,9 @@ Use the soak after changes that may affect sustained capture or finalization,
 and when qualifying a target storage setup. It runs a single paired acquisition
 for 1,740 seconds by default, with native PostgreSQL and no Preview, HAPI, or
 browser setup. It requires a sealed, defect-free manifest, independent
-sample-byte verification and a committed review. Use `--seconds 3` for a
+sample-byte verification and a saved acceptance decision through Exam's
+review endpoint. The fixture performs the decision automatically on synthetic
+data. Use `--seconds 3` for a
 quick wiring check of the same path. A successful soak qualifies that single
 workload on the recorded filesystem. The two-encounter gate covers concurrency.
 
