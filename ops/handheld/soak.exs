@@ -74,7 +74,7 @@ defmodule MedFabric.Acceptance.Soak do
       durable_per_s: rate(durable, previous && previous.durable_samples, interval),
       done: source["done"] == true,
       interruption: source["interruption"],
-      generation: receipt["generation"]
+      journal_generation: receipt["journal_generation"]
     }
   end
 
@@ -152,43 +152,36 @@ defmodule MedFabric.Acceptance.Soak do
     }
   end
 
-  def timings(children) do
-    for child <- children, into: %{} do
-      rows =
-        File.stream!(child.log)
-        |> Stream.flat_map(fn line ->
-          case String.split(line) do
-            ["soak_timing", at, stream, sequence, stage, duration] ->
-              [
-                {stream, stage, String.to_integer(at), String.to_integer(sequence),
-                 String.to_integer(duration)}
-              ]
+  def timings(path) do
+    if File.regular?(path) do
+      path
+      |> File.stream!()
+      |> Stream.flat_map(fn line ->
+        case JSON.decode(line) do
+          {:ok, %{"stream" => stream, "stage" => stage, "duration_us" => duration}} ->
+            [{stream, stage, duration}]
 
-            _ ->
-              []
-          end
-        end)
-        |> Enum.group_by(fn {stream, stage, _, _, _} -> {stream, stage} end)
+          _ ->
+            []
+        end
+      end)
+      |> Enum.group_by(fn {stream, stage, _} -> {stream, stage} end, &elem(&1, 2))
+      |> Enum.map(fn {{stream, stage}, values} ->
+        sorted = Enum.sort(values)
 
-      summary =
-        Enum.map(rows, fn {{stream, stage}, values} ->
-          tail = Enum.take(values, -10)
-          sorted = values |> Enum.map(&elem(&1, 4)) |> Enum.sort()
-
-          %{
-            stream: stream,
-            stage: stage,
-            count: length(sorted),
-            p50_us: percentile(sorted, 50),
-            p95_us: percentile(sorted, 95),
-            max_us: List.last(sorted),
-            last_10_p50_us: tail |> Enum.map(&elem(&1, 4)) |> Enum.sort() |> percentile(50),
-            last_sequence: tail |> List.last() |> elem(3)
-          }
-        end)
-        |> Enum.sort_by(&{&1.stream, &1.stage})
-
-      {child.name, summary}
+        %{
+          stream: stream,
+          stage: stage,
+          count: length(sorted),
+          p50_us: percentile(sorted, 50),
+          p95_us: percentile(sorted, 95),
+          max_us: List.last(sorted),
+          last_10_p50_us: values |> Enum.take(-10) |> Enum.sort() |> percentile(50)
+        }
+      end)
+      |> Enum.sort_by(&{&1.stream, &1.stage})
+    else
+      []
     end
   end
 

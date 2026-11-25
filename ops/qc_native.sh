@@ -91,6 +91,10 @@ if [[ -n "$candidate" ]]; then
   export MF_MED_EX_PATH="$candidate"
   if [[ -f "$candidate/weld.provenance.json" ]]; then
     cp "$candidate/weld.provenance.json" "$evidence/med-ex-provenance.json"
+    release=$(dirname -- "$candidate")/release.json
+    if [[ -f "$release" ]]; then
+      jq '{identity, source_revision, content_sha256, weld_version}' "$release" > "$evidence/med-ex-release.json"
+    fi
   fi
 fi
 

@@ -30,6 +30,15 @@ defmodule MedFabric.Acceptance.OracleTest do
     path = Path.join(root, "7.rec")
     File.write!(path, :crypto.hash(:sha256, frame) <> frame)
     assert Oracle.restart_cutoff!(root) == 120
+
+    File.write!(
+      Path.join(root, "receipt.json"),
+      JSON.encode!(%{"durable_sequence" => "8", "durable_sample" => "120"})
+    )
+
+    File.rm!(path)
+    assert Oracle.restart_cutoff!(root) == 120
+    File.rm!(Path.join(root, "receipt.json"))
     File.write!(path, <<0::256>> <> frame)
 
     assert_raise RuntimeError, ~r/Corrupt independent spool/, fn ->

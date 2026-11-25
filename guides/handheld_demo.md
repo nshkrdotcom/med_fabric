@@ -187,13 +187,13 @@ seal, and review by itself. The existing capture and seal deadlines
 still apply. A performance stop preserves the spool, logs, and
 measurements, and returns a nonzero exit status.
 
-Compare runs using the same storage volume, staged SDK, and duration. If
-capture lag grows, compare the producer and spool-put timings. If backlog
-grows, compare send-to-accepted, accepted-to-durable, and local spool ACK
-timings. Exam's checkpoint transaction includes the writer checkpoint.
-Compare those two timings with PostgreSQL waits to narrow down where to
-look. If bytes keep up in the short run, use the 29-minute run to look for
-growth over time in lag, resident memory, file descriptors, and I/O.
+Compare runs using the same storage volume, staged SDK, and duration.
+Capture lag tracks the Handheld's locally persisted source snapshots,
+updated about once a second. Backlog tracks those snapshots against
+durable receipts. Exam records total checkpoint and writer checkpoint
+latency. Compare the two with PostgreSQL waits to narrow down where to
+look. Use a passing short run before the 29-minute run. The long run can
+show growth over time in lag, resident memory, file descriptors, and I/O.
 When isolating storage cost, repeat the short run with `--volume` on a
 different filesystem and compare the same timing stages. A memory-backed
 volume is useful for this comparison. Qualify durability on the intended
@@ -221,12 +221,11 @@ process-tree snapshots, available filesystem space, Linux CPU, memory
 and I/O pressure, and PostgreSQL activity and counters. RSS values are
 per process in KiB and can include shared pages. PostgreSQL waits are
 snapshots. Missing readings are represented by nulls or absent processes.
-Use process PID and start ticks together when comparing readings. The
-raw timing lines in the private Exam and Handheld logs carry the stream,
-sequence and wall-clock timestamp. Timings sample completed operations
-roughly once per second of signal. Low sample counts limit percentile
-interpretation. Resource measurements help diagnose regressions. The
-pass thresholds apply to capture and durable lag.
+Use process PID and start ticks together when comparing readings. Exam's
+lab telemetry records checkpoint events in `artifact/checkpoint-timings.jsonl`
+inside the private lab. The summary groups completed checkpoints by stream
+and stage. Resource measurements help diagnose regressions. The pass
+thresholds apply to capture and durable lag.
 `filesystem.txt` identifies the lab filesystem. The retained private lab
 contains synthetic credentials along with PostgreSQL data, files, and
 service logs. Services stop at the end of the run. An explicit volume on

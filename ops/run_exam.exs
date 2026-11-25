@@ -1,3 +1,18 @@
+defmodule MedFabric.ExamLabTimings do
+  @moduledoc false
+
+  def append(event, measurements, metadata, path) do
+    sample = %{
+      at_ms: System.system_time(:millisecond),
+      stream: metadata.stream,
+      stage: List.last(event),
+      duration_us: measurements.duration_us
+    }
+
+    File.write!(path, [JSON.encode_to_iodata!(sample), "\n"], [:append])
+  end
+end
+
 # mix run --no-start --no-halt ../../ops/run_exam.exs --config /absolute/server.json
 {opts, _, []} =
   OptionParser.parse(Enum.reject(System.argv(), &(&1 == "--")), strict: [config: :string])
@@ -38,6 +53,22 @@ Application.put_env(
     secret_key_base: c["cookie_secret"]
   )
 )
+
+if path = c["checkpoint_timings"] do
+  {:ok, _} = Application.ensure_all_started(:telemetry)
+  File.write!(path, "", [:exclusive])
+
+  :ok =
+    :telemetry.attach_many(
+      {__MODULE__, path},
+      [
+        [:mf_exam, :device_ingress, :checkpoint],
+        [:mf_exam, :device_ingress, :writer_checkpoint]
+      ],
+      &MedFabric.ExamLabTimings.append/4,
+      path
+    )
+end
 
 {:ok, _} = Application.ensure_all_started(:mf_exam)
 alias MedFabric.Store.DeviceSessions

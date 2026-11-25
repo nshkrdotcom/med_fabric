@@ -262,9 +262,32 @@ defmodule MedFabric.Acceptance.Oracle do
   end
 
   def restart_cutoff!(root) do
-    cursor = read(Path.join(root, "source.json"))
+    cursor_path = Path.join(root, "source.json")
+
+    cursor =
+      if File.exists?(cursor_path), do: read(cursor_path), else: %{"sequence" => 0, "sample" => 0}
+
     check!(not cursor["done"], "Restart fixture already completed")
-    cutoff!(root, integer(cursor["sequence"]), integer(cursor["sample"]))
+    sequence = integer(cursor["sequence"])
+    sample = integer(cursor["sample"])
+    receipt_path = Path.join(root, "receipt.json")
+
+    if File.exists?(receipt_path) do
+      receipt = read(receipt_path)
+      durable_sequence = integer(receipt["durable_sequence"])
+      durable_sample = integer(receipt["durable_sample"])
+
+      check!(
+        (durable_sequence < sequence and durable_sample < sample) or
+          (durable_sequence > sequence and durable_sample > sample) or
+          {durable_sequence, durable_sample} == {sequence, sample},
+        "Restart receipt and source cursor disagree"
+      )
+
+      cutoff!(root, max(sequence, durable_sequence), max(sample, durable_sample))
+    else
+      cutoff!(root, sequence, sample)
+    end
   end
 
   defp cutoff!(root, sequence, sample) do

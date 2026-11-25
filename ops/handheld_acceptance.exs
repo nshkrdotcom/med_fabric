@@ -315,8 +315,14 @@ defmodule MedFabric.HandheldAcceptance do
     ProcessLab.wait!(fn -> sql_ready?(lab) end, 30_000, postgres, "PostgreSQL")
     lab = if "spot-check" in required, do: hapi!(lab), else: lab
     lab = if lab.preview?, do: start_preview!(lab), else: lab
+
+    lab =
+      if "soak" in required,
+        do: put_in(lab.cfg["checkpoint_timings"], at(lab, "artifact/checkpoint-timings.jsonl")),
+        else: lab
+
     save(at(lab, "server.json"), lab.cfg)
-    lab = start_server!(lab, "soak" in required)
+    lab = start_server!(lab)
 
     relay =
       launch!(lab, "tls-relay", "elixir", [
@@ -658,9 +664,7 @@ defmodule MedFabric.HandheldAcceptance do
     end
   end
 
-  defp start_server!(lab, soak? \\ false) do
-    env = Map.put(lab.env, "MF_SOAK_TIMINGS", if(soak?, do: "1"))
-
+  defp start_server!(lab) do
     server =
       isolate!(
         lab,
@@ -674,8 +678,7 @@ defmodule MedFabric.HandheldAcceptance do
           "--config",
           at(lab, "server.json")
         ],
-        nil,
-        env
+        nil
       )
 
     ProcessLab.wait!(
@@ -1144,7 +1147,7 @@ defmodule MedFabric.HandheldAcceptance do
     scenario("soak", result)
 
     {cfg, child} =
-      client!(lab, "paired_exam", "soak", %{"seconds" => seconds, "soak_timings" => true})
+      client!(lab, "paired_exam", "soak", %{"seconds" => seconds})
 
     id = cfg["acquisition"]
     started = System.monotonic_time(:millisecond)
@@ -1161,7 +1164,7 @@ defmodule MedFabric.HandheldAcceptance do
           await_soak!(lab, cfg, child, started, file)
         after
           assessment = Soak.observations(samples)
-          timings = Soak.timings([child, lab.server])
+          timings = Soak.timings(lab.cfg["checkpoint_timings"])
 
           performance =
             Map.merge(result.performance, Map.put(assessment, :sampled_timings, timings))
@@ -1182,7 +1185,10 @@ defmodule MedFabric.HandheldAcceptance do
         'streams', (SELECT json_object_agg(stream, json_build_object(
           'durable_sequence', receipt->>'durable_sequence',
           'durable_sample', receipt->>'durable_sample',
-          'terminal', sealed_index->>'terminal'))
+          'terminal', sealed_index->>'terminal',
+          'checkpoints', (SELECT coalesce(sum(l.durable_acks), 0)
+                          FROM device_limits_observed l JOIN stream_attempts a USING(fence)
+                          WHERE a.acquisition_id=s.id AND a.stream=attempts.stream)))
         FROM (SELECT DISTINCT ON (stream) stream,receipt,sealed_index FROM stream_attempts
           WHERE acquisition_id=s.id ORDER BY stream,generation DESC) attempts))
       FROM device_sessions s WHERE s.id='#{id}'
