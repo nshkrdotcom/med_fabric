@@ -161,8 +161,10 @@ defmodule MedExHandheld.SessionCleanupTest do
         "credential_file" => credential
       })
 
-    error = assert_raise MatchError, fn -> Session.run(config, "plx_spot_check") end
-    assert error.term == {:error, :upgrade_failed}
+    assert_raise RuntimeError, ~r/:upgrade_failed/, fn ->
+      Session.run(config, "plx_spot_check")
+    end
+
     # Only the test-owned peer may still be linked at this point.
     assert MapSet.delete(caller_links(), peer_pid) == links
     assert Task.await(peer) == "Bearer wrong-fixture-token"
