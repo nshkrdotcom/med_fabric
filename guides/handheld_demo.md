@@ -145,7 +145,9 @@ ops/qc_services.sh run -- bash -c 'cd core/interop && mix test integration'
 Each invocation provisions fresh data and credentials. The wrapper verifies
 loopback service readiness and cleans up its own PostgreSQL and container on
 success, failure, or interruption. Add `--keep-failure` to retain private
-diagnostic state. For the pinned source-built JDK route, use
+diagnostic state. Use `ops/qc_services.sh status PRIVATE_SERVICE_DIR` to inspect
+a retained run and `ops/qc_services.sh cleanup PRIVATE_SERVICE_DIR` to remove it
+after the invocation exits. For the pinned source-built JDK route, use
 `ops/local_services.sh start`, `status`, `env`, `restart-hapi`, and `stop`
 with a dedicated `MF_SERVICE_STATE`.
 
