@@ -17,13 +17,16 @@ def exact_coverage:
 .scenarios.baseline.browser_review_verified and
 .scenarios["source-gap"].browser_review_verified and
 .scenarios["source-gap"].coverage.audio.gaps == [[1920, 2020]] and
+.scenarios["multi-sequence-gap"].coverage.audio.gaps == [[1920, 2220]] and
+.scenarios["concurrent-encounter"].coverage.audio.samples == 2880000 and
+.scenarios["concurrent-encounter"].coverage.ecg.samples == 15000 and
 .scenarios["rational-s24"].coverage.audio.samples == 89 and
 .scenarios["source-reset"].coverage.ecg.samples == 75 and
 .scenarios["source-reset"].review_decision == "repeat" and
 .scenarios["spool-capacity"].coverage != null and
 (.configured_limits as $limit | [.measured_maxima | to_entries[] | .value <= $limit[.key]] | all) and
 (.scenarios as $cases |
-  ["baseline", "source-gap", "rational-s24", "accepted_before_durable", "durable_before_ack",
+  ["baseline", "source-gap", "multi-sequence-gap", "concurrent-encounter", "rational-s24", "accepted_before_durable", "durable_before_ack",
    "after_object_install", "manifest_install", "db_completion", "spool-capacity",
    "source-reset", "handheld-restart"] |
   map($cases[.] | .raw_payload_digests == .oracle_payload_digests and

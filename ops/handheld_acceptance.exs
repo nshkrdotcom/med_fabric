@@ -793,8 +793,33 @@ defmodule MedFabric.HandheldAcceptance do
        sql!(lab, "SELECT count FROM device_heartbeats WHERE acquisition_id='#{id}'") |> integer()}
     end
 
+    device = Enum.at(lab.cfg["devices"], 1)
+
+    {other_cfg, other_child} =
+      client!(lab, "paired_exam", "concurrent-encounter", %{
+        "seconds" => 60,
+        "device" => device["id"],
+        "encounter" => device["exam"],
+        "credential_file" => device["credential_file"]
+      })
+
+    other_id = other_cfg["acquisition"]
     {audio, beats} = counters.()
-    Process.sleep(5_000)
+
+    ProcessLab.wait!(
+      fn ->
+        sql!(lab, """
+        SELECT count(DISTINCT stream) FROM device_limits_observed l
+        JOIN stream_attempts a USING(fence)
+        WHERE a.acquisition_id='#{other_id}' AND durable_acks>0
+        """) == "2"
+      end,
+      15_000,
+      other_child,
+      "both streams in the independent encounter remain durable during the stall"
+    )
+
+    Process.sleep(2_000)
     {new_audio, new_beats} = counters.()
     File.rm!(reached(armed))
     check!(new_audio > audio and new_beats > beats, "Audio or control stalled with ECG")
@@ -804,14 +829,17 @@ defmodule MedFabric.HandheldAcceptance do
       sibling_stall_heartbeats: new_beats - beats
     })
 
-    if viewer do
-      ProcessLab.kill!(lab.preview)
-      ProcessLab.await_success!(viewer, 15_000)
-      record(%{preview_os_process_killed: true})
-      start_preview!(lab)
-    else
-      lab
-    end
+    lab =
+      if viewer do
+        ProcessLab.kill!(lab.preview)
+        ProcessLab.await_success!(viewer, 15_000)
+        record(%{preview_os_process_killed: true})
+        start_preview!(lab)
+      else
+        lab
+      end
+
+    {lab, {other_cfg, other_child}}
   end
 
   defp paired_case!(lab, name, settings, fault \\ nil) do
@@ -819,13 +847,13 @@ defmodule MedFabric.HandheldAcceptance do
     if armed, do: arm!(armed)
     {cfg, child} = client!(lab, "paired_exam", name, settings)
 
-    lab =
+    {lab, concurrent} =
       if name == "baseline" do
-        lab = command_and_stall!(lab, cfg, child)
+        {lab, concurrent} = command_and_stall!(lab, cfg, child)
         outage!(lab, fn -> Process.sleep(10_000) end)
-        lab
+        {lab, concurrent}
       else
-        lab
+        {lab, nil}
       end
 
     {lab, staged} =
@@ -854,6 +882,15 @@ defmodule MedFabric.HandheldAcceptance do
       end
 
     ProcessLab.await_success!(child, 180_000)
+
+    if concurrent do
+      {other_cfg, other_child} = concurrent
+      ProcessLab.await_success!(other_child, 180_000)
+      {root, digest, manifest} = manifest!(lab, other_cfg)
+      result = Oracle.verify!(lab.dir, other_cfg, root, manifest)
+      scenario("concurrent-encounter", Map.put(result, :manifest_digest, digest))
+    end
+
     {root, digest, manifest} = manifest!(lab, cfg)
 
     result =
