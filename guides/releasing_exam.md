@@ -28,6 +28,12 @@ mix release.publish --artifact mf_exam --identity "$identity" --tag "$tag"
 mix release.archive --artifact mf_exam --identity "$identity"
 ```
 
+Before publication, extract the prepared Hex archive into a disposable directory,
+assemble the release using the runtime-config overlay described in the
+[Exam package guide](../apps/exam/guides/getting_started.md), and boot it
+against fresh PostgreSQL. The archive carries the runtime sources. The Mix
+assembler's default runtime config copy carries only the entry file.
+
 Run archive after Hex confirms publication. Prepared bundles and writable
 publish workspaces live under the checkout's ignored `.weld/` directory.
 The `projection/mf_exam` commit and annotated tag preserve the Git receipt

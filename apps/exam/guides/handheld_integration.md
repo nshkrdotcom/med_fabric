@@ -39,3 +39,7 @@ its verified prefix and terminal reason.
 The native synthetic qualification covers 60-second paired recordings. The
 writer's 1,800-second limit is a resource cap. Capture, finalization and review
 at longer durations depend on the target storage and service load.
+
+A 29-minute exploratory capture on tmpfs reached the finish/reconnect phase
+but did not complete review. The 60-second native gates remain the supported
+fixture envelope.

@@ -62,13 +62,15 @@ defmodule MedFabric.Store.DeviceSessions do
     }
 
     Postgrex.transaction(Postgres, fn tx ->
+      # Reserve validates the grant and leaves it unchanged. Its read locks
+      # must coexist with scoped effects while it waits for an existing session.
       site =
         case rows(
                tx,
                """
                SELECT g.site FROM device_grants g JOIN encounters e ON e.id=g.encounter_id
                JOIN device_credentials c ON c.device_id=g.device_id WHERE g.encounter_id=$1 AND g.device_id=$2
-               AND g.profile=$3 AND e.closed_at IS NULL AND NOT c.revoked AND g.expires_at>now() FOR UPDATE OF e,g
+               AND g.profile=$3 AND e.closed_at IS NULL AND NOT c.revoked AND g.expires_at>now() FOR SHARE OF e,g,c
                """,
                [enc, device, profile]
              ) do

@@ -84,6 +84,47 @@ defmodule MedFabric.Store.DeviceAdmissionTest do
     assert {:error, :stale_lease} = S.scoped(current, fn _, _ -> :should_not_run end)
   end
 
+  test "resume waiting on a session does not block a scoped grant read", c do
+    assert {:ok, bind} = reserve(c, "paired_exam", "lock-order-" <> c.enc)
+    owner = self()
+
+    holder =
+      Task.async(fn ->
+        Postgrex.transaction(c.db, fn tx ->
+          [[backend]] = S.rows(tx, "SELECT pg_backend_pid()", [])
+          S.rows(tx, "SELECT id FROM device_sessions WHERE id=$1 FOR SHARE", [bind.id])
+          send(owner, {:session_locked, backend})
+
+          receive do
+            :read_grant ->
+              S.rows(tx, """
+              SELECT site FROM device_grants
+              WHERE encounter_id=$1 AND device_id=$2 AND profile='paired_exam' FOR SHARE
+              """, [c.enc, c.device])
+          after
+            5000 -> raise "resume did not reach the held session lock"
+          end
+        end)
+      end)
+
+    assert_receive {:session_locked, backend}, 2000
+    resume = Task.async(fn -> reserve(c, "paired_exam", bind.id) end)
+
+    assert Enum.any?(1..100, fn _ ->
+      [[waiting]] =
+        S.rows(c.db, "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))",
+          [backend])
+
+      unless waiting, do: Process.sleep(10)
+      waiting
+    end)
+
+    send(holder.pid, :read_grant)
+    assert {:ok, [["left-upper-chest"]]} = Task.await(holder)
+    assert {:ok, next} = Task.await(resume)
+    assert next.generation == bind.generation + 1
+  end
+
   test "exact measurement replay is idempotent and conflict or unseen sealed input is quarantined",
        c do
     assert {:ok, bind} = reserve(c, "plx_spot_check", "inventory-" <> c.enc)
