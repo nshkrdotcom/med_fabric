@@ -8,6 +8,18 @@ defmodule MedFabric.Exam.DeviceReviewTest do
   # This is a database transaction test. The separate process suite proves the
   # transport and immutable-file boundary before these records can be installed.
   setup do
+    dir = Path.join(System.tmp_dir!(), "device-review-#{System.unique_integer([:positive])}")
+    old = Application.get_env(:mf_exam, :lab)
+    Application.put_env(:mf_exam, :lab, %{artifact_dir: dir})
+
+    on_exit(fn ->
+      if old,
+        do: Application.put_env(:mf_exam, :lab, old),
+        else: Application.delete_env(:mf_exam, :lab)
+
+      File.rm_rf!(dir)
+    end)
+
     db =
       start_supervised!(
         {Postgres, url: System.fetch_env!("DATABASE_URL"), name: Postgres, pool_size: 6}
@@ -45,7 +57,9 @@ defmodule MedFabric.Exam.DeviceReviewTest do
     tasks =
       for _ <- 1..2,
           do:
-            Task.async(fn -> DeviceReviews.review(c.enc, c.bind.id, c.actor, digest, choice) end)
+            Task.async(fn ->
+              DeviceReviews.review_verified(c.enc, c.bind.id, c.actor, digest, choice)
+            end)
 
     assert Enum.map(tasks, &Task.await(&1, 10_000)) == [{:ok, :ok}, {:ok, :ok}]
 
@@ -83,16 +97,22 @@ defmodule MedFabric.Exam.DeviceReviewTest do
     assert Decimal.equal?(oxygen["valueQuantity"]["value"], Decimal.new("97.2"))
 
     assert {:error, :review_conflict} =
-             DeviceReviews.review(c.enc, c.bind.id, c.actor, digest, %{
+             DeviceReviews.review_verified(c.enc, c.bind.id, c.actor, digest, %{
                choice
                | "metrics" => ["spo2"]
              })
 
     assert {:error, :review_changed} =
-             DeviceReviews.review(c.enc, c.bind.id, "other-clinician", digest, choice)
+             DeviceReviews.review_verified(c.enc, c.bind.id, "other-clinician", digest, choice)
 
     assert {:error, :review_changed} =
-             DeviceReviews.review(c.enc, c.bind.id, c.actor, String.duplicate("0", 64), choice)
+             DeviceReviews.review_verified(
+               c.enc,
+               c.bind.id,
+               c.actor,
+               String.duplicate("0", 64),
+               choice
+             )
   end
 
   test "failure of the second selected metric rolls back the first, review, acceptance and outbox",
@@ -101,7 +121,7 @@ defmodule MedFabric.Exam.DeviceReviewTest do
     {digest, choice} = seal_fixture(c, 0x07FF)
 
     assert {:error, :ineligible_metric} =
-             DeviceReviews.review(c.enc, c.bind.id, c.actor, digest, choice)
+             DeviceReviews.review_verified(c.enc, c.bind.id, c.actor, digest, choice)
 
     assert [[0]] = derived_count(c)
     assert [[0]] = outbox_count(c)
@@ -118,13 +138,24 @@ defmodule MedFabric.Exam.DeviceReviewTest do
 
     # The retained valid saturation remains separately reviewable after rollback.
     assert {:ok, :ok} =
-             DeviceReviews.review(c.enc, c.bind.id, c.actor, digest, %{
+             DeviceReviews.review_verified(c.enc, c.bind.id, c.actor, digest, %{
                choice
                | "metrics" => ["spo2"]
              })
 
     assert [[1]] = derived_count(c)
     assert [[1]] = outbox_count(c)
+  end
+
+  test "a corrupt manifest cannot commit a decision or export intent", c do
+    {digest, choice} = seal_fixture(c, 72)
+    path = Path.join(MedFabric.Exam.DeviceManifest.root(c.bind.id), "manifest.mej1")
+    File.write!(path, "corrupt")
+
+    assert {:error, :unverified_manifest} =
+             DeviceReviews.review_verified(c.enc, c.bind.id, c.actor, digest, choice)
+
+    assert outbox_count(c) == 0
   end
 
   defp seal_fixture(c, pulse_word) do
@@ -158,11 +189,16 @@ defmodule MedFabric.Exam.DeviceReviewTest do
       "acquisition" => c.bind.id,
       "profile" => "plx_spot_check",
       "simulated" => true,
+      "streams" => %{},
       "inventory" => [%{"event" => event, "fingerprint" => fingerprint}],
       "defects" => []
     }
 
     digest = S.hash(MedEx.CanonicalJSON.encode(manifest))
+
+    root = MedFabric.Exam.DeviceManifest.root(c.bind.id)
+    File.mkdir_p!(root)
+    File.write!(Path.join(root, "manifest.mej1"), MedEx.CanonicalJSON.encode(manifest))
 
     S.rows(c.db, "INSERT INTO device_manifests(acquisition_id,digest,body) VALUES($1,$2,$3)", [
       c.bind.id,

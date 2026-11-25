@@ -46,7 +46,7 @@ defmodule MedFabric.Exam.MixProject do
     med_ex_dep =
       if Code.ensure_loaded?(MedFabric.BuildSources),
         do: MedFabric.BuildSources.med_ex_dependency(:med_ex),
-        else: {:med_ex, "~> 0.2.0"}
+        else: {:med_ex, "~> 0.2.1"}
 
     [
       {:mf_domain, path: "../../core/domain"},

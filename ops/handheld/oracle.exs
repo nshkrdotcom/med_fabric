@@ -60,7 +60,19 @@ defmodule MedFabric.Acceptance.Oracle do
           span["code"] == "source_gap",
           do: {integer(span["first_sample"]), integer(span["end_sample"])}
 
-    expected_gaps = if cfg["gap"] && name == "audio", do: [{1920, 2020}], else: []
+    expected_gaps =
+      case {name, cfg["gap"]} do
+        {"audio", true} ->
+          [{1920, 2020}]
+
+        {"audio", 3} ->
+          assert_gap_sequences!(index)
+          [{1920, 2220}]
+
+        _ ->
+          []
+      end
+
     check!(gaps == expected_gaps, "Unexpected source gaps for #{name}")
     spans = Enum.map(segments, fn {first, last, _} -> {first, last} end)
 
@@ -100,6 +112,13 @@ defmodule MedFabric.Acceptance.Oracle do
       },
       clock: clock
     }
+  end
+
+  defp assert_gap_sequences!(index) do
+    check!(
+      Enum.map(index["gaps"], &{&1["first_sequence"], &1["next_sequence"]}) == [{"2", "5"}],
+      "Multi-record gap sequence coverage differs"
+    )
   end
 
   def samples(first, last, channels, width, seed, source, gaps, divisor) do

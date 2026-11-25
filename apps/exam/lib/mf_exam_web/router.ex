@@ -36,6 +36,13 @@ defmodule MedFabric.ExamWeb.Router do
 
     match(
       :get,
+      "/encounters/:encounter_id/devices/:id/segment/:stream/:first_sample/:sha",
+      MedFabric.ExamWeb.DeviceSegment,
+      []
+    )
+
+    match(
+      :get,
       "/encounters/:encounter_id/devices/:id/segment/:stream/:sha",
       MedFabric.ExamWeb.DeviceSegment,
       []

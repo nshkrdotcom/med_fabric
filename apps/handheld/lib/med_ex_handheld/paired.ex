@@ -110,7 +110,7 @@ defmodule MedExHandheld.Paired do
     {rn, rd} = spec.sample_rate
     wait_for_sample(c, n, p.first, spec.sample_rate)
     step = frame_step(c, n)
-    gap = n == "audio" and c["gap"] == true and p.seq == 2
+    gap = n == "audio" and c["gap"] in [true, 3] and p.seq == 2
     count = min(if(gap, do: 100, else: step), target - p.first)
     tick = 8_640_000 + div(p.first * 48_000_000 * rd, rn)
     {next, packet} = ReferencePeripheral.emit(p, count, tick, c["seed"])
@@ -177,12 +177,22 @@ defmodule MedExHandheld.Paired do
   end
 
   defp lost_frame(c, p, next, step, target, {rn, rd}) do
-    # Evict the missing source packet, request its original bytes, then use
-    # the next CRC-verified hardware counter to establish the right boundary.
-    lost = %{next | history: Map.delete(next.history, p.seq)}
+    # Evict the unavailable packets, then use a CRC-verified packet to
+    # establish the first sample and sequence after the loss.
+    count = if c["gap"] == 3, do: 3, else: 1
+
+    lost =
+      Enum.reduce(2..count//1, next, fn _, peripheral ->
+        tick = 8_640_000 + div(peripheral.first * 48_000_000 * rd, rn)
+        {advanced, _} = ReferencePeripheral.emit(peripheral, 100, tick, c["seed"])
+        advanced
+      end)
+
+    history = Map.drop(lost.history, Enum.to_list(p.seq..(lost.seq - 1)))
+    lost = %{lost | history: history}
 
     {lost, %{"state" => "unavailable"}, []} =
-      ReferencePeripheral.transact(lost, "replay", %{"first" => p.seq, "next" => p.seq + 1})
+      ReferencePeripheral.transact(lost, "replay", %{"first" => p.seq, "next" => lost.seq})
 
     next_tick = 8_640_000 + div(lost.first * 48_000_000 * rd, rn)
 
@@ -312,18 +322,20 @@ defmodule MedExHandheld.Paired do
     end
   end
 
-  defp advance_source_tail(wire, _, _, sequence, sample) do
+  defp advance_source_tail(wire, _, _, sequence, sample),
+    do: gap_endpoint(JSON.decode!(wire), sequence, sample)
+
+  defp gap_endpoint(gap, sequence, sample) do
     first = to_string(sample)
     first_sequence = to_string(sequence)
 
-    with {:ok,
-          %{
-            "irreversible" => true,
-            "first" => ^first,
-            "end" => ending,
-            "first_sequence" => ^first_sequence,
-            "next_sequence" => next_sequence
-          }} <- JSON.decode(wire),
+    with %{
+           "irreversible" => true,
+           "first" => ^first,
+           "end" => ending,
+           "first_sequence" => ^first_sequence,
+           "next_sequence" => next_sequence
+         } <- gap,
          {next, ""} <- Integer.parse(next_sequence),
          {right, ""} <- Integer.parse(ending),
          true <- next > sequence and right > sample do
@@ -351,7 +363,12 @@ defmodule MedExHandheld.Paired do
 
       cond do
         r["type"] == "stream_finished" ->
-          :ok
+          state = cursor(c, n)
+
+          if state["done"] and r["durable_sequence"] == to_string(state["sequence"]) and
+               r["durable_sample"] == to_string(state["sample"]),
+             do: :ok,
+             else: {:interrupted, :premature_terminal}
 
         r["type"] == "durable" ->
           drain(c, spool, s, n, gen, String.to_integer(r["durable_sequence"]))
@@ -368,15 +385,31 @@ defmodule MedExHandheld.Paired do
       q < state["sequence"] ->
         {:ok, raw} = Spool.get(spool, n, q)
 
-        if String.starts_with?(raw, "MEX1"),
-          do: Transport.send_frame(s, {:binary, raw}),
-          else: Transport.send_json(s, "gap", JSON.decode!(raw))
+        next_sequence =
+          if String.starts_with?(raw, "MEX1") do
+            Transport.send_frame(s, {:binary, raw})
+            q + 1
+          else
+            gap = JSON.decode!(raw)
+            {next, _sample} = gap_endpoint(gap, q, String.to_integer(gap["first"]))
+            Transport.send_json(s, "gap", gap)
+            next
+          end
 
-        {:ok, %{"type" => "accepted"}} = Transport.recv(s)
-        {:ok, %{"type" => "durable"} = r} = Transport.recv(s, 35_000)
-        true = String.to_integer(r["durable_sequence"]) == q + 1
-        :ok = Spool.ack(spool, n, gen, r)
-        drain(c, spool, s, n, gen, q + 1)
+        case Transport.recv(s, 35_000) do
+          {:ok, %{"type" => "accepted"}} ->
+            {:ok, %{"type" => "durable"} = r} = Transport.recv(s, 35_000)
+            true = r["durable_sequence"] == to_string(next_sequence)
+            :ok = Spool.ack(spool, n, gen, r)
+            drain(c, spool, s, n, gen, next_sequence)
+
+          {:ok, %{"type" => "stream_finished"} = r} ->
+            :ok = Spool.ack(spool, n, gen, r)
+            {:interrupted, :premature_terminal}
+
+          other ->
+            raise MatchError, term: other
+        end
 
       q == state["sequence"] and state["done"] ->
         {:ok, %{"type" => "stream_finished"}} =

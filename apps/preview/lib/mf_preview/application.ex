@@ -113,6 +113,7 @@ defmodule MedFabric.Preview.Peer do
      %{
        id: id,
        encoder: encoder,
+       encoder_ref: Process.monitor(encoder),
        peer: nil,
        owner: nil,
        status: "disconnected",
@@ -161,21 +162,29 @@ defmodule MedFabric.Preview.Peer do
   def handle_info({:ex_webrtc, p, {:connection_state_change, state}}, %{peer: %{pid: p}} = s),
     do: {:noreply, %{s | status: to_string(state)}}
 
-  def handle_info(:feed, s) do
-    case :ets.take(:mf_preview_feed, s.id) do
-      [{_, at, f}] when s.status == "connected" ->
-        if System.monotonic_time(:millisecond) - at <= 200,
-          do: Opus.Provider.offer(s.encoder, {s.session, at}, f.first_sample, f.payload)
+  def handle_info({:DOWN, ref, :process, encoder, _}, %{encoder_ref: ref, encoder: encoder} = s),
+    do: {:stop, :normal, s}
 
-      _ ->
-        :ok
-    end
+  def handle_info({:med_ex_encode_failed, {session, _}, _}, %{session: session} = s),
+    do: {:stop, :normal, s}
+
+  def handle_info(:feed, s) do
+    result =
+      case :ets.take(:mf_preview_feed, s.id) do
+        [{_, at, f}] when s.status == "connected" ->
+          if System.monotonic_time(:millisecond) - at <= 200,
+            do: Opus.Provider.offer(s.encoder, {s.session, at}, f.first_sample, f.payload)
+
+        _ ->
+          :ok
+      end
 
     Process.send_after(self(), :feed, 15)
 
-    if System.monotonic_time(:second) - s.touched > 65,
-      do: {:stop, :normal, s},
-      else: {:noreply, s}
+    if match?({:error, {:outcome_unknown, _}}, result) or
+         System.monotonic_time(:second) - s.touched > 65,
+       do: {:stop, :normal, s},
+       else: {:noreply, s}
   end
 
   def handle_info(

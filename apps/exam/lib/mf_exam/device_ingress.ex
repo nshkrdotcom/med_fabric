@@ -13,6 +13,8 @@ defmodule MedFabric.Exam.DeviceIngress do
   alias MedFabric.Exam.{Barrier, DeviceManifest}
   alias MedFabric.Store.DeviceSessions, as: S
 
+  @capacity_reasons ~w(duration_limit artifact_limit frame_limit integrity_span_limit journal_limit)
+
   def start_link(key),
     do:
       GenServer.start_link(__MODULE__, nil,
@@ -58,7 +60,8 @@ defmodule MedFabric.Exam.DeviceIngress do
       active_socket?(old, b.generation, socket) ->
         {:reply, {:error, :already_open}, old}
 
-      old && old.bind.generation == b.generation && old.digest == digest ->
+      old && old.bind.generation == b.generation && old.digest == digest &&
+          Process.alive?(old.writer) ->
         {:reply, StreamWriter.receipt(old.writer), %{old | socket: socket}}
 
       true ->
@@ -83,6 +86,7 @@ defmodule MedFabric.Exam.DeviceIngress do
 
     case result do
       {:ok, {:sealed, r}} -> {:stop, :normal, {:ok, r}, s}
+      {:ok, {:capacity, r}} -> {:stop, :normal, {:capacity, r}, s}
       {:ok, {:receipt, r}} -> {:reply, {:ok, r}, %{s | receipt: r}}
       {:ok, {:error, :duplicate_conflict} = error} -> {:stop, :normal, error, s}
       {:ok, error} -> {:reply, error, s}
@@ -248,6 +252,14 @@ defmodule MedFabric.Exam.DeviceIngress do
     error
   end
 
+  defp record_result(tx, _op, {:error, {:capacity, reason}}, s) do
+    {index, receipt} = store_sealed(tx, s)
+
+    if index.terminal == :interrupted and index.terminal_reason == reason,
+      do: {:capacity, receipt},
+      else: S.abort(tx, :unexpected_terminal)
+  end
+
   defp record_result(_, _, error, _), do: error
 
   defp observe_transport(tx, {:frame, raw}, s) do
@@ -270,8 +282,11 @@ defmodule MedFabric.Exam.DeviceIngress do
     await_dead(s.writer)
     dir = DeviceManifest.attempt_dir(s.bind.id, s.name, s.fence)
 
+    [[known]] = S.rows(tx, "SELECT receipt FROM stream_attempts WHERE fence=$1", [s.fence])
+    {:ok, known_receipt} = Serialization.receipt(known)
+
     {:ok, %{sealed: true, index: index, receipt: receipt}} =
-      Storage.recover(dir, stream: s.spec, fence: s.fence)
+      Storage.recover(dir, stream: s.spec, fence: s.fence, known_receipt: known_receipt)
 
     S.rows(
       tx,
@@ -397,7 +412,13 @@ defmodule MedFabric.Exam.DeviceIngress do
   def handle_info(_, s), do: {:noreply, s}
 
   defp prior(_, [], _, _, _), do: []
-  defp prior(_, [[_, receipt, index]], _, _, _) when not is_nil(index), do: {:sealed, receipt}
+
+  defp prior(tx, [[_, receipt, index]], _, _, _) when not is_nil(index) do
+    case Serialization.receipt(receipt) do
+      {:ok, receipt} -> {:sealed, receipt}
+      _ -> S.abort(tx, :unverified_receipt)
+    end
+  end
 
   defp prior(tx, [[fence, known, nil]], id, name, spec) do
     dir = DeviceManifest.attempt_dir(id, name, fence)
@@ -428,15 +449,17 @@ defmodule MedFabric.Exam.DeviceIngress do
         end
 
       case recovery do
-        {:ok, %{sealed: true, index: %{terminal: terminal} = i, receipt: r}}
-        when terminal in [:finished, :failed] ->
+        {:ok,
+         %{sealed: true, index: %{terminal: terminal, terminal_reason: reason} = i, receipt: r}}
+        when terminal in [:finished, :failed] or
+               (terminal == :interrupted and reason in @capacity_reasons) ->
           S.rows(
             tx,
             "UPDATE stream_attempts SET sealed_index=$2,index_digest=$3,receipt=$4 WHERE fence=$1",
             [fence, Serialization.to_map(i), Serialization.digest(i), Serialization.to_map(r)]
           )
 
-          {:sealed, Serialization.to_map(r)}
+          {:sealed, r}
 
         {:ok, %{receipt: r}} ->
           [predecessor: %{artifact_dir: dir, receipt: r}]

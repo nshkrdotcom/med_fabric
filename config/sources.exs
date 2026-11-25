@@ -12,7 +12,7 @@ defmodule MedFabric.BuildSources do
                 HEX_CACERTS_PATH)
 
   def med_ex_dependency(app) when app in @med_ex_apps do
-    requirement = if app == :med_ex, do: "~> 0.2.0", else: "~> 0.1.0"
+    requirement = if app == :med_ex, do: "~> 0.2.1", else: "~> 0.1.0"
     options = [hex: Atom.to_string(app), repo: "hexpm"]
     options = if app == :med_ex, do: Keyword.put(options, :override, true), else: options
     {app, requirement, options}

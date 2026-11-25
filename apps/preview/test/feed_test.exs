@@ -33,4 +33,14 @@ defmodule MedFabric.Preview.FeedTest do
     {:ok, raw} = FrameV1.encode(%{f | stream_number: 1})
     assert Endpoint.call(signed.(raw), []).status == 403
   end
+
+  test "normal encoder death removes the owning peer" do
+    id = "encoder-failure-#{System.unique_integer([:positive])}"
+    peer = start_supervised!({MedFabric.Preview.Peer, id})
+    %{encoder: encoder} = :sys.get_state(peer)
+    ref = Process.monitor(peer)
+    :ok = GenServer.stop(encoder)
+    assert_receive {:DOWN, ^ref, :process, ^peer, :normal}, 5000
+    assert Registry.lookup(MedFabric.Preview.Registry, id) == []
+  end
 end

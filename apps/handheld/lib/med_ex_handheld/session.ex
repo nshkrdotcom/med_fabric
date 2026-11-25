@@ -268,9 +268,18 @@ defmodule MedExHandheld.Session do
   defp control(c, s, monitor, hub, tasks, iteration) do
     {active, loss} =
       Enum.reduce(Task.yield_many(tasks, 0), {[], false}, fn
-        {t, nil}, {list, lost} -> {[t | list], lost}
-        {_, {:ok, :ok}}, acc -> acc
-        _, {list, _} -> {list, true}
+        {t, nil}, {list, lost} ->
+          {[t | list], lost}
+
+        {_, {:ok, :ok}}, acc ->
+          acc
+
+        {_, {:ok, {:interrupted, :premature_terminal}}}, acc ->
+          Agent.update(hub, &Map.put(&1, :stop, true))
+          acc
+
+        _, {list, _} ->
+          {list, true}
       end)
 
     if loss, do: raise(MatchError, term: :stream_disconnected)

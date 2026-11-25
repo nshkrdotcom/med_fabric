@@ -946,7 +946,13 @@ defmodule MedFabric.HandheldAcceptance do
           [] ->
             %{"decision" => "reject", "note" => "No verified samples", "metrics" => []}
 
-          [first | _] ->
+          [first | rest] ->
+            last =
+              case rest do
+                [next | _] when name == "baseline" -> next
+                _ -> first
+              end
+
             %{
               "decision" => if(manifest["defects"] == [], do: "complete", else: "partial"),
               "note" => "Synthetic review",
@@ -954,7 +960,7 @@ defmodule MedFabric.HandheldAcceptance do
                 %{
                   "stream" => stream,
                   "first" => first["first_sample"],
-                  "end" => first["end_sample"]
+                  "end" => last["end_sample"]
                 }
               ],
               "metrics" => [],
@@ -973,6 +979,7 @@ defmodule MedFabric.HandheldAcceptance do
       })
 
     {lab, _} = paired_case!(lab, "source-gap", %{"seconds" => 3, "gap" => true})
+    {lab, _} = paired_case!(lab, "multi-sequence-gap", %{"seconds" => 3, "gap" => 3})
     {lab, _} = paired_case!(lab, "rational-s24", %{"seconds" => 3, "variant" => true})
 
     lab =

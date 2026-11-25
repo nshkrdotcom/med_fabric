@@ -35,7 +35,7 @@ exam_docs = guide_paths ++ release_docs
           logo: "apps/exam/assets/exam.svg",
           assets: %{"apps/exam/assets" => "assets"},
           source_url: source_url,
-          source_ref: "mf_exam-v#{version}-docs",
+          source_ref: "mf_exam-v#{version}",
           extra_titles:
             Map.new(
               guides ++

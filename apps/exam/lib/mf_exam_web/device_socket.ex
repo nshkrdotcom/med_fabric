@@ -55,6 +55,9 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
           | pending: true
         })
 
+      {:capacity, receipt} ->
+        stream_finished(receipt, s)
+
       {:error, {:replay, q, n}} ->
         reply("replay", %{"sequence" => to_string(q), "sample" => to_string(n)}, s)
 
@@ -135,7 +138,7 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
 
     case DeviceIngress.open(b, n, digest) do
       {:ok, p, r} -> reply("durable", J.to_map(r), Map.merge(s, %{bind: b, writer: p, stream: n}))
-      {:error, {:sealed, r}} -> reply("stream_finished", r, %{s | bind: b})
+      {:error, {:sealed, r}} -> stream_finished(r, %{s | bind: b})
       _ -> denied(s)
     end
   end
@@ -172,6 +175,9 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
         send(self(), :checkpoint)
         reply("accepted", %{}, %{s | pending: true})
 
+      {:capacity, receipt} ->
+        stream_finished(receipt, s)
+
       _ ->
         denied(s)
     end
@@ -184,7 +190,7 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
        )
        when is_pid(p) do
     case DeviceIngress.call(p, {:finish, q, n, m["interruption"]}) do
-      {:ok, r} -> reply("stream_finished", J.to_map(r), %{s | writer: nil})
+      {:ok, r} -> stream_finished(r, s)
       _ -> denied(s)
     end
   end
@@ -345,6 +351,9 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
   def handle_info(_, s), do: {:ok, s}
   def terminate(_, %{kind: :control, bind: b}) when is_map(b), do: S.disconnected(b)
   def terminate(_, _), do: :ok
+
+  defp stream_finished(receipt, s),
+    do: reply("stream_finished", J.to_map(receipt), %{s | writer: nil, pending: false})
 
   defp reply(t, data, s),
     do:

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Replay multi-sequence gaps and stop production on verified premature terminal receipts.
+- Require MedEx 0.2.1.
+
+
 All notable changes to `mf_handheld` will be documented in this file.
 
 ## 0.1.0 - 2026-11-24

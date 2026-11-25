@@ -43,7 +43,7 @@ export MIX_ENV=test
 # Use only the source directories and named project/build files.
 for project in core/domain core/store core/interop apps/exam apps/handheld apps/preview; do
   mkdir -p "$scratch/$project"
-  for name in mix.exs mix.lock .formatter.exs .credo.exs .dialyzer_ignore.exs lib config priv assets build_support test integration README.md; do
+  for name in VERSION mix.exs mix.lock .formatter.exs .credo.exs .dialyzer_ignore.exs lib config priv assets build_support test integration README.md; do
     if [[ -e "$repo/$project/$name" ]]; then
       tar -C "$repo/$project" --exclude=node_modules --exclude=_build --exclude=deps --exclude=.git \
         --exclude=.mix_sources.json --exclude='*.credential' --exclude='*.key' --exclude=.env \

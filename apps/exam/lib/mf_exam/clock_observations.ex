@@ -2,13 +2,15 @@ defmodule MedFabric.Exam.ClockObservations do
   @moduledoc "Qualified synthetic acquisition anchors and transport probes pinned at review."
   alias MedEx.{ClockAlign, Serialization}
 
-  def host_generation do
-    key = {__MODULE__, :generation}
+  @key {__MODULE__, :generation}
 
-    case :persistent_term.get(key, nil) do
+  def host_generation, do: :persistent_term.get(@key)
+
+  def initialize_host_generation do
+    case :persistent_term.get(@key, nil) do
       nil ->
         gen = Base.encode16(:crypto.strong_rand_bytes(12))
-        :persistent_term.put(key, gen)
+        :persistent_term.put(@key, gen)
         gen
 
       gen ->

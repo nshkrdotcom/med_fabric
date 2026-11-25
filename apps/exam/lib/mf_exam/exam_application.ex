@@ -9,6 +9,8 @@ defmodule MedFabric.Exam.Application do
 
   @impl true
   def start(_type, _args) do
+    MedFabric.Exam.ClockObservations.initialize_host_generation()
+
     children = [{Phoenix.PubSub, name: MedFabric.Exam.PubSub}]
 
     lab_children =

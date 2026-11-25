@@ -11,6 +11,7 @@ defmodule MedFabric.Store.MixProject do
     defaults = [
       {:mf_domain, path: "../domain"},
       {:postgrex, "~> 0.23"},
+      {:db_connection, "~> 2.10.3"},
       {:jason, "~> 1.4"},
       {:decimal, "~> 3.2"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

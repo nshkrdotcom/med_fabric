@@ -41,8 +41,8 @@ defmodule MedFabric.Store.DeviceCommands do
     epoch =
       case S.rows(
              tx,
-             "SELECT result->>'epoch' FROM device_commands WHERE acquisition_id=$1 AND state IN ('applied','reconciled') ORDER BY updated_at DESC LIMIT 1",
-             [id]
+             "SELECT COALESCE(MAX((result->>'epoch')::bigint), 0)::text FROM device_commands WHERE acquisition_id=$1 AND request->>'boot'=$2 AND state IN ('applied','reconciled')",
+             [id, boot]
            ) do
         [[n]] -> n
         [] -> "0"
