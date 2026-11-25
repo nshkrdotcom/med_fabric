@@ -76,21 +76,27 @@ defmodule MedFabric.Exam.DeviceIngress do
   end
 
   def handle_call(op, {socket, _}, %{socket: socket} = s) do
-    started = if op == :checkpoint, do: checkpoint_timing(s)
+    started = if op == :checkpoint, do: System.monotonic_time(:microsecond)
 
     result =
       S.scoped(s.bind, fn tx, session ->
         unless session.phase in ["capturing", "finalizing"], do: S.abort(tx, :inactive)
 
-        observe_ingress(tx, op, s)
-        record_result(tx, op, act(op, s), s)
+        execute_scoped(tx, op, s)
       end)
 
-    checkpoint_timing(s, "exam_checkpoint_tx_us", started)
+    if started do
+      :telemetry.execute(
+        [:mf_exam, :device_ingress, :checkpoint],
+        %{duration_us: System.monotonic_time(:microsecond) - started},
+        %{stream: s.name, acquisition_id: s.bind.id}
+      )
+    end
 
     case result do
       {:ok, {:sealed, r}} -> {:stop, :normal, {:ok, r}, s}
       {:ok, {:capacity, r}} -> {:stop, :normal, {:capacity, r}, s}
+      {:ok, {:durable, r}} -> {:reply, {:durable, r}, %{s | receipt: r}}
       {:ok, {:receipt, r}} -> {:reply, {:ok, r}, %{s | receipt: r}}
       {:ok, {:error, :duplicate_conflict} = error} -> {:stop, :normal, error, s}
       {:ok, error} -> {:reply, error, s}
@@ -187,6 +193,7 @@ defmodule MedFabric.Exam.DeviceIngress do
       owner: self(),
       stream: spec,
       fence: fence,
+      limits: %{checkpoint_ms: :manual},
       artifact_dir: DeviceManifest.attempt_dir(bind.id, name, fence),
       fault_hook: fn stage -> Barrier.hit(to_string(stage), name) end
     ]
@@ -204,18 +211,35 @@ defmodule MedFabric.Exam.DeviceIngress do
     end
   end
 
-  defp observe_ingress(tx, {:frame, raw}, s) do
+  defp execute_scoped(tx, {:frame, raw}, s) do
     Barrier.hit("writer_stall", s.name)
     payload = max(0, byte_size(raw) - 48)
 
-    S.rows(
-      tx,
-      "INSERT INTO device_limits_observed(fence,max_frame_bytes,max_pending_bytes,max_pending_frames) VALUES($1,$2,$2,1) ON CONFLICT(fence) DO UPDATE SET max_frame_bytes=greatest(device_limits_observed.max_frame_bytes,$2),max_pending_bytes=greatest(device_limits_observed.max_pending_bytes,$2)",
-      [s.fence, payload]
-    )
+    with {:ok, f} <- FrameV1.decode(raw),
+         true <- f.stream_number == s.number and f.source_epoch == s.spec.source_epoch do
+      frame =
+        struct!(
+          SampleFrame,
+          Map.merge(
+            Map.take(Map.from_struct(f), [
+              :source_epoch,
+              :sequence,
+              :first_sample,
+              :sample_count,
+              :config_epoch,
+              :payload
+            ]),
+            %{descriptor_ref: s.digest, stream_id: s.name}
+          )
+        )
+
+      record_result(tx, {:frame, raw, f, payload}, StreamWriter.push(s.writer, frame), s)
+    else
+      _ -> {:error, :wrong_frame}
+    end
   end
 
-  defp observe_ingress(_, _, _), do: :ok
+  defp execute_scoped(tx, op, s), do: record_result(tx, op, act(op, s), s)
 
   defp record_result(tx, _op, {:ok, %StreamIndex{} = index}, s) do
     {^index, receipt} = store_sealed(tx, s)
@@ -240,14 +264,47 @@ defmodule MedFabric.Exam.DeviceIngress do
   defp record_result(tx, op, {:ok, receipt}, s) do
     observe_transport(tx, op, s)
     usage = StreamWriter.stats(s.writer)
+    flushed? = receipt.journal_generation > s.receipt.journal_generation
+
+    payload =
+      case op do
+        {:frame, _, _, size} -> size
+        _ -> 0
+      end
+
+    if flushed?, do: Barrier.hit("journal_sync", s.name)
+    ack_inc = if flushed?, do: 1, else: 0
 
     S.rows(
       tx,
-      "UPDATE device_limits_observed SET max_pending_bytes=greatest(max_pending_bytes,$2),max_pending_frames=greatest(max_pending_frames,$3) WHERE fence=$1",
-      [s.fence, usage.peak_pending_bytes, usage.peak_pending_frames]
+      """
+      INSERT INTO device_limits_observed(fence,max_frame_bytes,max_pending_bytes,max_pending_frames,durable_acks)
+      VALUES($1,$2,$3,$4,$5)
+      ON CONFLICT(fence) DO UPDATE SET
+        max_frame_bytes=greatest(device_limits_observed.max_frame_bytes,$2),
+        max_pending_bytes=greatest(device_limits_observed.max_pending_bytes,$3),
+        max_pending_frames=greatest(device_limits_observed.max_pending_frames,$4),
+        durable_acks=device_limits_observed.durable_acks+$5
+      """,
+      [
+        s.fence,
+        payload,
+        max(payload, usage.peak_pending_bytes),
+        max(1, usage.peak_pending_frames),
+        ack_inc
+      ]
     )
 
-    {:receipt, receipt}
+    if flushed? do
+      S.rows(tx, "UPDATE stream_attempts SET receipt=$2 WHERE fence=$1", [
+        s.fence,
+        Serialization.to_map(receipt)
+      ])
+
+      {:durable, receipt}
+    else
+      {:receipt, receipt}
+    end
   end
 
   defp record_result(tx, _op, {:error, :duplicate_conflict} = error, s) do
@@ -266,9 +323,7 @@ defmodule MedFabric.Exam.DeviceIngress do
 
   defp record_result(_, _, error, _), do: error
 
-  defp observe_transport(tx, {:frame, raw}, s) do
-    {:ok, frame} = FrameV1.decode(raw)
-
+  defp observe_transport(tx, {:frame, raw, frame, _payload}, s) do
     if s.name == "ecg" and :ets.whereis(:mf_live_ecg) != :undefined do
       :ets.insert(:mf_live_ecg, {s.bind.id, System.monotonic_time(:millisecond), s.spec, frame})
     end
@@ -306,31 +361,6 @@ defmodule MedFabric.Exam.DeviceIngress do
     {index, receipt}
   end
 
-  defp act({:frame, raw}, s) do
-    with {:ok, f} <- FrameV1.decode(raw),
-         true <- f.stream_number == s.number and f.source_epoch == s.spec.source_epoch do
-      frame =
-        struct!(
-          SampleFrame,
-          Map.merge(
-            Map.take(Map.from_struct(f), [
-              :source_epoch,
-              :sequence,
-              :first_sample,
-              :sample_count,
-              :config_epoch,
-              :payload
-            ]),
-            %{descriptor_ref: s.digest, stream_id: s.name}
-          )
-        )
-
-      StreamWriter.push(s.writer, frame)
-    else
-      _ -> {:error, :wrong_frame}
-    end
-  end
-
   defp act(
          {:gap,
           %{
@@ -365,9 +395,15 @@ defmodule MedFabric.Exam.DeviceIngress do
   end
 
   defp act(:checkpoint, s) do
-    started = checkpoint_timing(s)
+    started = System.monotonic_time(:microsecond)
     result = StreamWriter.checkpoint(s.writer)
-    checkpoint_timing(s, "exam_writer_checkpoint_us", started)
+
+    :telemetry.execute(
+      [:mf_exam, :device_ingress, :writer_checkpoint],
+      %{duration_us: System.monotonic_time(:microsecond) - started},
+      %{stream: s.name, acquisition_id: s.bind.id}
+    )
+
     result
   end
 
@@ -383,24 +419,6 @@ defmodule MedFabric.Exam.DeviceIngress do
   end
 
   defp act(_, _), do: {:error, :unsupported}
-
-  defp checkpoint_timing(s) do
-    stride = if s.name == "audio", do: 47, else: 11
-
-    if rem(s.receipt.durable_sequence, stride) == 0 and
-         System.get_env("MF_SOAK_TIMINGS") == "1",
-       do: System.monotonic_time(:microsecond)
-  end
-
-  defp checkpoint_timing(_, _, nil), do: :ok
-
-  defp checkpoint_timing(s, stage, started) do
-    elapsed = System.monotonic_time(:microsecond) - started
-
-    IO.puts(
-      "soak_timing #{System.system_time(:millisecond)} #{s.name} #{s.receipt.durable_sequence} #{stage} #{elapsed}"
-    )
-  end
 
   defp uint(s) when is_binary(s) and byte_size(s) in 1..20 do
     case Integer.parse(s) do

@@ -21,7 +21,16 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
       WebSockAdapter.upgrade(
         conn,
         __MODULE__,
-        %{kind: kind, device: device, bind: nil, writer: nil, probe: nil, pending: false},
+        %{
+          kind: kind,
+          device: device,
+          bind: nil,
+          writer: nil,
+          probe: nil,
+          credit: 1,
+          in_flight: 0,
+          flush_timer: nil
+        },
         max_frame_size: 65_584,
         timeout: 65_000
       )
@@ -44,16 +53,32 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
     :invalid -> denied(state)
   end
 
-  def handle_in({raw, [opcode: :binary]}, %{kind: :stream, writer: pid, pending: false} = s)
-      when is_pid(pid) do
+  def handle_in(
+        {raw, [opcode: :binary]},
+        %{kind: :stream, writer: pid, in_flight: in_flight, credit: credit} = s
+      )
+      when is_pid(pid) and in_flight < credit do
     case DeviceIngress.call(pid, {:frame, raw}) do
       {:ok, r} ->
-        send(self(), :checkpoint)
+        accepted = Map.put(J.to_map(r), "transport_sha256", S.hash(raw))
+        next_in_flight = in_flight + 1
 
-        reply("accepted", Map.put(J.to_map(r), "transport_sha256", S.hash(raw)), %{
-          s
-          | pending: true
-        })
+        next_state =
+          if next_in_flight >= credit do
+            s = cancel_flush_timer(s)
+            send(self(), :checkpoint)
+            %{s | in_flight: next_in_flight}
+          else
+            arm_flush_timer(%{s | in_flight: next_in_flight})
+          end
+
+        reply("accepted", accepted, next_state)
+
+      {:durable, r} ->
+        Barrier.hit("durable_before_ack", s.stream)
+        s = cancel_flush_timer(%{s | in_flight: 0})
+        accepted = Map.put(J.to_map(r), "transport_sha256", S.hash(raw))
+        push_many([{"accepted", accepted}, {"durable", J.to_map(r)}], s)
 
       {:capacity, receipt} ->
         stream_finished(receipt, s)
@@ -100,12 +125,14 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
            "profile" => p,
            "boot" => boot,
            "descriptors" => descs
-         },
+         } = msg,
          %{kind: :control, bind: nil} = s
        ) do
     with true <- Enum.all?([id, enc, boot], &identifier?/1),
          true <- valid_descriptors?(p, descs, id, s.device),
          {:ok, b} <- S.reserve(s.device, enc, id, p, boot, descs) do
+      credit = negotiated_credit(msg["max_credit_frames"])
+
       reply(
         "admitted",
         %{
@@ -114,7 +141,7 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
           "acquisition" => id,
           "phase" => b.phase,
           "stream_numbers" => %{"audio" => 1, "ecg" => 2, "monitor" => 3},
-          "credit_frames" => 1
+          "credit_frames" => credit
         },
         %{s | bind: b}
       )
@@ -131,15 +158,25 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
            "lease" => lease,
            "stream" => n,
            "descriptor_ref" => digest
-         },
+         } = msg,
          %{kind: :stream, bind: nil} = s
        ) do
     b = %{id: id, device: s.device, generation: String.to_integer(g), lease: lease}
+    credit = negotiated_credit(msg["credit_frames"])
 
     case DeviceIngress.open(b, n, digest) do
-      {:ok, p, r} -> reply("durable", J.to_map(r), Map.merge(s, %{bind: b, writer: p, stream: n}))
-      {:error, {:sealed, r}} -> stream_finished(r, %{s | bind: b})
-      _ -> denied(s)
+      {:ok, p, r} ->
+        reply(
+          "durable",
+          J.to_map(r),
+          Map.merge(s, %{bind: b, writer: p, stream: n, credit: credit, in_flight: 0})
+        )
+
+      {:error, {:sealed, r}} ->
+        stream_finished(r, %{s | bind: b})
+
+      _ ->
+        denied(s)
     end
   end
 
@@ -169,11 +206,18 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
     end
   end
 
-  defp handle("gap", m, %{kind: :stream, writer: pid, pending: false} = s) when is_pid(pid) do
+  defp handle("gap", m, %{kind: :stream, writer: pid, in_flight: in_flight, credit: credit} = s)
+       when is_pid(pid) and in_flight < credit do
     case DeviceIngress.call(pid, {:gap, m}) do
+      {:durable, r} ->
+        Barrier.hit("durable_before_ack", s.stream)
+        s = cancel_flush_timer(%{s | in_flight: 0})
+        push_many([{"accepted", %{}}, {"durable", J.to_map(r)}], s)
+
       {:ok, _} ->
+        s = cancel_flush_timer(%{s | in_flight: in_flight + 1})
         send(self(), :checkpoint)
-        reply("accepted", %{}, %{s | pending: true})
+        reply("accepted", %{}, s)
 
       {:capacity, receipt} ->
         stream_finished(receipt, s)
@@ -186,7 +230,7 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
   defp handle(
          "finish",
          %{"sequence" => q, "sample" => n} = m,
-         %{kind: :stream, writer: p, pending: false} = s
+         %{kind: :stream, writer: p, in_flight: 0} = s
        )
        when is_pid(p) do
     case DeviceIngress.call(p, {:finish, q, n, m["interruption"]}) do
@@ -335,25 +379,60 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
     S.fact(tx, id, type, body)
   end
 
-  def handle_info(:checkpoint, s) do
+  def handle_info(:flush_batch, %{in_flight: n} = s) when n > 0,
+    do: handle_info(:checkpoint, %{s | flush_timer: nil})
+
+  def handle_info(:flush_batch, s), do: {:ok, %{s | flush_timer: nil}}
+
+  def handle_info(:checkpoint, %{writer: pid, in_flight: n} = s) when is_pid(pid) and n > 0 do
+    s = cancel_flush_timer(s)
     Barrier.hit("accepted_before_durable", s.stream)
 
-    case DeviceIngress.call(s.writer, :checkpoint) do
+    case DeviceIngress.call(pid, :checkpoint) do
       {:ok, r} ->
         Barrier.hit("durable_before_ack", s.stream)
-        reply("durable", J.to_map(r), %{s | pending: false})
+        reply("durable", J.to_map(r), %{s | in_flight: 0})
 
       _ ->
         denied(s)
     end
   end
 
+  def handle_info(:checkpoint, s), do: {:ok, s}
+
   def handle_info(_, s), do: {:ok, s}
   def terminate(_, %{kind: :control, bind: b}) when is_map(b), do: S.disconnected(b)
   def terminate(_, _), do: :ok
 
-  defp stream_finished(receipt, s),
-    do: reply("stream_finished", J.to_map(receipt), %{s | writer: nil, pending: false})
+  defp stream_finished(receipt, s) do
+    s = cancel_flush_timer(s)
+    reply("stream_finished", J.to_map(receipt), %{s | writer: nil, in_flight: 0})
+  end
+
+  defp negotiated_credit(v) when is_integer(v) and v in 1..15, do: v
+  defp negotiated_credit(v) when is_integer(v) and v > 15, do: 15
+  defp negotiated_credit(_), do: 1
+
+  defp arm_flush_timer(%{flush_timer: nil} = s),
+    do: %{s | flush_timer: Process.send_after(self(), :flush_batch, 250)}
+
+  defp arm_flush_timer(s), do: s
+
+  defp cancel_flush_timer(%{flush_timer: nil} = s), do: s
+
+  defp cancel_flush_timer(%{flush_timer: timer} = s) do
+    Process.cancel_timer(timer)
+    %{s | flush_timer: nil}
+  end
+
+  defp push_many(messages, s) do
+    frames =
+      Enum.map(messages, fn {t, data} ->
+        {:text, Jason.encode!(Map.merge(data, %{"schema" => "medex.device.v1", "type" => t}))}
+      end)
+
+    {:push, frames, s}
+  end
 
   defp reply(t, data, s),
     do:

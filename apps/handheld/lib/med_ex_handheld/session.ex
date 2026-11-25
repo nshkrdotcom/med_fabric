@@ -164,7 +164,11 @@ defmodule MedExHandheld.Session do
 
   defp hello(c, sources) do
     desc = Map.new(sources, fn {n, {_, spec}} -> {n, J.to_map(spec)} end)
-    Map.merge(Map.take(c, ~w(acquisition encounter profile boot)), %{"descriptors" => desc})
+
+    Map.merge(Map.take(c, ~w(acquisition encounter profile boot)), %{
+      "descriptors" => desc,
+      "max_credit_frames" => c["max_credit_frames"] || 15
+    })
   end
 
   defp initial_admission!(c, sources) do
@@ -172,7 +176,8 @@ defmodule MedExHandheld.Session do
       {:ok, s} ->
         try do
           case Transport.request(s, "hello", hello(c, sources)) do
-            {:ok, %{"type" => "admitted", "phase" => "capturing", "credit_frames" => 1}} ->
+            {:ok, %{"type" => "admitted", "phase" => "capturing", "credit_frames" => credit}}
+            when is_integer(credit) and credit in 1..16 ->
               :ok
 
             {:error, :denied} ->
@@ -198,7 +203,7 @@ defmodule MedExHandheld.Session do
             {:ok, %{"type" => "admitted"} = admit} =
               Transport.request(s, "hello", hello(c, sources))
 
-            bind = Map.take(admit, ~w(lease acquisition generation))
+            bind = Map.take(admit, ~w(lease acquisition generation credit_frames))
 
             result =
               cond do

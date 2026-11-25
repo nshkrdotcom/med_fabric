@@ -72,10 +72,15 @@ defmodule MedExHandheld.Transport do
 
         Control.decode(bytes, types)
 
+      {:error, :timeout} ->
+        {:error, :timeout}
+
       other ->
         {:error, {:transport, other}}
     end
   end
+
+  def recv_nowait(s), do: recv(s, 0)
 
   def request(s, type, body \\ %{}) do
     with :ok <- send_json(s, type, body), do: recv(s)
