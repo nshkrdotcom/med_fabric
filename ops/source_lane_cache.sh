@@ -15,11 +15,19 @@ open_lane_cache() {
   [[ ${MF_SOURCE_QC_CACHE:?Set MF_SOURCE_QC_CACHE to an absolute private directory.} == /* ]]
   [[ ! -L "$MF_SOURCE_QC_CACHE" ]]
   cache=$(realpath -m -- "$MF_SOURCE_QC_CACHE")
-  if mkdir -- "$cache" 2>/dev/null; then
+  mkdir -- "$cache" 2>/dev/null || [[ -d "$cache" ]]
+  [[ -O "$cache" && ! -L "$cache" && $(stat -c %a "$cache") == 700 ]]
+  local setup_lock
+  exec {setup_lock}<"$cache"
+  flock "$setup_lock"
+  if [[ ! -e "$cache/.owner" && ! -L "$cache/.owner" ]]; then
+    [[ -z $(find "$cache" -mindepth 1 -maxdepth 1 -print -quit) ]] ||
+      { echo "Refusing to initialize a nonempty unmarked source lane cache." >&2; return 1; }
     printf 'med-fabric-source-lanes/v1\n' > "$cache/.owner"
   fi
-  [[ -O "$cache" && ! -L "$cache/.owner" && $(stat -c %a "$cache") == 700 ]]
+  [[ -f "$cache/.owner" && ! -L "$cache/.owner" ]]
   [[ $(cat "$cache/.owner") == med-fabric-source-lanes/v1 ]]
+  exec {setup_lock}<&-
 }
 
 lock_lane() {
