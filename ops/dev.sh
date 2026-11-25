@@ -147,8 +147,8 @@ cmd_handheld() {
   fi
 
   (cd "$repo_root" && elixir ops/handheld_demo.exs relay --run-dir "$lab") &
-  local relay_pid=$!
-  trap 'kill "$relay_pid" 2>/dev/null || true; wait "$relay_pid" 2>/dev/null || true' EXIT INT TERM
+  RELAY_PID=$!
+  trap 'kill "${RELAY_PID:-}" 2>/dev/null || true; wait "${RELAY_PID:-}" 2>/dev/null || true' EXIT INT TERM
   sleep 1
 
   cd "$repo_root/apps/handheld"
