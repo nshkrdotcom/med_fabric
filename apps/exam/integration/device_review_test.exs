@@ -340,7 +340,36 @@ defmodule MedFabric.Exam.DeviceReviewTest do
       assert {:error, {:sealed, ^receipt}} = DeviceIngress.open(bind, name, digest)
     end
 
-    assert {:ok, digest} = MedFabric.Exam.DeviceManifest.finish(bind, %{})
+    assert {:ok, :ok} = MedFabric.Store.DeviceCommands.request(c.enc, id, c.actor, "half")
+    assert :ok = MedFabric.Exam.DeviceWorkflow.stop(c.enc, id, c.actor)
+
+    manifest_module = MedFabric.Exam.DeviceManifest
+    # Force promotion to roll back after the staging row and file are installed.
+    S.rows(c.db, "UPDATE acquisitions SET state='interrupted' WHERE id=$1", [id])
+    assert {:error, :completion_conflict} = manifest_module.finish(bind, %{})
+
+    [[digest]] =
+      S.rows(c.db, "SELECT digest FROM device_manifest_staging WHERE acquisition_id=$1", [id])
+
+    S.rows(c.db, "UPDATE acquisitions SET state='recording' WHERE id=$1", [id])
+
+    [[fence]] =
+      S.rows(
+        c.db,
+        "SELECT fence FROM stream_attempts WHERE acquisition_id=$1 AND stream='ecg'",
+        [id]
+      )
+
+    [chunk] = Path.wildcard(Path.join(manifest_module.attempt_dir(id, "ecg", fence), "*.pcm"))
+    original = File.read!(chunk)
+    File.write!(chunk, "corrupt")
+    assert :ok = manifest_module.recover()
+    assert [] = S.rows(c.db, "SELECT digest FROM device_manifests WHERE acquisition_id=$1", [id])
+    assert {:error, :unverified_stream} = manifest_module.finish(bind, %{})
+    assert [] = S.rows(c.db, "SELECT digest FROM device_manifests WHERE acquisition_id=$1", [id])
+    File.write!(chunk, original)
+    assert {:ok, ^digest} = manifest_module.finish(bind, %{})
+
     hash = S.hash(<<0, 0>>)
     workflow = MedFabric.Exam.DeviceWorkflow
 
@@ -397,7 +426,10 @@ defmodule MedFabric.Exam.DeviceReviewTest do
     assert %{status: 404} = request.(other_path, c.actor, "clinician", secret)
 
     manifest = Path.join(MedFabric.Exam.DeviceManifest.root(id), "manifest.mej1")
-    defects = manifest |> File.read!() |> JSON.decode!() |> Map.fetch!("defects")
+    body = manifest |> File.read!() |> JSON.decode!()
+    assert Enum.any?(body["facts"], &(&1["type"] == "command_cancelled_before_dispatch"))
+    assert Enum.any?(body["facts"], &(&1["type"] == "operator_stop"))
+    defects = Map.fetch!(body, "defects")
 
     range = fn stream, first, ending ->
       %{"stream" => stream, "first" => first, "end" => ending}

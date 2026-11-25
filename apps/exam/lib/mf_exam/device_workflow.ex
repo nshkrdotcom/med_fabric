@@ -169,7 +169,7 @@ defmodule MedFabric.Exam.DeviceWorkflow do
   def stop(enc, id, actor) do
     case S.rows(
            Postgres,
-           "INSERT INTO device_facts(acquisition_id,kind,fact) SELECT s.id,'operator_stop',jsonb_build_object('actor',$3::text) FROM device_sessions s JOIN encounters e ON e.id=s.encounter_id WHERE s.id=$1 AND e.id=$2 AND e.clinician_actor=$3 AND e.closed_at IS NULL AND s.phase='capturing' RETURNING ordinal",
+           "INSERT INTO device_facts(acquisition_id,kind,fact) SELECT s.id,'operator_stop',jsonb_build_object('actor',$3::text) FROM device_sessions s JOIN encounters e ON e.id=s.encounter_id WHERE s.id=$1 AND e.id=$2 AND e.clinician_actor=$3 AND e.closed_at IS NULL AND s.phase='capturing' FOR SHARE OF s,e RETURNING ordinal",
            [id, enc, actor]
          ) do
       [[_]] -> :ok
