@@ -2,7 +2,7 @@ root = Path.expand("..", __DIR__)
 version = root |> Path.join("apps/exam/VERSION") |> File.read!() |> String.trim()
 source_url = "https://github.com/nshkrdotcom/med_fabric"
 exam_docs = ~w(
-  apps/exam/README.md apps/exam/LICENSE apps/exam/CHANGELOG.md
+  apps/exam/LICENSE apps/exam/CHANGELOG.md
   apps/exam/guides/getting_started.md apps/exam/guides/browser_to_record.md
   apps/exam/guides/handheld_integration.md apps/exam/guides/architecture.md
 )
@@ -12,6 +12,7 @@ exam_docs = ~w(
   artifacts: [
     mf_exam: [
       mode: :monolith,
+      monolith_opts: [readme: "apps/exam/README.md"],
       roots: ["apps/exam"],
       structural_inputs: ["apps/exam/VERSION"],
       package: [
@@ -28,7 +29,7 @@ exam_docs = ~w(
           logo: "apps/exam/assets/exam.svg",
           assets: %{"apps/exam/assets" => "assets"},
           source_url: source_url,
-          source_ref: "mf_exam-v#{version}",
+          source_ref: "mf_exam-v#{version}-readme",
           mermaid: true
         ]
       ],

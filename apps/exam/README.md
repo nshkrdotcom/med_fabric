@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/exam.svg" alt="Med Fabric Exam logo" width="200" />
+  <img src="https://raw.githubusercontent.com/nshkrdotcom/med_fabric/main/apps/exam/assets/exam.svg" alt="Med Fabric Exam logo" width="200" />
 </p>
 
 <h1 align="center">Med Fabric Exam</h1>
@@ -48,13 +48,13 @@ and outbox storage, and the base `med_ex ~> 0.2.0` SDK.
 
 ## Guides
 
-- [Getting Started](guides/getting_started.md) — Prerequisites, configuration,
+- [Getting Started](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/guides/getting_started.md) — Prerequisites, configuration,
   and Mix release startup.
-- [Browser to Record](guides/browser_to_record.md) — Two-way talkback, lossless
+- [Browser to Record](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/guides/browser_to_record.md) — Two-way talkback, lossless
   WAV capture, review, and FHIR R4 export.
-- [Handheld Integration](guides/handheld_integration.md) — Device admission,
+- [Handheld Integration](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/guides/handheld_integration.md) — Device admission,
   TLS replay, and spot-check review.
-- [Architecture](guides/architecture.md) — Domain, store, interop, and web
+- [Architecture](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/guides/architecture.md) — Domain, store, interop, and web
   boundaries.
 
 ## Optional Legacy Media Profile
@@ -66,4 +66,4 @@ its own isolated Mix context.
 
 ## License
 
-Released under the [MIT License](LICENSE).
+Released under the [MIT License](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/LICENSE).
