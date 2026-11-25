@@ -10,6 +10,7 @@ defmodule MedFabric.BuildSourcesTest do
   alias MedFabric.BuildSources, as: Sources
 
   @env ~w(MF_MED_EX_PATH MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE
+           CFLAGS CC
            HEX_HOME HEX_MIRROR_URL HEX_TRUSTED_MIRROR_URL MIX_XDG XDG_CONFIG_HOME XDG_DATA_HOME)
   @defaults [
     {:med_ex, "~> 0.2.0", override: true, runtime: true},
@@ -147,7 +148,23 @@ defmodule MedFabric.BuildSourcesTest do
     marker = Path.join(sdk, "weld.provenance.json")
     select(c, %{"med_ex" => %{"path" => "sdk"}})
     File.write!(marker, JSON.encode!(%{"kind" => "full", "artifact_id" => "first"}))
+
+    lock = Path.join(sdk, "projection.lock.json")
+
+    File.write!(
+      lock,
+      JSON.encode!(%{"projection" => %{"verification_files" => ["mix.exs", "asset.js"]}})
+    )
+
+    asset = Path.join(sdk, "asset.js")
+    File.write!(asset, "old")
     {_, first} = Sources.resolve(@defaults, c.project, c.root)
+    # Same bytes count, timestamp and provenance still require a new build root.
+    mtime = File.stat!(asset).mtime
+    File.write!(asset, "new")
+    File.touch!(asset, mtime)
+    assert first != elem(Sources.resolve(@defaults, c.project, c.root), 1)
+
     File.write!(marker, JSON.encode!(%{"kind" => "full", "artifact_id" => "second"}))
     {_, second} = Sources.resolve(@defaults, c.project, c.root)
     assert first != second
@@ -158,6 +175,43 @@ defmodule MedFabric.BuildSourcesTest do
     {_, live} = Sources.resolve(@defaults, c.project, c.root)
     File.write!(Path.join(sdk, "lib.ex"), "defmodule ChangedSource do end\n")
     assert live == elem(Sources.resolve(@defaults, c.project, c.root), 1)
+  end
+
+  test "mutable paths preserve ordinary source compiles and isolate dependency or ABI changes",
+       c do
+    sdk = make_project(c.root, "sdk")
+    select(c, %{"med_ex" => %{"path" => "sdk"}})
+    {_, first} = Sources.resolve(@defaults, c.project, c.root)
+    File.write!(Path.join(sdk, "library.ex"), "defmodule Changed do end")
+    assert first == elem(Sources.resolve(@defaults, c.project, c.root), 1)
+
+    File.write!(Path.join(sdk, "mix.lock"), "%{new: :dependency}
+")
+    {_, graph} = Sources.resolve(@defaults, c.project, c.root)
+    assert graph != first
+
+    System.put_env("CFLAGS", "-DFABRIC_TEST_ABI=1")
+    assert graph != elem(Sources.resolve(@defaults, c.project, c.root), 1)
+  end
+
+  test "frozen inventory prevents path escape or mutable symlinks from seeding builds", c do
+    sdk = make_project(c.root, "sdk")
+    select(c, %{"med_ex" => %{"path" => "sdk"}})
+    File.write!(Path.join(sdk, "weld.provenance.json"), ~s({"kind":"full","artifact_id":"id"}))
+    lock = Path.join(sdk, "projection.lock.json")
+
+    for file <- ["../secret", "link/file"] do
+      if file == "link/file" do
+        File.write!(Path.join(c.root, "file"), "outside")
+        File.ln_s!(c.root, Path.join(sdk, "link"))
+      end
+
+      File.write!(lock, JSON.encode!(%{"projection" => %{"verification_files" => [file]}}))
+
+      assert_raise Mix.Error, ~r/Invalid frozen projection input/, fn ->
+        Sources.resolve(@defaults, c.project, c.root)
+      end
+    end
   end
 
   test "recognized inactive provider selections never activate optional media dependencies", c do

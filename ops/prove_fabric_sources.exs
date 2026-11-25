@@ -56,11 +56,19 @@ end
 config = Mix.Project.config()
 mutable = Keyword.take(config, [:lockfile, :deps_path, :build_path])
 
-unless length(mutable) == 3 and
-         Enum.all?(mutable, fn {_, p} -> String.contains?(p, "/source_contexts/") end),
-       do: raise("Actual app has shared mutable state")
+if System.get_env("MF_SOURCE_QC_EXPECT_DEFAULT") == "1" and profile != "legacy-exam" do
+  unless mutable == [], do: raise("Default app changed its ordinary Mix paths")
+else
+  unless length(mutable) == 3 and
+           Enum.all?(mutable, fn {_, p} -> String.contains?(p, "/source_contexts/") end),
+         do: raise("Actual app has shared mutable state")
+end
 
-{lock, []} = Code.eval_file(Keyword.fetch!(mutable, :lockfile))
+lock = Mix.Dep.Lock.read()
+
+if profile == "legacy-exam" do
+  {:git, _, "05191dbe8061b49a170352f3c35c21360bdbb328", _} = Map.fetch!(lock, :ratio)
+end
 
 for {app, requirement, source} <- config[:deps], app in [:med_ex, :med_ex_opus, :med_ex_rtc] do
   cond do
@@ -78,8 +86,11 @@ for {app, requirement, source} <- config[:deps], app in [:med_ex, :med_ex_opus, 
     source[:git] || source[:github] ->
       {:git, _, revision, options} = Map.fetch!(lock, app)
 
-      unless revision == source[:ref] and options[:subdir] == source[:subdir],
-        do: raise("Wrong Git resolution for #{app}")
+      {actual, 0} = System.cmd("git", ["-C", Map.fetch!(paths, app), "rev-parse", "HEAD"])
+
+      unless revision == source[:ref] and options[:subdir] == source[:subdir] and
+               String.trim(actual) == revision,
+             do: raise("Wrong Git resolution for #{app}")
   end
 end
 

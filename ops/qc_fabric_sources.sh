@@ -2,12 +2,41 @@
 # Resolve and compile the actual app projects, not substitutes. Work on a
 # disposable source-only copy, leaving original selectors and locks untouched.
 set -euo pipefail
-repo=$(cd "$(dirname "$0")/.." && pwd)
+repo=$(cd "$(dirname "$0")/.." && pwd -P)
+source "$repo/ops/source_lane_cache.sh"
+if [[ ${1:-} == --help ]]; then
+  printf '%s\n' 'Usage: MED_EX_SOURCE=JSON [MF_SOURCE_QC_CACHE=/private/root] ops/qc_fabric_sources.sh [--no-cache]'
+  printf '%s\n' '       MF_SOURCE_QC_CACHE=/private/root ops/qc_fabric_sources.sh --prune SHA256'
+  exit 0
+fi
+if [[ ${1:-} == --prune && $# == 2 ]]; then prune_lane "$2"; exit 0; fi
+if [[ ${1:-} == --no-cache ]]; then unset MF_SOURCE_QC_CACHE; shift; fi
+[[ $# == 0 ]]
 : "${MED_EX_SOURCE:?Supply an absolute-path, pinned Git, or versioned Hex family object}"
 command -v mix >/dev/null || { echo 'Elixir 1.20 and Mix are required.' >&2; exit 127; }
 command -v elixir >/dev/null
+umask 077
 scratch=$(mktemp -d)
-trap 'rm -rf -- "$scratch"' EXIT
+persistent=false
+cleanup() {
+  local rc=$?
+  trap - EXIT
+  rm -f -- "$scratch/.mix_sources.json"
+  if "$persistent"; then
+    if ((rc == 0)); then
+      local receipt
+      receipt=$(mktemp "$cache/.receipt.XXXXXXXX")
+      lane_digest "$scratch" > "$receipt"
+      mv -T -- "$receipt" "$scratch/.lane-receipt"
+    fi
+  else
+    rm -rf -- "$scratch"
+  fi
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
 unset MF_MED_EX_PATH MF_EXAM_LEGACY_MEDIA MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE MIX_EXS
 export MIX_ENV=test
 # Do not copy runtime state or ignored selectors/credentials from the real apps.
@@ -27,14 +56,16 @@ cp "$repo/config/sources.exs" "$scratch/config/"
 cp "$repo/VERSION" "$scratch/"
 # The root is not a dependency, but retain its baseline lock for the audit.
 cp "$repo/mix.lock" "$scratch/"
-(cd "$scratch" && find . -name mix.lock -type f -print0 | sort -z | xargs -0 sha256sum) > "$scratch/baseline-locks"
+if [[ -n ${MF_SOURCE_QC_CACHE:-} ]]; then reuse_lane; fi
+(cd "$scratch" && sha256sum mix.lock {core,apps}/*/mix.lock) > "$scratch/baseline-locks"
 probe() {
   local project=$1
   (cd "$scratch/$project" && elixir -e '
     Mix.start()
     Mix.Project.in_project(:source_qc_probe, ".", [], fn _ ->
       config = Mix.Project.config()
-      IO.inspect({config[:app], config[:deps], Keyword.take(config, [:lockfile, :deps_path, :build_path])}, limit: :infinity)
+      apps = Enum.map(config[:deps], &elem(&1, 0))
+      IO.inspect({config[:app], apps, Keyword.take(config, [:lockfile, :deps_path, :build_path])}, limit: :infinity)
     end)')
 }
 for app in exam handheld preview; do probe "apps/$app" > "$scratch/$app-before"; done

@@ -9,6 +9,10 @@ defmodule MedFabric.BuildSources do
   @git_keys [:github, :git, :ref, :subdir]
   @scm @git_keys ++ ~w(branch tag path in_umbrella sparse submodules depth hex repo organization)a
   @mix_paths ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE)
+  @native_env ~w(CC CXX CPPFLAGS CFLAGS CXXFLAGS LDFLAGS ERL_COMPILER_OPTIONS
+                 MAKEFLAGS MIX_REBAR3 CMAKE_TOOLCHAIN_FILE PKG_CONFIG_PATH)
+  @trust_env ~w(HEX_UNSAFE_HTTPS HEX_UNSAFE_REGISTRY HEX_NO_VERIFY_REPO_ORIGIN
+                HEX_CACERTS_PATH)
 
   def med_ex_dependency(app) when app in @med_ex_apps do
     git = [github: "nshkrdotcom/med_ex", ref: @med_ex_revision]
@@ -107,8 +111,17 @@ defmodule MedFabric.BuildSources do
         {app, requirement, Enum.sort(options)}
       end)
 
-    frozen =
-      for {app, options} <- active, identity = artifact_identity(app, options), do: identity
+    paths =
+      normalized
+      |> Enum.flat_map(fn {app, _requirement, options} ->
+        if path = options[:path], do: [{app, path}], else: []
+      end)
+      |> Kernel.++(for {app, options} <- active, path = options[:path], do: {app, path})
+      |> Enum.map(fn {app, path} -> {app, Path.expand(path, project)} end)
+      |> Enum.uniq()
+
+    graph = Enum.map(paths, fn {app, path} -> {app, dependency_inputs(path)} end)
+    frozen = Enum.map(paths, fn {app, path} -> {app, artifact_identity(path)} end)
 
     lock = Path.join(project, "mix.lock")
     lock_digest = if File.regular?(lock), do: lock |> File.read!() |> digest(), else: nil
@@ -122,12 +135,16 @@ defmodule MedFabric.BuildSources do
       end
 
     # Every isolated context can have transitive registry dependencies.
-    hex = hex_context()
+    hex = registry_identity()
 
-    identity =
-      {3, project, profile, normalized, Enum.sort(active), Enum.sort(frozen), hex, lock_digest,
-       System.version(), otp_version, :erlang.system_info(:system_architecture), Mix.env(),
-       Mix.target()}
+    # Resolver inputs can stay stable across a materialization-only asset or source change.
+    resolution =
+      {project, profile, normalized, Enum.sort(active), Enum.sort(graph), hex, lock_digest,
+       System.version(), otp_version, Mix.env(), Mix.target()}
+
+    # Each mutable Mix context remains private. The verified Hex download cache is
+    # outside this tree. In particular, native objects are never copied across paths.
+    identity = {4, resolution, Enum.sort(frozen), build_identity()}
 
     context = digest(:erlang.term_to_binary(identity))
     root = Path.join([project, "_build", "source_contexts", context])
@@ -139,7 +156,29 @@ defmodule MedFabric.BuildSources do
     ]
   end
 
-  defp hex_context do
+  @doc false
+  def build_identity do
+    otp_file =
+      Path.join([
+        to_string(:code.root_dir()),
+        "releases",
+        to_string(:erlang.system_info(:otp_release)),
+        "OTP_VERSION"
+      ])
+
+    digest(
+      :erlang.term_to_binary({
+        System.version(),
+        optional_digest(otp_file),
+        :erlang.system_info(:system_architecture),
+        optional_digest("/etc/os-release"),
+        Enum.map(@native_env, &System.get_env/1)
+      })
+    )
+  end
+
+  @doc false
+  def registry_identity do
     home = System.get_env("HEX_HOME", Path.join(System.user_home!(), ".hex")) |> Path.expand()
 
     mirrors =
@@ -155,8 +194,17 @@ defmodule MedFabric.BuildSources do
     configs = [Path.join(home, "hex.config"), Path.join([xdg, "hex", "hex.config"])]
     registries = Enum.map(Enum.uniq(configs), &registry_identity!/1)
 
-    {home, System.get_env("MIX_XDG"), System.get_env("XDG_CONFIG_HOME"),
-     System.get_env("XDG_DATA_HOME"), mirrors, registries}
+    digest(
+      :erlang.term_to_binary({
+        home,
+        System.get_env("MIX_XDG"),
+        System.get_env("XDG_CONFIG_HOME"),
+        System.get_env("XDG_DATA_HOME"),
+        mirrors,
+        registries,
+        Enum.map(@trust_env, &System.get_env/1)
+      })
+    )
   end
 
   defp safe_url(nil), do: nil
@@ -343,17 +391,107 @@ defmodule MedFabric.BuildSources do
       do: Mix.raise("Unknown/conflicting source option")
   end
 
-  defp artifact_identity(app, options) do
-    if path = options[:path] do
-      marker = Path.join(path, "weld.provenance.json")
+  defp dependency_inputs(path) do
+    # Mix handles ordinary source and asset edits incrementally. A dependency
+    # project, lock or composition edit may change the entire resolved graph.
+    paths =
+      (~w(mix.exs mix.lock VERSION build_support/composition.exs) ++
+         Path.wildcard(Path.join(path, "core/*/{mix.exs,mix.lock}")))
+      |> Enum.map(&Path.expand(&1, path))
+      |> Enum.uniq()
+      |> Enum.sort()
 
-      if File.regular?(marker) do
-        case read_object!(File.read!(marker), marker) do
-          %{"kind" => "full", "artifact_id" => id} when is_binary(id) and id != "" -> {app, id}
-          %{"kind" => "live"} -> nil
-          _ -> Mix.raise("Invalid projection identity at #{marker}")
-        end
+    Enum.map(paths, &{Path.relative_to(&1, path), optional_digest(&1)})
+  end
+
+  defp artifact_identity(path) do
+    marker = Path.join(path, "weld.provenance.json")
+
+    if File.regular?(marker) do
+      case read_object!(File.read!(marker), marker) do
+        %{"kind" => "full", "artifact_id" => id} when is_binary(id) and id != "" ->
+          lock = Path.join(path, "projection.lock.json")
+
+          files =
+            case read_object!(File.read!(lock), lock) do
+              %{"projection" => %{"verification_files" => files}} when is_list(files) -> files
+              _ -> Mix.raise("Invalid frozen projection inventory at #{lock}")
+            end
+
+          # Freeze actual inputs, including additions to compiler/asset inputs
+          # that are absent from a stale marker. Avoid docs and Mix build output
+          # outside the advertised inventory.
+          extra =
+            Enum.flat_map(
+              ~w(lib src priv components config build_support),
+              &frozen_files(path, &1)
+            )
+
+          inventory =
+            (files ++ extra ++ ~w(weld.provenance.json projection.lock.json mix.exs))
+            |> Enum.uniq()
+            |> Enum.sort()
+            |> Enum.map(&frozen_input!(path, &1))
+
+          {id, digest(:erlang.term_to_binary(inventory))}
+
+        %{"kind" => "live"} ->
+          nil
+
+        _ ->
+          Mix.raise("Invalid projection identity at #{marker}")
       end
+    end
+  end
+
+  defp frozen_files(root, relative) do
+    path = Path.join(root, relative)
+
+    case File.lstat(path) do
+      {:ok, %{type: :directory}} ->
+        path
+        |> File.ls!()
+        |> Enum.reject(&(&1 in ["_build", "deps", "tmp"]))
+        |> Enum.flat_map(&frozen_files(root, Path.join(relative, &1)))
+
+      {:error, :enoent} ->
+        []
+
+      _ ->
+        [relative]
+    end
+  end
+
+  defp frozen_input!(root, relative) do
+    invalid = fn -> Mix.raise("Invalid frozen projection input at #{root}") end
+    unless is_binary(relative) and Path.type(relative) == :relative, do: invalid.()
+    segments = String.split(relative, "/")
+    if Enum.any?(segments, &(&1 in ["", ".", ".."])), do: invalid.()
+
+    path =
+      Enum.reduce(segments, root, fn segment, parent ->
+        child = Path.join(parent, segment)
+
+        case File.lstat(child) do
+          {:ok, %{type: type}} when type in [:directory, :regular] -> child
+          _ -> invalid.()
+        end
+      end)
+
+    case File.lstat!(path) do
+      %{type: :regular, mode: mode} ->
+        {relative, Bitwise.band(mode, 0o111), digest(File.read!(path))}
+
+      _ ->
+        invalid.()
+    end
+  end
+
+  defp optional_digest(path) do
+    case File.read(path) do
+      {:ok, bytes} -> digest(bytes)
+      {:error, :enoent} -> nil
+      {:error, reason} -> Mix.raise("Cannot read build input #{path}: #{reason}")
     end
   end
 
