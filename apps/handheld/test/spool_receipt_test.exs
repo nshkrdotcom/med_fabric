@@ -186,6 +186,97 @@ defmodule MedExHandheld.SpoolReceiptTest do
     assert Paired.cursor(config, "audio")["sample"] == 1
   end
 
+  @tag :tmp_dir
+  test "restart recovery advances past reclaimed prefix using validated receipt and recovers gap plus frame tail",
+       %{tmp_dir: dir} do
+    pid = start_spool(dir, :before_reclaimed_restart)
+    assert :ok = Spool.put_and_advance(pid, "audio", 0, frame(0, 0), 1, 1)
+    assert :ok = Spool.put_and_advance(pid, "audio", 1, frame(1, 1), 2, 2)
+    assert :ok = Spool.activate(pid, "audio", 1, spec(), receipt(0, 1))
+    assert :ok = Spool.ack(pid, "audio", 1, receipt(2, 2))
+    assert :absent = Spool.get(pid, "audio", 0)
+    assert :absent = Spool.get(pid, "audio", 1)
+
+    # source.json was never written (stale at 0/0), while 0..1 were reclaimed.
+    refute File.exists?(Path.join([dir, "audio", "source.json"]))
+
+    # Producer writes a multi-sequence gap [2..4) samples [2..5) and then frame 4 at sample 5.
+    gap =
+      JSON.encode!(%{
+        "id" => "gap-2",
+        "irreversible" => true,
+        "first" => "2",
+        "end" => "5",
+        "first_sequence" => "2",
+        "next_sequence" => "4"
+      })
+
+    assert :ok = Spool.put_and_advance(pid, "audio", 2, gap, 4, 5)
+    assert :ok = Spool.put_and_advance(pid, "audio", 4, frame(4, 5), 5, 6)
+    kill_spool(pid)
+
+    pid = start_spool(dir, :after_reclaimed_restart)
+
+    source =
+      Map.merge(spec(), %{
+        encoding: :s16le,
+        channels: [%{id: "one"}],
+        capabilities: %{max_frame_samples: 960}
+      })
+
+    config = %{"spool" => dir}
+    assert :ok = Paired.interrupt_after_restart(config, pid, "audio", source)
+
+    assert Spool.watermark(pid, "audio") == %{
+             "sequence" => 5,
+             "sample" => 6,
+             "done" => true,
+             "interruption" => "source_reset"
+           }
+
+    assert Paired.cursor(config, "audio") == Spool.watermark(pid, "audio")
+  end
+
+  @tag :tmp_dir
+  test "restart recovery fails closed on foreign receipt identity", %{tmp_dir: dir} do
+    pid = start_spool(dir, :foreign_receipt_restart)
+    foreign = Map.put(receipt(2, 2), "descriptor_ref", String.duplicate("f", 64))
+    {:ok, parsed} = MedEx.Serialization.receipt(foreign)
+
+    Spool.write!(
+      Path.join([dir, "audio", "receipt.json"]),
+      parsed |> MedEx.Serialization.to_map() |> JSON.encode!()
+    )
+
+    source =
+      Map.merge(spec(), %{
+        encoding: :s16le,
+        channels: [%{id: "one"}],
+        capabilities: %{max_frame_samples: 960}
+      })
+
+    assert_raise RuntimeError, "invalid persisted receipt", fn ->
+      Paired.interrupt_after_restart(%{"spool" => dir}, pid, "audio", source)
+    end
+  end
+
+  @tag :tmp_dir
+  test "sequence-range ack reclaims only covered prefix under backlog", %{tmp_dir: dir} do
+    pid = start_supervised!({Spool, root: dir, limit: 1_048_576})
+
+    for q <- 0..199 do
+      assert :ok = Spool.put_and_advance(pid, "audio", q, frame(q, q), q + 1, q + 1)
+    end
+
+    assert :ok = Spool.activate(pid, "audio", 1, spec(), receipt(0, 1))
+    assert :ok = Spool.ack(pid, "audio", 1, receipt(0, 1))
+    assert :ok = Spool.ack(pid, "audio", 1, receipt(15, 2))
+    assert :absent = Spool.get(pid, "audio", 0)
+    assert :absent = Spool.get(pid, "audio", 14)
+    assert {:ok, _} = Spool.get(pid, "audio", 15)
+    assert {:ok, _} = Spool.get(pid, "audio", 199)
+  end
+
   defp start_spool(dir, id) do
     start_supervised!(
       Supervisor.child_spec({Spool, root: dir, limit: 4096}, id: id, restart: :temporary)

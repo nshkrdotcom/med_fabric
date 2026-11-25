@@ -15,7 +15,16 @@ defmodule MedExHandheld.Spool do
     for f <- names, do: read_record!(f)
 
     {:ok,
-     %{root: root, bytes: size, maximum: size, limit: opts[:limit], active: %{}, owner: owner}}
+     %{
+       root: root,
+       bytes: size,
+       maximum: size,
+       limit: opts[:limit],
+       active: %{},
+       watermarks: %{},
+       needs_sweep: %{"audio" => true, "ecg" => true},
+       owner: owner
+     }}
   end
 
   defp lock!(root) do
@@ -69,6 +78,22 @@ defmodule MedExHandheld.Spool do
   def handle_info({port, {:exit_status, _}}, %{owner: port} = s), do: {:stop, :spool_lock_lost, s}
 
   def put(p, stream, seq, bytes), do: GenServer.call(p, {:put, stream, seq, bytes}, 30_000)
+
+  def put_and_advance(p, stream, seq, bytes, next_seq, next_sample),
+    do:
+      GenServer.call(
+        p,
+        {:put_and_advance, stream, seq, bytes, next_seq, next_sample},
+        30_000
+      )
+
+  def watermark(p, stream), do: GenServer.call(p, {:watermark, stream})
+
+  def persist_watermark(p, stream), do: GenServer.call(p, {:persist_watermark, stream}, 30_000)
+
+  def finish_source(p, stream, seq, sample, interruption),
+    do: GenServer.call(p, {:finish_source, stream, seq, sample, interruption}, 30_000)
+
   def get(p, stream, seq), do: GenServer.call(p, {:get, stream, seq})
 
   def activate(p, stream, gen, spec, receipt),
@@ -78,20 +103,41 @@ defmodule MedExHandheld.Spool do
   def stats(p), do: GenServer.call(p, :stats)
 
   def handle_call({:put, name, seq, bytes}, _, s) do
-    f = record(s, name, seq)
-    total = s.bytes + byte_size(bytes) + 32
-
-    cond do
-      File.exists?(f) ->
-        {:reply, if(read_record!(f) == bytes, do: :ok, else: {:error, :spool_conflict}), s}
-
-      total > s.limit ->
-        {:reply, {:error, :spool_full}, s}
-
-      true ->
-        write!(f, :crypto.hash(:sha256, bytes) <> bytes)
-        {:reply, :ok, %{s | bytes: total, maximum: max(s.maximum, total)}}
+    case put_record(s, name, seq, bytes) do
+      {:ok, next} -> {:reply, :ok, next}
+      {:error, reason} -> {:reply, {:error, reason}, s}
     end
+  end
+
+  def handle_call({:put_and_advance, name, seq, bytes, next_seq, next_sample}, _, s) do
+    case put_record(s, name, seq, bytes) do
+      {:ok, next} ->
+        mark = %{"sequence" => next_seq, "sample" => next_sample, "done" => false}
+        {:reply, :ok, %{next | watermarks: Map.put(next.watermarks, name, mark)}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, s}
+    end
+  end
+
+  def handle_call({:watermark, name}, _, s), do: {:reply, current_watermark(s, name), s}
+
+  def handle_call({:persist_watermark, name}, _, s) do
+    mark = current_watermark(s, name)
+    write!(Path.join([s.root, name, "source.json"]), JSON.encode!(mark))
+    {:reply, :ok, s}
+  end
+
+  def handle_call({:finish_source, name, seq, sample, interruption}, _, s) do
+    mark = %{
+      "sequence" => seq,
+      "sample" => sample,
+      "done" => true,
+      "interruption" => interruption
+    }
+
+    write!(Path.join([s.root, name, "source.json"]), JSON.encode!(mark))
+    {:reply, :ok, %{s | watermarks: Map.put(s.watermarks, name, mark)}}
   end
 
   def handle_call({:get, name, seq}, _, s) do
@@ -143,13 +189,19 @@ defmodule MedExHandheld.Spool do
          receipt = Path.join([s.root, name, "receipt.json"]),
          {:ok, last} <- previous_receipt(receipt),
          :ok <- verify_progress(last, r),
-         :ok <- verify_coverage(s, name, last, r) do
+         {:ok, visited} <- verify_coverage(s, name, last, r) do
       write!(receipt, JSON.encode!(MedEx.Serialization.to_map(r)))
-      # Also reap any covered files left by a crash after the receipt was synced.
-      bytes = reap_covered_records(s, name, r.durable_sequence)
 
-      sync_dir!(Path.dirname(receipt))
-      {:reply, :ok, %{s | bytes: bytes}}
+      {bytes, needs_sweep} =
+        if Map.get(s.needs_sweep, name, true) do
+          # One-time sweep after start/restart to reap any covered files left by a crash after receipt sync.
+          {reap_covered_records(s, name, r.durable_sequence), Map.put(s.needs_sweep, name, false)}
+        else
+          {reap_paths(s.bytes, visited), s.needs_sweep}
+        end
+
+      if bytes != s.bytes, do: sync_dir!(Path.dirname(receipt))
+      {:reply, :ok, %{s | bytes: bytes, needs_sweep: needs_sweep}}
     else
       {:error, _} = error -> {:reply, error, s}
       _ -> {:reply, {:error, :stale_fence}, s}
@@ -189,6 +241,49 @@ defmodule MedExHandheld.Spool do
   end
 
   def handle_call(:stats, _, s), do: {:reply, Map.take(s, [:bytes, :maximum, :limit]), s}
+
+  defp put_record(s, name, seq, bytes) do
+    f = record(s, name, seq)
+    total = s.bytes + byte_size(bytes) + 32
+
+    cond do
+      File.exists?(f) ->
+        if read_record!(f) == bytes, do: {:ok, s}, else: {:error, :spool_conflict}
+
+      total > s.limit ->
+        {:error, :spool_full}
+
+      true ->
+        write!(f, :crypto.hash(:sha256, bytes) <> bytes)
+        {:ok, %{s | bytes: total, maximum: max(s.maximum, total)}}
+    end
+  end
+
+  defp current_watermark(s, name) do
+    case Map.fetch(s.watermarks, name) do
+      {:ok, mark} ->
+        mark
+
+      :error ->
+        read_json(Path.join([s.root, name, "source.json"]), %{
+          "sequence" => 0,
+          "sample" => 0,
+          "done" => false
+        })
+    end
+  end
+
+  defp reap_paths(bytes, paths) do
+    Enum.reduce(paths, bytes, fn path, total ->
+      if File.exists?(path) do
+        size = File.stat!(path).size
+        File.rm!(path)
+        total - size
+      else
+        total
+      end
+    end)
+  end
 
   defp reap_covered_records(s, name, sequence) do
     Enum.reduce(stream_records(s, name), s.bytes, fn {q, path}, bytes ->
@@ -271,9 +366,7 @@ defmodule MedExHandheld.Spool do
   end
 
   defp verify_coverage(s, name, last, r) do
-    source =
-      read_json(Path.join([s.root, name, "source.json"]), %{"sequence" => 0, "sample" => 0})
-
+    source = current_watermark(s, name)
     first = last.durable_sequence
     next = r.durable_sequence
 
@@ -282,10 +375,18 @@ defmodule MedExHandheld.Spool do
       stream_number = if name == "audio", do: 1, else: 2
       expected_end = {next, r.durable_sample}
 
-      covered_end =
-        covered_range(s, name, {first, last.durable_sample}, next, stream_number, r.source_epoch)
+      {covered_end, visited} =
+        covered_range(
+          s,
+          name,
+          {first, last.durable_sample},
+          next,
+          stream_number,
+          r.source_epoch,
+          []
+        )
 
-      if covered_end == expected_end, do: :ok, else: {:error, :uncovered_receipt}
+      if covered_end == expected_end, do: {:ok, visited}, else: {:error, :uncovered_receipt}
     else
       _ -> {:error, :uncovered_receipt}
     end
@@ -293,15 +394,27 @@ defmodule MedExHandheld.Spool do
     :hole -> {:error, :uncovered_receipt}
   end
 
-  defp covered_range(s, name, {first, sample}, next, stream_number, epoch) do
-    stream_records(s, name)
-    |> Enum.filter(fn {q, _} -> q >= first and q < next end)
-    |> Enum.sort()
-    |> Enum.reduce({first, sample}, fn {q, path}, {expected, left} ->
-      if q != expected, do: throw(:hole)
-      advance_coverage(read_record!(path), q, left, stream_number, epoch)
-    end)
+  defp covered_range(s, name, {q, sample}, next, stream_number, epoch, visited) when q < next do
+    path = record(s, name, q)
+    unless File.exists?(path), do: throw(:hole)
+
+    {next_q, next_sample} =
+      advance_coverage(read_record!(path), q, sample, stream_number, epoch)
+
+    if next_q > next, do: throw(:hole)
+
+    covered_range(
+      s,
+      name,
+      {next_q, next_sample},
+      next,
+      stream_number,
+      epoch,
+      [path | visited]
+    )
   end
+
+  defp covered_range(_s, _name, pos, _next, _stream_number, _epoch, visited), do: {pos, visited}
 
   defp advance_coverage(<<"MEX1", _::binary>> = wire, q, left, stream_number, epoch) do
     {:ok, frame} = FrameV1.decode(wire)
