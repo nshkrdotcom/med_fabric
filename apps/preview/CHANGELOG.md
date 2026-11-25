@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1
+## 0.1.1 - 2026-11-25
 
 - Close peers on encoder failure and preserve startup backpressure.
 - Require MedEx 0.2.1.

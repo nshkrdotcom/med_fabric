@@ -69,7 +69,7 @@ defmodule MedExHandheld.PLXPeripheral do
   def validate_sdk(e, c) do
     metrics = Map.new(e["metrics"], fn {name, value} -> {name, sdk_metric(name, value)} end)
 
-    MedEx.MeasurementEvent.validate(%MedEx.MeasurementEvent{
+    event = %MedEx.MeasurementEvent{
       event_id: e["event_id"],
       acquisition_id: c["acquisition"],
       source_ref: e["source"],
@@ -87,7 +87,12 @@ defmodule MedExHandheld.PLXPeripheral do
       raw: {:bytes, Base.decode64!(e["raw"])},
       device_status: Map.reject(e["source_status"], fn {_, v} -> is_nil(v) end),
       provenance: [%{name: "simulated", origin: :observed, value: true}]
-    })
+    }
+
+    with :ok <- MedEx.MeasurementEvent.validate(event),
+         {:ok, ^event} <- MedEx.Serialization.measurement(MedEx.Serialization.to_map(event)) do
+      :ok
+    end
   end
 
   defp sdk_metric(name, value) do

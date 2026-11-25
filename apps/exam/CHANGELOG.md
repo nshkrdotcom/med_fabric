@@ -1,8 +1,10 @@
 # Changelog
 
-## 0.1.1
+## 0.1.1 - 2026-11-25
 
 - Verify segment occurrence, contiguous review coverage, and fenced capacity completion.
+- Enable host-fenced 15-frame pipelined batching (`checkpoint_ms: :manual`), remove redundant finalization scans while preserving full byte verification on crash recovery and review, and emit `:telemetry` checkpoint timings.
+- Allow concurrent multi-profile acquisitions per encounter (`006_concurrent_device_profiles.sql`), non-zero `source_epoch` admission, probe-derived clock validity bounds for long-uptime peripherals, and canonical `MedEx.StatusEvent` validation on device status messages.
 - Require MedEx 0.2.1.
 
 All notable changes to `mf_exam` will be documented in this file.

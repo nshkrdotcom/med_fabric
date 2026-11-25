@@ -15,15 +15,29 @@ defmodule MedExHandheld.Monitor do
   end
 
   def handle_call({:command, c}, _, s) do
-    case s.state["cache"][c["id"]] do
-      %{"fingerprint" => hash} = r when hash == :erlang.map_get("fingerprint", c) ->
+    ledger =
+      Map.new(s.state["cache"], fn {id, entry} ->
+        {id, %{fingerprint: entry["fingerprint"], result: entry}}
+      end)
+
+    cmd = %{
+      id: c["id"],
+      fingerprint: c["fingerprint"],
+      expected_epoch: parse_epoch(c["expected_epoch"])
+    }
+
+    case MedEx.ControlInterlock.device_decide(ledger, cmd, String.to_integer(s.state["epoch"])) do
+      {:cached, r} ->
         {:reply, {:result, r}, s}
 
-      nil ->
-        accept_command(c, s)
-
-      _ ->
+      {:error, :command_id_conflict} ->
         {:reply, {:error, :conflict}, s}
+
+      {:error, :stale_configuration} ->
+        reject_command(c, s)
+
+      {:execute_and_persist_result, _} ->
+        accept_command(c, s)
     end
   end
 
@@ -79,17 +93,29 @@ defmodule MedExHandheld.Monitor do
       map_size(s.state["cache"]) >= 4096 ->
         {:reply, {:error, :command_cache_exhausted}, s}
 
-      not is_nil(s.pending) or c["expected_epoch"] != s.state["epoch"] or
-        c["boot"] != s.state["boot"] or c["gain"] not in ["unity", "half"] ->
-        rejected = Map.merge(Map.take(c, ~w(id fingerprint boot)), %{"status" => "rejected"})
-        next = put_in(s.state, ["cache", c["id"]], rejected)
-        Spool.write!(s.file, JSON.encode!(next))
-        {:reply, {:result, rejected}, %{s | state: next}}
+      not is_nil(s.pending) or c["boot"] != s.state["boot"] or c["gain"] not in ["unity", "half"] ->
+        reject_command(c, s)
 
       true ->
         {:reply, :pending, %{s | pending: c}}
     end
   end
+
+  defp reject_command(c, s) do
+    rejected = Map.merge(Map.take(c, ~w(id fingerprint boot)), %{"status" => "rejected"})
+    next = put_in(s.state, ["cache", c["id"]], rejected)
+    Spool.write!(s.file, JSON.encode!(next))
+    {:reply, {:result, rejected}, %{s | state: next}}
+  end
+
+  defp parse_epoch(v) when is_binary(v) do
+    case Integer.parse(v) do
+      {n, ""} when n >= 0 -> n
+      _ -> :invalid
+    end
+  end
+
+  defp parse_epoch(_), do: :invalid
 
   def transform(bytes, "unity"), do: bytes
 

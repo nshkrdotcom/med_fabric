@@ -347,8 +347,12 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
                 "unusable_completed",
                 "replaying",
                 "interrupted"
-              ],
-       do: fact(s, "status", Map.take(m, ~w(state event_id repeat_of reason)))
+              ] do
+    case S.scoped(b, &record_status(&1, &2, b, v, m)) do
+      {:ok, _} -> reply("recorded", %{}, %{s | probe: nil})
+      _ -> denied(s)
+    end
+  end
 
   defp handle(t, m, %{kind: :control, bind: b} = s)
        when t in ["collection_finish", "finish_acquisition"] and is_map(b) do
@@ -371,6 +375,35 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
     case S.scoped(s.bind, &record_fact(&1, &2, s.bind.id, type, body)) do
       {:ok, _} -> reply("recorded", %{}, %{s | probe: nil})
       _ -> denied(s)
+    end
+  end
+
+  defp record_status(tx, session, bind, state_value, m) do
+    event = %MedEx.StatusEvent{
+      event_id: m["event_id"] || S.nonce(),
+      acquisition_id: bind.id,
+      source_ref: bind.device,
+      boot_id: session.boot,
+      stream_id: session.profile,
+      source_epoch: 0,
+      descriptor_ref: J.digest(%{"profile" => session.profile, "boot" => session.boot}),
+      sequence: 0,
+      code: state_value,
+      observed_interval: :unknown,
+      state: state_value
+    }
+
+    with :ok <- MedEx.StatusEvent.validate(event),
+         {:ok, ^event} <- J.status_event(J.to_map(event)) do
+      record_fact(
+        tx,
+        session,
+        bind.id,
+        "status",
+        Map.take(m, ~w(state event_id repeat_of reason))
+      )
+    else
+      _ -> S.abort(tx, :invalid_status)
     end
   end
 
@@ -462,7 +495,7 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
     case J.stream_spec(descriptor) do
       {:ok, spec} ->
         spec.stream_id == stream and spec.acquisition_id == id and spec.source_ref == device and
-          spec.source_epoch == 0 and spec.modality == modality and
+          spec.source_epoch >= 0 and spec.modality == modality and
           canonical_descriptor?(spec, descriptor)
 
       _ ->

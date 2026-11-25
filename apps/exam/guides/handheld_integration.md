@@ -36,10 +36,13 @@ epoch. They cannot cover missing samples. A complete-capture decision records
 the selected interval from a defect-free capture. An interrupted stream retains
 its verified prefix and terminal reason.
 
-The native synthetic qualification covers 60-second paired recordings. The
-writer's 1,800-second limit is a resource cap. Capture, finalization and review
-at longer durations depend on the target storage and service load.
-
-A 29-minute exploratory capture on tmpfs reached the finish/reconnect phase
-but did not complete review. The 60-second native gates remain the supported
-fixture envelope.
+The native synthetic qualification covers 60-second paired fault/recovery gates
+and a 29-minute (1,740 s) sustained paired `ext4` soak (83,520,000 audio samples
+and 435,000 ECG samples) using host-fenced 15-frame pipelined batching,
+independent byte verification, and full-stream review verification. Distinct
+device profiles (for example `paired_exam` and `plx_spot_check`) can run
+concurrently in the same encounter, peripherals may advertise any valid
+`source_epoch >= 0`, and clock-alignment validity bounds are derived from
+observed probe spans rather than a fixed one-hour device-uptime ceiling. Capture,
+finalization and review under concurrent multi-exam load depend on the target
+storage and host sizing.

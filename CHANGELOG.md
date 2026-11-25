@@ -1,6 +1,6 @@
 # Med Fabric changelog
 
-## 0.2.0
+## 0.2.0 — 2026-11-25
 
 - Add a Weld 0.18.0 maintainer project and a release manifest for the standalone
   Exam package, including its internal applications, static files, and SQL migrations.
@@ -18,6 +18,8 @@
 - Verify segment occurrences and contiguous review ranges before committing clinical
   decisions, and preserve durable receipt identity when capture reaches capacity.
 - Handle multi-sequence replay gaps and retire Preview peers on encoder failure.
+- Enable host-fenced 15-frame pipelined batching with O(k) Handheld spool reclamation and verified 29-minute ext4 capture, finalization, and review.
+- Allow concurrent multi-profile acquisitions per encounter, non-zero `source_epoch` admission, probe-derived clock validity bounds, and end-to-end exercise of `MedEx.ControlInterlock`, `MedEx.StatusEvent`, and `MedEx.Serialization.measurement/1`.
 - Qualify Exam, Handheld and Preview 0.1.1 against MedEx 0.2.1. The release guide
   describes artifact preparation, qualification and publication.
 

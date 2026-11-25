@@ -45,21 +45,26 @@ defmodule MedFabric.Store.DeviceAdmissionTest do
                "patient-" <> String.replace_prefix(c.enc, "admission-", "")
              )
 
-    assert {:error, :active_slot_busy} = reserve(c, "plx_spot_check", "device-" <> c.enc)
+    assert {:ok, _} = reserve(c, "plx_spot_check", "device-" <> c.enc)
   end
 
-  test "competing profiles share one acquisition slot, including pending finalization", c do
+  test "distinct profiles run concurrently while duplicate same-profile slots conflict, including pending finalization",
+       c do
+    assert {:ok, paired} = reserve(c, "paired_exam", "paired-" <> c.enc)
+    assert {:ok, plx} = reserve(c, "plx_spot_check", "plx-" <> c.enc)
+
     tasks =
-      for profile <- ["paired_exam", "plx_spot_check"] do
-        Task.async(fn -> reserve(c, profile, profile <> "-" <> c.enc) end)
+      for suffix <- ["a", "b"] do
+        Task.async(fn -> reserve(c, "plx_spot_check", "dup-#{suffix}-" <> c.enc) end)
       end
 
     results = Enum.map(tasks, &Task.await(&1, 10_000))
-    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
-    assert Enum.count(results, &(&1 == {:error, :active_slot_busy})) == 1
-    {:ok, winner} = Enum.find(results, &match?({:ok, _}, &1))
-    S.rows(c.db, "UPDATE device_sessions SET phase='finalizing' WHERE id=$1", [winner.id])
+    assert Enum.all?(results, &(&1 == {:error, :active_slot_busy}))
+
+    S.rows(c.db, "UPDATE device_sessions SET phase='finalizing' WHERE id=$1", [plx.id])
     assert {:error, :active_slot_busy} = reserve(c, "plx_spot_check", "next-" <> c.enc)
+    assert {:error, :active_slot_busy} = reserve(c, "paired_exam", "next-paired-" <> c.enc)
+    assert paired.id != plx.id
   end
 
   test "resume rotates the generation and revocation fences every admitted effect", c do
