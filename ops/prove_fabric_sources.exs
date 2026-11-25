@@ -57,7 +57,12 @@ config = Mix.Project.config()
 mutable = Keyword.take(config, [:lockfile, :deps_path, :build_path])
 
 if System.get_env("MF_SOURCE_QC_EXPECT_DEFAULT") == "1" and profile != "legacy-exam" do
-  unless mutable == [], do: raise("Default app changed its ordinary Mix paths")
+  expected_build = Path.expand(Path.join("_build", Atom.to_string(Mix.env())))
+
+  unless Path.expand(config[:lockfile]) == Path.expand("mix.lock") and
+           Mix.Project.deps_path() == Path.expand("deps") and
+           Mix.Project.build_path() == expected_build,
+         do: raise("Default app changed its ordinary Mix paths")
 else
   unless length(mutable) == 3 and
            Enum.all?(mutable, fn {_, p} -> String.contains?(p, "/source_contexts/") end),
