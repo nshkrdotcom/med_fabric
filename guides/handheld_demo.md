@@ -143,46 +143,47 @@ ops/qc_services.sh run -- bash -c 'cd core/interop && mix test integration'
 
 ### Run just the paired gate or a storage soak
 
-Use the paired gate for changes to admission, replay, storage, Preview, or
-review. Each concurrent capture runs for 60 seconds. The rest of the suite
-exercises fault cuts and browser review, so allow several minutes.
+From the Fabric repository root:
 
 ```bash
-ops/qc_native.sh --suite paired --volume /mnt/exam-data \
-  --evidence /tmp/fabric-paired-001
+ops/qc_native.sh --suite paired
+ops/qc_native.sh --suite soak
 ```
 
-Use the soak after changes that may affect sustained capture or finalization,
-and when qualifying a target storage setup. It runs a single paired acquisition
-for 1,740 seconds by default, with native PostgreSQL and no Preview, HAPI, or
-browser setup. It requires a sealed, defect-free manifest, independent
-sample-byte verification and a saved acceptance decision through Exam's
-review endpoint. The fixture performs the decision automatically on synthetic
-data. Use `--seconds 3` for a
-quick wiring check of the same path. A successful soak qualifies that single
-workload on the recorded filesystem. The two-encounter gate covers concurrency.
+The paired gate runs two 60-second captures and checks independent progress
+during a writer stall. It also exercises fault recovery and browser review.
+Allow several minutes for the full paired gate.
 
-```bash
-ops/qc_native.sh --suite soak --volume /mnt/exam-data \
-  --evidence /tmp/fabric-soak-001
-```
+The soak runs one 29-minute paired capture on native PostgreSQL without
+Preview, HAPI, or browser setup. It checks that the capture seals without
+defects, matches the independent sample-byte hashes, and can be accepted
+through Exam's review endpoint with synthetic data. Use
+`ops/qc_native.sh --suite soak --seconds 23` for a short test that also
+exercises progress reporting.
 
-Before the SDK is published, append
-`--med-ex-project /path/to/med_ex/.weld/releases/med_ex` to either focused
-command. The wrapper accepts the Weld release directory containing `CURRENT`
-or an exact project directory. It uses isolated Mix paths and keeps the
-checkout's source-selection file and committed locks untouched. The full gate
-uses the default locked Hex packages and retains its release checks.
+The focused commands create a lab under the checkout's `_build` directory.
+If `_build/foundation-release-evidence/weld/med_ex/CURRENT` exists, they use
+that staged SDK. Otherwise they use the locked Hex packages. The full
+release gate always uses the locked Hex packages. Override the storage
+location with `--volume EXISTING_DIR`, or select another prepared SDK
+with `--med-ex-project PROJECT_OR_WELD_RELEASE_DIR`. These overrides
+leave committed locks and source-selection files intact.
 
-Supply a new evidence directory for each run. The wrapper records `run.log`
-and `exit-status`. The runner writes `native.json` with the pass/fail
-result. For a soak, inspect `.scenarios.soak` for the last stage reached,
-per-stream durable progress, digest verification, and timings. The volume
-argument is an existing writable directory. It holds a fresh private lab
-with PostgreSQL data, artifacts, spool, and service logs. It is retained for
-inspection and contains synthetic credentials. The node and its services
-are stopped after the run. `filesystem.txt` records the volume filesystem.
-For the full gate, this volume applies to the native acquisition suite.
+The soak prints produced and durably acknowledged sample counts for each
+stream every 10 seconds while capture or sealing is under way. If neither
+durable counter has moved since the previous update, it says so. Capture
+completion is followed by separate byte verification and synthetic review
+messages. This is a progress signal. A flat counter during sealing can be
+normal, and the final result determines whether the run passed.
+
+The command prints its evidence directory at startup. By default it creates
+a fresh temporary directory. Set `--evidence NEW_DIR` to choose another
+location. It saves `run.log` and `exit-status`, and a completed runner
+writes `native.json`. An exit status of zero means the checks passed.
+`filesystem.txt` identifies the lab filesystem. The retained private lab
+contains synthetic credentials along with PostgreSQL data, files, and
+service logs. Services stop at the end of the run. An explicit volume on
+the full gate applies to its native acquisition suite.
 
 Each invocation provisions fresh data and credentials. The wrapper verifies
 loopback service readiness and cleans up its own PostgreSQL and container on

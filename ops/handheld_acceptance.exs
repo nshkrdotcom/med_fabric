@@ -855,6 +855,7 @@ defmodule MedFabric.HandheldAcceptance do
   end
 
   defp paired_case!(lab, name, settings, fault \\ nil) do
+    IO.puts("Paired fixture: #{name}")
     armed = if fault, do: barrier(lab, fault)
     if armed, do: arm!(armed)
     {cfg, child} = client!(lab, "paired_exam", name, settings)
@@ -1019,12 +1020,79 @@ defmodule MedFabric.HandheldAcceptance do
     end
   end
 
+  defp await_soak!(lab, cfg, child, started) do
+    key = make_ref()
+    timer = Process.send_after(self(), {key, nil}, 10_000)
+
+    try do
+      ProcessLab.wait!(
+        fn ->
+          receive do
+            {^key, previous} ->
+              current = print_soak_progress(lab, cfg, started, previous)
+              Process.send_after(self(), {key, current}, 10_000)
+          after
+            0 -> :ok
+          end
+
+          case ProcessLab.status(child) do
+            nil -> false
+            status -> {:exit_status, status}
+          end
+        end,
+        (cfg["seconds"] + 120) * 1_000,
+        nil,
+        "soak capture and seal"
+      )
+      |> elem(1)
+    after
+      Process.cancel_timer(timer)
+    end
+  end
+
+  defp print_soak_progress(lab, cfg, started, previous) do
+    elapsed = div(System.monotonic_time(:millisecond) - started, 1_000)
+
+    streams =
+      for name <- ["audio", "ecg"] do
+        dir = at(lab, Path.join(["spool", cfg["acquisition"], name]))
+        source = read_soak_counter(dir, "source.json")
+        receipt = read_soak_counter(dir, "receipt.json")
+        {name, source["sample"] || 0, receipt["durable_sample"] || "0", source["done"] == true}
+      end
+
+    durable = Enum.map(streams, &elem(&1, 2))
+    stalled = if durable == previous, do: " · no new durable receipts since last update", else: ""
+    stage = if Enum.all?(streams, &elem(&1, 3)), do: "draining or sealing", else: "capturing"
+
+    counters =
+      Enum.map_join(streams, " · ", fn {name, produced, acknowledged, _done} ->
+        "#{name}: #{produced} produced, #{acknowledged} durable samples"
+      end)
+
+    IO.puts(
+      "Soak #{elapsed}s elapsed (#{cfg["seconds"]}s capture) · #{stage} · #{counters}#{stalled}"
+    )
+
+    durable
+  end
+
+  defp read_soak_counter(dir, name) do
+    with {:ok, bytes} <- File.read(Path.join(dir, name)),
+         {:ok, value} when is_map(value) <- JSON.decode(bytes) do
+      value
+    else
+      _ -> %{}
+    end
+  end
+
   defp soak!(lab, seconds) do
     scenario("soak", %{requested_seconds: seconds, stage: "capture_and_seal"})
     started = System.monotonic_time(:millisecond)
     {cfg, child} = client!(lab, "paired_exam", "soak", %{"seconds" => seconds})
     id = cfg["acquisition"]
-    exit_status = ProcessLab.await!(child, (seconds + 120) * 1000)
+    IO.puts("Soak started: #{seconds}s of capture. Progress every 10 seconds.")
+    exit_status = await_soak!(lab, cfg, child, started)
 
     progress =
       sql!(lab, """
@@ -1053,6 +1121,7 @@ defmodule MedFabric.HandheldAcceptance do
 
     scenario("soak", result)
     check!(exit_status == 0, "Soak acquisition did not seal")
+    IO.puts("Soak capture sealed. Verifying stored bytes against the fixture.")
     {root, digest, manifest} = manifest!(lab, cfg)
     check!(manifest["defects"] == [], "Soak manifest includes defects")
 
@@ -1081,6 +1150,7 @@ defmodule MedFabric.HandheldAcceptance do
 
     scenario("soak", result)
     started = System.monotonic_time(:millisecond)
+    IO.puts("Soak byte verification passed. Checking Exam accepts the synthetic capture.")
     choice = review_choice(manifest, "baseline")
     check!(choice["decision"] == "complete", "Soak must reach complete review")
     action!(lab, id, "review", %{"digest" => digest, "choice" => choice})

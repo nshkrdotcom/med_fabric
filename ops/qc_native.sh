@@ -2,7 +2,7 @@
 set -euo pipefail
 umask 077
 usage() {
-  echo 'Usage: ops/qc_native.sh --evidence NEW_DIR [--suite all|paired|soak]'
+  echo 'Usage: ops/qc_native.sh [--suite all|paired|soak] [--evidence NEW_DIR]'
   echo '       [--volume EXISTING_DIR] [--med-ex-project PROJECT_OR_WELD_RELEASE_DIR] [--seconds N] [--keep-failure]'
 }
 suite=all
@@ -29,7 +29,7 @@ while (( $# )); do
     *) usage >&2; exit 2 ;;
   esac
 done
-[[ -n "$evidence" && "$suite" =~ ^(all|paired|soak)$ ]] || { usage >&2; exit 2; }
+[[ "$suite" =~ ^(all|paired|soak)$ ]] || { usage >&2; exit 2; }
 if [[ "$suite" == soak ]]; then
   seconds=${seconds:-1740}
   [[ "$seconds" =~ ^[1-9][0-9]{0,3}$ ]] && (( seconds >= 3 && seconds <= 1740 )) ||
@@ -42,6 +42,18 @@ if [[ "$suite" == all && -n "$candidate" ]]; then
   echo 'The full release gate requires locked Hex packages. Use paired or soak for a prepared project.' >&2
   exit 2
 fi
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+[[ ! -e .mix_sources.json && ! -L .mix_sources.json ]] || { echo 'Use an unselected checkout.' >&2; exit 2; }
+if [[ "$suite" != all ]]; then
+  if [[ -z "$volume" ]]; then
+    volume="$PWD/_build"
+    mkdir -p -- "$volume"
+  fi
+  staged="$PWD/_build/foundation-release-evidence/weld/med_ex"
+  if [[ -z "$candidate" && -f "$staged/CURRENT" ]]; then
+    candidate="$staged"
+  fi
+fi
 [[ -z "$volume" || -d "$volume" ]] || { echo 'Volume must be a directory.' >&2; exit 2; }
 if [[ -n "$candidate" ]]; then
   if [[ ! -f "$candidate/mix.exs" && -f "$candidate/CURRENT" ]]; then
@@ -53,11 +65,14 @@ if [[ -n "$candidate" ]]; then
   [[ -f "$candidate/mix.exs" ]] || { echo 'Select a Mix project or a Weld release directory.' >&2; exit 2; }
 fi
 
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
-[[ ! -e .mix_sources.json && ! -L .mix_sources.json ]] || { echo 'Use an unselected checkout.' >&2; exit 2; }
-mkdir -- "$evidence"
+if [[ -z "$evidence" ]]; then
+  evidence=$(mktemp -d -- "${TMPDIR:-/tmp}/fabric-$suite.XXXXXXXX")
+else
+  mkdir -- "$evidence"
+fi
 trap 'status=$?; printf "%s\n" "$status" > "$evidence/exit-status"' EXIT
 exec > >(tee "$evidence/run.log") 2>&1
+printf 'Evidence: %s\n' "$evidence"
 unset MIX_ENV MIX_TARGET MIX_EXS MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE
 while read -r name; do unset "$name"; done < <(compgen -e MF_)
 export PATH="$(pg_config --bindir):$PATH"
@@ -71,6 +86,7 @@ if [[ -n "$volume" ]]; then
   findmnt -T "$lab" -no FSTYPE,OPTIONS > "$evidence/filesystem.txt"
 fi
 if [[ -n "$candidate" ]]; then
+  printf 'MedEx project: %s\n' "$candidate"
   export MF_MED_EX_PATH="$candidate"
   if [[ -f "$candidate/weld.provenance.json" ]]; then
     cp "$candidate/weld.provenance.json" "$evidence/med-ex-provenance.json"
