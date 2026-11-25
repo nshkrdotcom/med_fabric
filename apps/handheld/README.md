@@ -1,15 +1,68 @@
-# Handheld
+<p align="center">
+  <img src="assets/handheld.svg" alt="Med Fabric Handheld logo" width="200" />
+</p>
 
-An ordinary Elixir Mix application owns the synthetic RDP1 and PLXS peripherals, local clock, command journal, bounded disk spool and independent Gun WSS connections. The producer accepts only a server URL, source configuration, trusted CA, device credential and its own spool. Run on Linux with util-linux flock, a local filesystem supporting directory fsync and OTP TLS. The measurement guarantee begins after handheld journal sync. The source clock, calibration and UTC trust used here belong to synthetic fixtures.
+<h1 align="center">Med Fabric Handheld</h1>
 
-The two-process setup, production TLS options, source selection and CLI flags are in the [handheld runbook](../../guides/handheld_demo.md).
+<p align="center">
+  <a href="https://github.com/nshkrdotcom/med_fabric/tree/main/apps/handheld"><img src="https://img.shields.io/badge/GitHub-mf__handheld-345366" alt="GitHub source" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/apps/handheld/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+</p>
 
-To deploy the producer without a server source checkout, build a normal Mix release in apps/handheld with the desired MedEx source context. Copy the release to an ordinary Linux host of the same architecture/ABI and provide its own credential, CA, fixture settings and spool. For example, from the release directory:
+`mf_handheld` is the standalone synthetic medical-peripheral client in
+[Med Fabric](https://github.com/nshkrdotcom/med_fabric). Built on the base
+[`med_ex`](https://hex.pm/packages/med_ex) SDK and `gun`, it owns synthetic
+RDP1 acoustic/ECG and PLXS pulse-oximetry peripherals, a local command journal,
+a bounded fsync-backed disk spool, and resumable TLS/WSS uplinks to `mf_exam`.
 
-```bash
-bin/mf_handheld eval 'Application.ensure_all_started(:mf_handheld); MedExHandheld.CLI.main(["--config", "/etc/handheld/fixture.json", "--scenario", "paired_exam"])'
+## Installation
+
+Add `mf_handheld` to your list of dependencies in `mix.exs`:
+
+```elixir
+def deps do
+  [
+    {:mf_handheld, "~> 0.1.0"}
+  ]
+end
 ```
 
-Build that release with `MIX_ENV=prod mix deps.get` followed by `MIX_ENV=prod mix release`. Source-context paths for production are distinct from dev and test.
-Handheld selects the base MedEx SDK. Its release runs independently with
-its own TLS and device credentials, source configuration, and spool.
+Requires Elixir `~> 1.20` (OTP 29), Linux with `util-linux` `flock`, a local
+filesystem supporting directory `fsync`, and OTP TLS.
+
+## Key Capabilities
+
+- **Synthetic RDP1 & PLXS peripherals:** Exercises paired acoustic/ECG waveform
+  streaming and spot-check pulse-oximetry collection with explicit source clock
+  and calibration metadata.
+- **Offline-first bounded spool:** Persists frames and measurement events into a
+  local directory-locked spool (`MedExHandheld.Spool`) before uplink delivery;
+  the measurement durability guarantee begins after handheld journal sync.
+- **Resumable TLS/WSS transport:** Connects to `mf_exam` using device-scoped
+  credentials and a pinned CA (`MedExHandheld.Transport`), replaying queued
+  records after network interruption without duplicating accepted evidence.
+- **Separate software monitor uplink:** Optionally streams latest-only 48 kHz
+  monitor frames over an independent credit-paced WSS connection with a 200 ms
+  local staleness cutoff.
+
+## Quick Usage
+
+From a compiled release or checkout, run a scenario via `MedExHandheld.CLI`:
+
+```bash
+bin/mf_handheld eval \
+  'Application.ensure_all_started(:mf_handheld); MedExHandheld.CLI.main(["--config", "/etc/handheld/fixture.json", "--scenario", "paired_exam"])'
+```
+
+## Guides
+
+- [Getting Started](guides/getting_started.md) — Fixture configuration, TLS
+  credentials, and CLI scenarios.
+- [Spool & Recovery](guides/spool_and_recovery.md) — Disk spool layout, journal
+  sync guarantees, and reconnect replay.
+- [Deployment](guides/deployment.md) — Building and shipping a standalone Mix
+  release without a server checkout.
+
+## License
+
+Released under the [MIT License](LICENSE).

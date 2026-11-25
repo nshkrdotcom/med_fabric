@@ -8,5 +8,5 @@
 /apps/*/tmp/
 /core/*/tmp/
 
-/doc/
+doc/
 /med_fabric.xml

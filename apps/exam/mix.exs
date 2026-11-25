@@ -1,26 +1,37 @@
-Code.require_file("../../config/sources.exs", __DIR__)
+sources_path = Path.expand("../../config/sources.exs", __DIR__)
+if File.regular?(sources_path), do: Code.require_file(sources_path)
 
 defmodule MedFabric.Exam.MixProject do
   use Mix.Project
-  alias MedFabric.BuildSources
+
+  @version Path.join(__DIR__, "VERSION") |> File.read!() |> String.trim()
+  @source_url "https://github.com/nshkrdotcom/med_fabric"
 
   def project do
     legacy_media? = System.get_env("MF_EXAM_LEGACY_MEDIA") == "1"
     profile = if legacy_media?, do: :legacy_media, else: :default
 
     {deps, paths} =
-      BuildSources.resolve(deps(legacy_media?), __DIR__, Path.expand("../..", __DIR__),
-        profile: profile
-      )
+      if Code.ensure_loaded?(MedFabric.BuildSources) do
+        MedFabric.BuildSources.resolve(deps(legacy_media?), __DIR__, Path.expand("../..", __DIR__),
+          profile: profile
+        )
+      else
+        {deps(legacy_media?), []}
+      end
 
     [
       app: :mf_exam,
-      version: __DIR__ |> Path.join("../../VERSION") |> File.read!() |> String.trim(),
+      version: @version,
       elixir: "~> 1.20",
-      description: "Connected remote clinical examination",
+      name: "Med Fabric Exam",
+      description: "Connected remote clinical examination server built on MedEx",
+      source_url: @source_url,
+      homepage_url: @source_url,
       dialyzer: [plt_add_apps: [:mix]],
       aliases: [quality: ["credo --strict", "dialyzer --force-check"]],
-      deps: deps
+      deps: deps,
+      docs: docs()
     ] ++ paths
   end
 
@@ -29,11 +40,16 @@ defmodule MedFabric.Exam.MixProject do
   end
 
   defp deps(legacy_media?) do
+    med_ex_dep =
+      if Code.ensure_loaded?(MedFabric.BuildSources),
+        do: MedFabric.BuildSources.med_ex_dependency(:med_ex),
+        else: {:med_ex, "~> 0.2.0"}
+
     [
       {:mf_domain, path: "../../core/domain"},
       {:mf_store, path: "../../core/store"},
       {:mf_interop, path: "../../core/interop"},
-      BuildSources.med_ex_dependency(:med_ex),
+      med_ex_dep,
       {:decimal, "~> 3.2"},
       {:phoenix, "~> 1.8"},
       {:phoenix_html, "~> 4.2"},
@@ -41,7 +57,8 @@ defmodule MedFabric.Exam.MixProject do
       {:bandit, "~> 1.6"},
       {:websock_adapter, "~> 0.5"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.40.5", only: :dev, runtime: false}
     ] ++
       if(legacy_media?,
         do: [
@@ -50,10 +67,79 @@ defmodule MedFabric.Exam.MixProject do
            git: "https://github.com/robertbenavidez/elixir-rational.git",
            ref: "05191dbe8061b49a170352f3c35c21360bdbb328",
            override: true},
-          BuildSources.med_ex_dependency(:med_ex_opus),
-          BuildSources.med_ex_dependency(:med_ex_rtc)
+          MedFabric.BuildSources.med_ex_dependency(:med_ex_opus),
+          MedFabric.BuildSources.med_ex_dependency(:med_ex_rtc)
         ],
         else: []
       )
+  end
+
+  defp docs do
+    guides = [
+      {"guides/getting_started.md", title: "Getting Started"},
+      {"guides/browser_to_record.md", title: "Browser to Record"},
+      {"guides/handheld_integration.md", title: "Handheld Integration"},
+      {"guides/architecture.md", title: "Architecture"}
+    ]
+
+    [
+      main: "readme",
+      logo: "assets/exam.svg",
+      assets: %{"assets" => "assets"},
+      source_url: @source_url,
+      source_ref: "mf_exam-v#{@version}",
+      extras:
+        [
+          {"README.md", filename: "readme", title: "Overview"}
+        ] ++
+          guides ++
+          [
+            {"CHANGELOG.md", title: "Changelog"},
+            {"LICENSE", title: "License"}
+          ],
+      groups_for_extras: [
+        Overview: ["README.md"],
+        Guides: Enum.map(guides, &elem(&1, 0)),
+        Release: ["CHANGELOG.md", "LICENSE"]
+      ],
+      groups_for_modules: [
+        "Application & Context": [
+          MedFabric.Exam,
+          MedFabric.Exam.Application,
+          MedFabric.Exam.Context,
+          MedFabric.Exam.Barrier
+        ],
+        "Device Ingestion & Workflow": [
+          MedFabric.Exam.DeviceIngress,
+          MedFabric.Exam.DeviceManifest,
+          MedFabric.Exam.DeviceWorkflow,
+          MedFabric.Exam.DeviceReviews,
+          MedFabric.Exam.DeviceExpiry,
+          MedFabric.Exam.DeviceRootLock,
+          MedFabric.Exam.ClockObservations
+        ],
+        "Recordings & Preview": [
+          MedFabric.Exam.Artifact,
+          MedFabric.Exam.Recordings,
+          MedFabric.Exam.PreviewGateway,
+          MedFabric.Exam.ICE
+        ],
+        "Web & LiveView": [
+          MedFabric.ExamWeb.Endpoint,
+          MedFabric.ExamWeb.Router,
+          MedFabric.ExamWeb.Layout,
+          MedFabric.ExamWeb.ExamLive,
+          MedFabric.ExamWeb.DeviceLive,
+          MedFabric.ExamWeb.DeviceAction,
+          MedFabric.ExamWeb.DeviceSegment,
+          MedFabric.ExamWeb.DeviceSocket,
+          MedFabric.ExamWeb.PCMSocket,
+          MedFabric.ExamWeb.UserSocket,
+          MedFabric.ExamWeb.SignalingChannel,
+          MedFabric.ExamWeb.TalkbackChannel,
+          MedFabric.ExamWeb.ProxyIdentity
+        ]
+      ]
+    ]
   end
 end

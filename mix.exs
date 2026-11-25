@@ -65,6 +65,8 @@ defmodule MedFabric.Workspace.MixProject do
       assets: %{
         "assets" => "assets",
         "apps/exam/assets" => "assets",
+        "apps/handheld/assets" => "assets",
+        "apps/preview/assets" => "assets",
         "core/domain/assets" => "assets",
         "core/interop/assets" => "assets",
         "core/store/assets" => "assets"
