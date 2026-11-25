@@ -150,6 +150,9 @@ defmodule MedExHandheld.SessionCleanupTest do
         end
       end)
 
+    peer_pid = peer.pid
+    peer_exit = Process.monitor(peer_pid)
+
     config =
       Map.merge(identity(), %{
         "spool_root" => dir,
@@ -160,7 +163,11 @@ defmodule MedExHandheld.SessionCleanupTest do
 
     error = assert_raise MatchError, fn -> Session.run(config, "plx_spot_check") end
     assert error.term == {:error, :upgrade_failed}
+    # Only the test-owned peer may still be linked at this point.
+    assert MapSet.delete(caller_links(), peer_pid) == links
     assert Task.await(peer) == "Bearer wrong-fixture-token"
+    assert_receive {:DOWN, ^peer_exit, :process, ^peer_pid, :normal}, 5_000
+    refute Process.alive?(peer_pid)
     assert caller_links() == links
 
     root = Path.join(dir, "exam")
