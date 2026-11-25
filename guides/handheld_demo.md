@@ -147,6 +147,7 @@ From the Fabric repository root:
 
 ```bash
 ops/qc_native.sh --suite paired
+ops/qc_native.sh --suite soak --seconds 60
 ops/qc_native.sh --suite soak
 ```
 
@@ -154,12 +155,11 @@ The paired gate runs two 60-second captures and checks independent progress
 during a writer stall. It also exercises fault recovery and browser review.
 Allow several minutes for the full paired gate.
 
-The soak runs one 29-minute paired capture on native PostgreSQL without
-Preview, HAPI, or browser setup. It checks that the capture seals without
-defects, matches the independent sample-byte hashes, and can be accepted
-through Exam's review endpoint with synthetic data. Use
-`ops/qc_native.sh --suite soak --seconds 23` for a short test that also
-exercises progress reporting.
+Use the 60-second command when diagnosing or comparing a change. It uses
+the same paired workload, native PostgreSQL, and performance checks as the
+29-minute command. Both run without Preview, HAPI, or a browser. Once
+capture drains and seals, both check for defects, compare stored samples
+against independent byte hashes, and submit a synthetic review through Exam.
 
 The focused commands create a lab under the checkout's `_build` directory.
 If `_build/foundation-release-evidence/weld/med_ex/CURRENT` exists, they use
@@ -169,17 +169,64 @@ location with `--volume EXISTING_DIR`, or select another prepared SDK
 with `--med-ex-project PROJECT_OR_WELD_RELEASE_DIR`. These overrides
 leave committed locks and source-selection files intact.
 
-The soak prints produced and durably acknowledged sample counts for each
-stream every 10 seconds while capture or sealing is under way. If neither
-durable counter has moved since the previous update, it says so. Capture
-completion is followed by separate byte verification and synthetic review
-messages. This is a progress signal. A flat counter during sealing can be
-normal, and the final result determines whether the run passed.
+The soak prints interval throughput, lag, and backlog for each stream every
+five seconds. The expected rates are 48,000 audio and 250 ECG samples per
+second. Capture lag compares the source cursor with the fixture clock.
+Durable lag compares the Handheld's persisted acknowledgment with that
+clock. Backlog is locally produced signal still waiting for a durable
+acknowledgment. The expected sample count stops increasing at the requested
+duration, so the same counters make sense during drain and seal.
+
+After ten seconds of capture, the runner stops if either lag on either
+stream exceeds two seconds on two consecutive samples. Source
+interruptions or failure to start capture within 15 seconds also stop the
+run. These are engineering guardrails for this fixture. A run of at
+least 20 seconds must collect enough observations to exercise the
+sustained lag check. A three-second smoke test can exercise capture,
+seal, and review by itself. The existing capture and seal deadlines
+still apply. A performance stop preserves the spool, logs, and
+measurements, and returns a nonzero exit status.
+
+Compare runs using the same storage volume, staged SDK, and duration. If
+capture lag grows, compare the producer and spool-put timings. If backlog
+grows, compare send-to-accepted, accepted-to-durable, and local spool ACK
+timings. Exam's checkpoint transaction includes the writer checkpoint.
+Compare those two timings with PostgreSQL waits to narrow down where to
+look. If bytes keep up in the short run, use the 29-minute run to look for
+growth over time in lag, resident memory, file descriptors, and I/O.
+When isolating storage cost, repeat the short run with `--volume` on a
+different filesystem and compare the same timing stages. A memory-backed
+volume is useful for this comparison. Qualify durability on the intended
+storage volume.
 
 The command prints its evidence directory at startup. By default it creates
 a fresh temporary directory. Set `--evidence NEW_DIR` to choose another
 location. It saves `run.log` and `exit-status`, and a completed runner
 writes `native.json`. An exit status of zero means the checks passed.
+For soak runs, `native.json` records the guardrails, any violations, and
+the sampled timing summaries. Check `sustained_lag_check_possible` for
+evidence that the run reached the observation window. To inspect timing
+summaries and the last live sample, set `evidence` to the directory printed
+by the command and run
+
+```bash
+jq '.scenarios.soak.performance' "$evidence/native.json"
+jq -c 'select(.phase != "client_exited") | {phase, capture_ms, streams, postgres}' \
+  "$evidence/soak-samples.jsonl" | tail -n 1
+```
+
+`soak-samples.jsonl` is written during capture. It includes elapsed and
+capture time, exact stream watermarks,
+process-tree snapshots, available filesystem space, Linux CPU, memory
+and I/O pressure, and PostgreSQL activity and counters. RSS values are
+per process in KiB and can include shared pages. PostgreSQL waits are
+snapshots. Missing readings are represented by nulls or absent processes.
+Use process PID and start ticks together when comparing readings. The
+raw timing lines in the private Exam and Handheld logs carry the stream,
+sequence and wall-clock timestamp. Timings sample completed operations
+roughly once per second of signal. Low sample counts limit percentile
+interpretation. Resource measurements help diagnose regressions. The
+pass thresholds apply to capture and durable lag.
 `filesystem.txt` identifies the lab filesystem. The retained private lab
 contains synthetic credentials along with PostgreSQL data, files, and
 service logs. Services stop at the end of the run. An explicit volume on

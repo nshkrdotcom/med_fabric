@@ -76,6 +76,8 @@ defmodule MedFabric.Exam.DeviceIngress do
   end
 
   def handle_call(op, {socket, _}, %{socket: socket} = s) do
+    started = if op == :checkpoint, do: checkpoint_timing(s)
+
     result =
       S.scoped(s.bind, fn tx, session ->
         unless session.phase in ["capturing", "finalizing"], do: S.abort(tx, :inactive)
@@ -83,6 +85,8 @@ defmodule MedFabric.Exam.DeviceIngress do
         observe_ingress(tx, op, s)
         record_result(tx, op, act(op, s), s)
       end)
+
+    checkpoint_timing(s, "exam_checkpoint_tx_us", started)
 
     case result do
       {:ok, {:sealed, r}} -> {:stop, :normal, {:ok, r}, s}
@@ -360,7 +364,12 @@ defmodule MedFabric.Exam.DeviceIngress do
     })
   end
 
-  defp act(:checkpoint, s), do: StreamWriter.checkpoint(s.writer)
+  defp act(:checkpoint, s) do
+    started = checkpoint_timing(s)
+    result = StreamWriter.checkpoint(s.writer)
+    checkpoint_timing(s, "exam_writer_checkpoint_us", started)
+    result
+  end
 
   defp act({:finish, seq, count, interruption}, s) do
     with {:ok, r} <- StreamWriter.checkpoint(s.writer),
@@ -374,6 +383,24 @@ defmodule MedFabric.Exam.DeviceIngress do
   end
 
   defp act(_, _), do: {:error, :unsupported}
+
+  defp checkpoint_timing(s) do
+    stride = if s.name == "audio", do: 47, else: 11
+
+    if rem(s.receipt.durable_sequence, stride) == 0 and
+         System.get_env("MF_SOAK_TIMINGS") == "1",
+       do: System.monotonic_time(:microsecond)
+  end
+
+  defp checkpoint_timing(_, _, nil), do: :ok
+
+  defp checkpoint_timing(s, stage, started) do
+    elapsed = System.monotonic_time(:microsecond) - started
+
+    IO.puts(
+      "soak_timing #{System.system_time(:millisecond)} #{s.name} #{s.receipt.durable_sequence} #{stage} #{elapsed}"
+    )
+  end
 
   defp uint(s) when is_binary(s) and byte_size(s) in 1..20 do
     case Integer.parse(s) do

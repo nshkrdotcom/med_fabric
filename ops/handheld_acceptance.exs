@@ -1,11 +1,12 @@
 Code.require_file("handheld/lab.exs", __DIR__)
 Code.require_file("handheld/process_lab.exs", __DIR__)
 Code.require_file("handheld/oracle.exs", __DIR__)
+Code.require_file("handheld/soak.exs", __DIR__)
 
 defmodule MedFabric.HandheldAcceptance do
   @moduledoc false
   alias MedFabric.HandheldDemo, as: Demo
-  alias MedFabric.Acceptance.{Oracle, ProcessLab}
+  alias MedFabric.Acceptance.{Oracle, ProcessLab, Soak}
   import Oracle, only: [check!: 2, read: 1, sha: 1, integer: 1]
 
   @root Path.expand("..", __DIR__)
@@ -122,10 +123,21 @@ defmodule MedFabric.HandheldAcceptance do
 
         lab =
           case name do
-            "paired" -> paired!(lab)
-            "soak" -> soak!(lab, seconds)
-            "spot-check" -> spot!(lab)
-            "legacy-browser" -> legacy!(lab)
+            "paired" ->
+              paired!(lab)
+
+            "soak" ->
+              soak!(
+                lab,
+                seconds,
+                Path.dirname(report_path || Path.join(directory, "report.json"))
+              )
+
+            "spot-check" ->
+              spot!(lab)
+
+            "legacy-browser" ->
+              legacy!(lab)
           end
 
         scenario(name <> "-elapsed-seconds", (System.monotonic_time(:millisecond) - start) / 1000)
@@ -304,7 +316,7 @@ defmodule MedFabric.HandheldAcceptance do
     lab = if "spot-check" in required, do: hapi!(lab), else: lab
     lab = if lab.preview?, do: start_preview!(lab), else: lab
     save(at(lab, "server.json"), lab.cfg)
-    lab = start_server!(lab)
+    lab = start_server!(lab, "soak" in required)
 
     relay =
       launch!(lab, "tls-relay", "elixir", [
@@ -338,9 +350,9 @@ defmodule MedFabric.HandheldAcceptance do
     save(path, value)
   end
 
-  defp capture!(command, args, cwd, env) do
+  defp capture!(command, args, cwd, env, timeout \\ "8") do
     # timeout also bounds psql calls used in readiness polling.
-    case System.cmd("timeout", ["8", command | args],
+    case System.cmd("timeout", [timeout, command | args],
            cd: cwd,
            env:
              Enum.to_list(Map.merge(Map.new(System.get_env(), fn {k, _} -> {k, nil} end), env)),
@@ -351,8 +363,15 @@ defmodule MedFabric.HandheldAcceptance do
     end
   end
 
-  defp sql!(lab, statement),
-    do: capture!("psql", ["-XAt", "-v", "ON_ERROR_STOP=1", "-c", statement], @root, lab.env)
+  defp sql!(lab, statement, timeout \\ "8"),
+    do:
+      capture!(
+        "psql",
+        ["-XAt", "-v", "ON_ERROR_STOP=1", "-c", statement],
+        @root,
+        lab.env,
+        timeout
+      )
 
   defp sql_ready?(lab) do
     sql!(lab, "SELECT current_setting('data_directory')") == at(lab, "pgdata")
@@ -494,7 +513,7 @@ defmodule MedFabric.HandheldAcceptance do
   defp log_contains?(child, text),
     do: File.regular?(child.log) and String.contains?(File.read!(child.log), text)
 
-  defp isolate!(lab, role, exe, args, config \\ nil, env \\ nil) do
+  defp isolate!(lab, role, exe, args, config, env \\ nil) do
     cwd = Path.join([@root, "apps", role])
 
     base = [
@@ -639,16 +658,25 @@ defmodule MedFabric.HandheldAcceptance do
     end
   end
 
-  defp start_server!(lab) do
+  defp start_server!(lab, soak? \\ false) do
+    env = Map.put(lab.env, "MF_SOAK_TIMINGS", if(soak?, do: "1"))
+
     server =
-      isolate!(lab, "exam", "mix", [
-        "run",
-        "--no-start",
-        "--no-halt",
-        Path.join(@root, "ops/run_exam.exs"),
-        "--config",
-        at(lab, "server.json")
-      ])
+      isolate!(
+        lab,
+        "exam",
+        "mix",
+        [
+          "run",
+          "--no-start",
+          "--no-halt",
+          Path.join(@root, "ops/run_exam.exs"),
+          "--config",
+          at(lab, "server.json")
+        ],
+        nil,
+        env
+      )
 
     ProcessLab.wait!(
       fn -> log_contains?(server, "Synthetic exam ready") end,
@@ -1020,79 +1048,132 @@ defmodule MedFabric.HandheldAcceptance do
     end
   end
 
-  defp await_soak!(lab, cfg, child, started) do
+  defp await_soak!(lab, cfg, child, started, file) do
     key = make_ref()
-    timer = Process.send_after(self(), {key, nil}, 10_000)
+    children = Enum.reject(ProcessLab.children(), &(&1.name == "initdb"))
+    take_sample = fn previous -> soak_sample(lab, cfg, started, children, previous) end
+    baseline = take_sample.(nil)
+    :ok = Soak.append!(file, baseline)
+    Process.send_after(self(), {key, baseline, %{}}, Soak.interval_ms())
 
-    try do
+    result =
       ProcessLab.wait!(
         fn ->
-          receive do
-            {^key, previous} ->
-              current = print_soak_progress(lab, cfg, started, previous)
-              Process.send_after(self(), {key, current}, 10_000)
-          after
-            0 -> :ok
-          end
-
           case ProcessLab.status(child) do
-            nil -> false
-            status -> {:exit_status, status}
+            nil ->
+              receive do
+                {^key, previous, streaks} ->
+                  point = take_sample.(previous)
+                  :ok = Soak.append!(file, point)
+                  Soak.print(point)
+                  {streaks, failures} = Soak.assess(point, streaks)
+
+                  case failures do
+                    [] ->
+                      interval = Soak.interval_ms()
+                      spent = System.monotonic_time(:millisecond) - started - point.elapsed_ms
+                      Process.send_after(self(), {key, point, streaks}, max(0, interval - spent))
+                      false
+
+                    _ ->
+                      {:stopped, failures}
+                  end
+              after
+                0 -> false
+              end
+
+            status ->
+              :ok = Soak.append!(file, %{take_sample.(nil) | phase: "client_exited"})
+              {:exited, status}
           end
         end,
         (cfg["seconds"] + 120) * 1_000,
         nil,
         "soak capture and seal"
       )
-      |> elem(1)
-    after
-      Process.cancel_timer(timer)
+
+    case result do
+      {:exited, status} ->
+        {status, []}
+
+      {:stopped, failures} ->
+        IO.puts(:stderr, "Soak stopped on performance guardrail: #{JSON.encode!(failures)}")
+        {ProcessLab.stop!(child, "TERM"), failures}
     end
   end
 
-  defp print_soak_progress(lab, cfg, started, previous) do
-    elapsed = div(System.monotonic_time(:millisecond) - started, 1_000)
+  defp soak_sample(lab, cfg, started, children, previous) do
+    root = at(lab, "spool/" <> cfg["acquisition"])
+    elapsed = System.monotonic_time(:millisecond) - started
+    Soak.sample(root, cfg["seconds"], elapsed, previous, children, fn -> soak_postgres(lab) end)
+  end
 
-    streams =
-      for name <- ["audio", "ecg"] do
-        dir = at(lab, Path.join(["spool", cfg["acquisition"], name]))
-        source = read_soak_counter(dir, "source.json")
-        receipt = read_soak_counter(dir, "receipt.json")
-        {name, source["sample"] || 0, receipt["durable_sample"] || "0", source["done"] == true}
-      end
+  defp soak_postgres(lab) do
+    sql!(
+      lab,
+      """
+      SELECT json_build_object(
+        'activity', (SELECT coalesce(json_agg(a), '[]') FROM (
+          SELECT state, wait_event_type, wait_event, count(*)
+          FROM pg_stat_activity
+          WHERE datname = current_database() AND pid <> pg_backend_pid()
+          GROUP BY 1,2,3
+        ) a),
+        'commits', xact_commit, 'rollbacks', xact_rollback, 'deadlocks', deadlocks,
+        'temp_bytes', temp_bytes, 'blocks_read', blks_read, 'blocks_hit', blks_hit)
+      FROM pg_stat_database WHERE datname = current_database()
+      """,
+      "2"
+    )
+    |> JSON.decode!()
+  rescue
+    _ -> nil
+  end
 
-    durable = Enum.map(streams, &elem(&1, 2))
-    stalled = if durable == previous, do: " · no new durable receipts since last update", else: ""
-    stage = if Enum.all?(streams, &elem(&1, 3)), do: "draining or sealing", else: "capturing"
+  defp soak!(lab, seconds, evidence) do
+    File.mkdir_p!(evidence)
+    samples = Path.join(evidence, "soak-samples.jsonl")
+    policy = Soak.policy()
 
-    counters =
-      Enum.map_join(streams, " · ", fn {name, produced, acknowledged, _done} ->
-        "#{name}: #{produced} produced, #{acknowledged} durable samples"
-      end)
+    result = %{
+      requested_seconds: seconds,
+      stage: "capture_and_seal",
+      performance: %{policy: policy, samples: Path.basename(samples)}
+    }
+
+    scenario("soak", result)
+
+    {cfg, child} =
+      client!(lab, "paired_exam", "soak", %{"seconds" => seconds, "soak_timings" => true})
+
+    id = cfg["acquisition"]
+    started = System.monotonic_time(:millisecond)
 
     IO.puts(
-      "Soak #{elapsed}s elapsed (#{cfg["seconds"]}s capture) · #{stage} · #{counters}#{stalled}"
+      "Soak started: #{seconds}s of capture. Rates and lag every #{div(Soak.interval_ms(), 1_000)}s."
     )
 
-    durable
-  end
+    {exit_status, failures} =
+      File.open!(samples, [:write, :exclusive], fn file ->
+        File.chmod!(samples, 0o600)
 
-  defp read_soak_counter(dir, name) do
-    with {:ok, bytes} <- File.read(Path.join(dir, name)),
-         {:ok, value} when is_map(value) <- JSON.decode(bytes) do
-      value
-    else
-      _ -> %{}
-    end
-  end
+        try do
+          await_soak!(lab, cfg, child, started, file)
+        after
+          assessment = Soak.observations(samples)
+          timings = Soak.timings([child, lab.server])
 
-  defp soak!(lab, seconds) do
-    scenario("soak", %{requested_seconds: seconds, stage: "capture_and_seal"})
-    started = System.monotonic_time(:millisecond)
-    {cfg, child} = client!(lab, "paired_exam", "soak", %{"seconds" => seconds})
-    id = cfg["acquisition"]
-    IO.puts("Soak started: #{seconds}s of capture. Progress every 10 seconds.")
-    exit_status = await_soak!(lab, cfg, child, started)
+          performance =
+            Map.merge(result.performance, Map.put(assessment, :sampled_timings, timings))
+
+          scenario("soak", %{result | performance: performance})
+        end
+      end)
+
+    result = report().scenarios["soak"]
+    performance = Map.put(result.performance, :failures, failures)
+    result = Map.merge(result, %{performance: performance, client_exit: exit_status})
+    scenario("soak", result)
 
     progress =
       sql!(lab, """
@@ -1111,16 +1192,21 @@ defmodule MedFabric.HandheldAcceptance do
         json -> JSON.decode!(json)
       end
 
-    result = %{
-      requested_seconds: seconds,
-      capture_and_seal_ms: System.monotonic_time(:millisecond) - started,
-      client_exit: exit_status,
-      progress: progress,
-      stage: "capture_and_seal"
-    }
+    result =
+      Map.merge(result, %{
+        capture_and_seal_ms: System.monotonic_time(:millisecond) - started,
+        progress: progress
+      })
 
     scenario("soak", result)
+    check!(failures == [], "Soak exceeded its performance guardrail")
     check!(exit_status == 0, "Soak acquisition did not seal")
+
+    check!(
+      seconds < 20 or performance.sustained_lag_check_possible,
+      "Soak ended without enough observations for the sustained lag check"
+    )
+
     IO.puts("Soak capture sealed. Verifying stored bytes against the fixture.")
     {root, digest, manifest} = manifest!(lab, cfg)
     check!(manifest["defects"] == [], "Soak manifest includes defects")

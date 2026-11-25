@@ -4,6 +4,7 @@ umask 077
 usage() {
   echo 'Usage: ops/qc_native.sh [--suite all|paired|soak] [--evidence NEW_DIR]'
   echo '       [--volume EXISTING_DIR] [--med-ex-project PROJECT_OR_WELD_RELEASE_DIR] [--seconds N] [--keep-failure]'
+  echo 'Soak defaults to 29 minutes. Use --suite soak --seconds 60 for a short diagnostic.'
 }
 suite=all
 seconds=
@@ -164,6 +165,7 @@ done
 )
 elixir ops/handheld/oracle_test.exs
 elixir ops/handheld/process_lab_test.exs
+elixir ops/handheld/soak_test.exs
 ops/qc_services.sh run "${options[@]}" -- bash -euc '
   evidence=$1
   (cd apps/exam && mix test integration/{device_review,device_root_lock}_test.exs)

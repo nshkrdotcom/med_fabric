@@ -109,6 +109,7 @@ defmodule MedExHandheld.Paired do
   defp capture_frame(c, spool, monitor, hub, n, p, spec, target) do
     {rn, rd} = spec.sample_rate
     wait_for_sample(c, n, p.first, spec.sample_rate)
+    started = timing_start(c, n, p.seq)
     step = frame_step(c, n)
     gap = n == "audio" and c["gap"] in [true, 3] and p.seq == 2
     count = min(if(gap, do: 100, else: step), target - p.first)
@@ -120,13 +121,19 @@ defmodule MedExHandheld.Paired do
     {next, record} =
       if gap, do: lost_frame(c, p, next, step, target, spec.sample_rate), else: {next, raw}
 
+    put_started = timing_mark(started)
+
     case Spool.put(spool, n, p.seq, record) do
       :ok ->
+        put_finished = timing_mark(started)
+
         if not gap and {n, spec.encoding} == {"audio", :s16le} do
           publish_monitor_frame(c, monitor, hub, frame)
         end
 
         save_cursor(c, n, %{"sequence" => next.seq, "sample" => next.first, "done" => false})
+        timing(n, p.seq, "produce_us", started)
+        timing(n, p.seq, "spool_put_us", put_started, put_finished)
         loop(c, spool, monitor, hub, n, next, spec)
 
       {:error, :spool_full} ->
@@ -383,7 +390,9 @@ defmodule MedExHandheld.Paired do
 
     cond do
       q < state["sequence"] ->
+        started = timing_start(c, n, q)
         {:ok, raw} = Spool.get(spool, n, q)
+        sending = timing_mark(started)
 
         next_sequence =
           if String.starts_with?(raw, "MEX1") do
@@ -398,9 +407,17 @@ defmodule MedExHandheld.Paired do
 
         case Transport.recv(s, 35_000) do
           {:ok, %{"type" => "accepted"}} ->
+            accepted = timing_mark(started)
             {:ok, %{"type" => "durable"} = r} = Transport.recv(s, 35_000)
+            durable = timing_mark(started)
             true = r["durable_sequence"] == to_string(next_sequence)
             :ok = Spool.ack(spool, n, gen, r)
+            reclaimed = timing_mark(started)
+            timing(n, q, "spool_get_us", started, sending)
+            timing(n, q, "wire_accepted_us", sending, accepted)
+            timing(n, q, "accepted_to_durable_us", accepted, durable)
+            timing(n, q, "spool_ack_us", durable, reclaimed)
+            timing(n, q, "upload_cycle_us", started, reclaimed)
             drain(c, spool, s, n, gen, next_sequence)
 
           {:ok, %{"type" => "stream_finished"} = r} ->
@@ -428,5 +445,27 @@ defmodule MedExHandheld.Paired do
       true ->
         raise "remote receipt exceeds stored source watermark"
     end
+  end
+
+  defp timing_start(c, stream, sequence) do
+    # Sample roughly once per second of signal, sweeping across the other stream's cadence.
+    stride = if stream == "audio", do: 47, else: 11
+
+    if c["soak_timings"] == true and rem(sequence, stride) == 0,
+      do: System.monotonic_time(:microsecond)
+  end
+
+  defp timing_mark(nil), do: nil
+  defp timing_mark(_), do: System.monotonic_time(:microsecond)
+
+  defp timing(stream, sequence, stage, started),
+    do: timing(stream, sequence, stage, started, timing_mark(started))
+
+  defp timing(_, _, _, nil, _), do: :ok
+
+  defp timing(stream, sequence, stage, started, finished) do
+    IO.puts(
+      "soak_timing #{System.system_time(:millisecond)} #{stream} #{sequence} #{stage} #{finished - started}"
+    )
   end
 end
