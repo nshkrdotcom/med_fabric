@@ -77,11 +77,19 @@ for {app, requirement, source} <- config[:deps], app in [:med_ex, :med_ex_opus, 
         do: raise("Wrong path resolution for #{app}")
 
     source[:hex] ->
-      {:hex, package, version, _, _, _, repo, _} = Map.fetch!(lock, app)
+      {:hex, package, version, _, _, _, repo, checksum} = Map.fetch!(lock, app)
 
       unless to_string(package) == source[:hex] and repo == source[:repo] and
                Version.match?(version, requirement),
              do: raise("Wrong Hex resolution for #{app}")
+
+      if archives = System.get_env("MF_SOURCE_QC_ARCHIVES") do
+        receipt =
+          archives |> Path.join("registry-#{app}-hex.json") |> File.read!() |> JSON.decode!()
+
+        unless checksum == receipt["sha256"],
+          do: raise("Wrong signed archive checksum for #{app}")
+      end
 
     source[:git] || source[:github] ->
       {:git, _, revision, options} = Map.fetch!(lock, app)
