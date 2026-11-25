@@ -114,6 +114,24 @@ defmodule MedFabric.Store.DeviceAdmissionTest do
              )
   end
 
+  test "command uses the highest confirmed epoch for the admitted boot", c do
+    assert {:ok, bind} = reserve(c, "paired_exam", "epochs-" <> c.enc)
+
+    for {suffix, boot, epoch, seconds_old} <- [
+          {"older", bind.boot, "10", 20},
+          {"newer", bind.boot, "2", 10},
+          {"other-boot", "other-boot", "99", 1}
+        ] do
+      S.rows(c.db, """
+      INSERT INTO device_commands(id,acquisition_id,fingerprint,request,state,result,updated_at)
+      VALUES($1,$2,'test',$3,'applied',$4,clock_timestamp()-$5::int*interval '1 second')
+      """, [bind.id <> suffix, bind.id, %{"boot" => boot}, %{"epoch" => epoch}, seconds_old])
+    end
+
+    assert {:ok, :ok} = DeviceCommands.request(c.enc, bind.id, c.actor, "half")
+    assert {:ok, %{"type" => "command", "expected_epoch" => "10"}} = DeviceCommands.poll(bind)
+  end
+
   test "timed out command stays unknown until a matching state result reconciles it", c do
     assert {:ok, bind} = reserve(c, "paired_exam", "command-" <> c.enc)
     assert {:ok, :ok} = DeviceCommands.request(c.enc, bind.id, c.actor, "half")

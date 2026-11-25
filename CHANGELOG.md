@@ -1,6 +1,6 @@
 # Med Fabric changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0
 
 - Add a Weld 0.18.0 maintainer project and a release manifest for the standalone
   Exam package, including its internal applications, static files, and SQL migrations.
@@ -15,7 +15,11 @@
   verify its packaged browser assets.
 - Reserve acquisitions before PCM, recover finalized evidence after interruption, and serve verified, seekable recordings with bounded memory.
 - Support encounter-scoped FHIR bindings, strict observation confirmation, distinct input devices, authenticated HTTPS ingress and TURN credentials.
-- Use the local MedEx 0.2 candidate until Hex publication. See the browser-to-record guide for the QC and release workflow.
+- Verify segment occurrences and contiguous review ranges before committing clinical
+  decisions, and preserve durable receipt identity when capture reaches capacity.
+- Handle multi-sequence replay gaps and retire Preview peers on encoder failure.
+- Qualify Exam, Handheld and Preview 0.1.1 against MedEx 0.2.1. The release guide
+  describes artifact preparation, qualification and publication.
 
 
 ## 0.1.0

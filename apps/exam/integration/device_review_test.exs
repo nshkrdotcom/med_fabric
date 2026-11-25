@@ -218,7 +218,10 @@ defmodule MedFabric.Exam.DeviceReviewTest do
 
       state =
         Enum.reduce(0..1, state, fn q, state ->
-          {:ok, raw} = FrameV1.encode(%{frame | sequence: q, first_sample: q})
+          epoch = if number == 1, do: q, else: 0
+
+          {:ok, raw} =
+            FrameV1.encode(%{frame | sequence: q, first_sample: q, config_epoch: epoch})
 
           assert {:push, {:text, _}, pending} =
                    DeviceSocket.handle_in({raw, [opcode: :binary]}, state)
@@ -337,6 +340,27 @@ defmodule MedFabric.Exam.DeviceReviewTest do
 
     other_path = String.replace(path, "/encounters/#{c.enc}/", "/encounters/unknown/")
     assert %{status: 404} = request.(other_path, c.actor, "clinician", secret)
+
+    manifest = Path.join(MedFabric.Exam.DeviceManifest.root(id), "manifest.mej1")
+    defects = manifest |> File.read!() |> JSON.decode!() |> Map.fetch!("defects")
+
+    range = fn stream, first, ending ->
+      %{"stream" => stream, "first" => first, "end" => ending}
+    end
+
+    review = fn ranges ->
+      DeviceReviews.review_verified(c.enc, id, c.actor, digest, %{
+        "decision" => "partial",
+        "note" => "Fixture review",
+        "acknowledged" => defects,
+        "ranges" => ranges,
+        "metrics" => []
+      })
+    end
+
+    assert {:error, :invalid_review} = review.([range.("audio", "0", "2")])
+    assert {:error, :invalid_review} = review.([range.("ecg", "00", "2")])
+    assert {:ok, :ok} = review.([range.("ecg", "0", "2"), range.("audio", "1", "2")])
 
     S.rows(c.db, "UPDATE encounters SET closed_at=now() WHERE id=$1", [c.enc])
     assert %{status: 403} = request.(path, c.actor, "clinician", secret)
