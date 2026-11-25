@@ -2,9 +2,6 @@ defmodule MedFabric.BuildSources do
   @moduledoc false
 
   @med_ex_apps [:med_ex, :med_ex_opus, :med_ex_rtc]
-  @med_ex_requirement "~> 0.2.0"
-  # Baseline provider revision. Repin this family after the verified MedEx push.
-  @med_ex_revision "34e14332fcb40ee766cf5b34b15986ba89e6a0b9"
   @repo_apps ~w(med_ex med_ex_opus med_ex_rtc mf_domain mf_store mf_interop)
   @git_keys [:github, :git, :ref, :subdir]
   @scm @git_keys ++ ~w(branch tag path in_umbrella sparse submodules depth hex repo organization)a
@@ -15,9 +12,10 @@ defmodule MedFabric.BuildSources do
                 HEX_CACERTS_PATH)
 
   def med_ex_dependency(app) when app in @med_ex_apps do
-    git = [github: "nshkrdotcom/med_ex", ref: @med_ex_revision]
-    options = if app == :med_ex, do: [override: true], else: [subdir: "extensions/#{app}"]
-    {app, @med_ex_requirement, git ++ options}
+    requirement = if app == :med_ex, do: "~> 0.2.0", else: "~> 0.1.0"
+    options = [hex: Atom.to_string(app), repo: "hexpm"]
+    options = if app == :med_ex, do: Keyword.put(options, :override, true), else: options
+    {app, requirement, options}
   end
 
   # Loaded only by the repository-owned Mix projects.

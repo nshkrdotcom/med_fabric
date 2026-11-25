@@ -4,10 +4,9 @@ Med Fabric records two independent reference-peripheral waveforms or a sparse PL
 
 ## Choose application sources
 
-The default SDK family uses one MedEx Git revision in `config/sources.exs`.
-The extensions use their own Git `subdir` and the host selects the shared
-base package. When changing the pin, resolve the ordinary default `mix.lock`
-in Exam, Handheld, and Preview with `mix deps.get`. Check the legacy media
+The default dependencies use MedEx `~> 0.2.0` and its optional providers
+`~> 0.1.0` from Hex. Resolve the default app locks in Exam, Handheld, and
+Preview with `mix deps.get`. Check the legacy media
 profile in its own context. Stream-v1 applications require the revision-1
 contract. A legacy SDK package with only browser capture cannot satisfy it.
 

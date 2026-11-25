@@ -38,9 +38,9 @@ listening while authoritative capture continues.
 ## Run a local demonstration
 
 Use Elixir 1.20 with OTP 29 and ordinary Mix in the application directories.
-The default SDK and provider dependencies share a Git revision in
+The default SDK and provider dependencies resolve from Hex using the ranges in
 `config/sources.exs`. The [handheld guide](guides/handheld_demo.md) covers
-resolving that pin, selecting local sources, starting a native PostgreSQL
+resolving the app locks, selecting local sources, starting a native PostgreSQL
 demo, and running TLS replay and recovery checks.
 The [browser guide](guides/browser_to_record.md) covers the browser workflow.
 The [preview guide](guides/preview_isolation.md) covers the isolated monitor.

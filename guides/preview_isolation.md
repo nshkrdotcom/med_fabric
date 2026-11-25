@@ -21,5 +21,5 @@ group during recording, and compares authoritative source hashes afterward.
 The in-VM legacy browser providers are a separate Exam build profile. Set
 `MF_EXAM_LEGACY_MEDIA=1` for dependency resolution, compilation, tests, and
 when starting the legacy Exam build or release. This profile uses separate
-lock, dependency and build paths, even with the default Git sources. Default
+lock, dependency and build paths, even with the default Hex sources. Default
 Exam and Handheld use only `:med_ex`.

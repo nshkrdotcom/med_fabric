@@ -11,7 +11,9 @@ for app <- [:med_ex, :med_ex_opus, :med_ex_rtc] do
     _ = Application.load(app)
     version = Application.spec(app, :vsn) |> to_string()
 
-    unless Version.match?(version, "~> 0.2.0"),
+    {^app, requirement, _} = MedFabric.BuildSources.med_ex_dependency(app)
+
+    unless Version.match?(version, requirement),
       do: raise("Incompatible actual #{app} version #{version}")
   end
 end

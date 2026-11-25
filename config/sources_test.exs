@@ -50,21 +50,15 @@ defmodule MedFabric.BuildSourcesTest do
     assert File.read!(Path.join(c.project, "mix.lock")) == c.lock
   end
 
-  test "the baseline MedEx family shares one revision, requirement and explicit subdirectories" do
-    {base, requirement, base_opts} = Sources.med_ex_dependency(:med_ex)
-    assert base == :med_ex
-    assert Version.match?("0.2.0", requirement)
-    assert base_opts[:github] == "nshkrdotcom/med_ex"
-    assert Regex.match?(~r/\A[0-9a-f]{40}\z/, base_opts[:ref])
+  test "the default MedEx family uses the published Hex package ranges" do
+    assert {:med_ex, "~> 0.2.0", base_opts} = Sources.med_ex_dependency(:med_ex)
+    assert base_opts[:hex] == "med_ex"
+    assert base_opts[:repo] == "hexpm"
     assert base_opts[:override]
-    refute base_opts[:subdir]
 
     for app <- [:med_ex_opus, :med_ex_rtc] do
-      assert {^app, ^requirement, options} = Sources.med_ex_dependency(app)
-      assert options[:ref] == base_opts[:ref]
-      assert options[:github] == base_opts[:github]
-      assert options[:subdir] == "extensions/#{app}"
-      refute options[:override]
+      assert {^app, "~> 0.1.0", options} = Sources.med_ex_dependency(app)
+      assert options == [hex: Atom.to_string(app), repo: "hexpm"]
     end
   end
 
