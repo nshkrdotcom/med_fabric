@@ -11,6 +11,17 @@ connects to an `mf_exam` server over TLS WebSockets.
 - A running `mf_exam` endpoint with a trusted CA certificate and an enrolled
   device credential
 
+## Quick Local Dev (Monorepo Checkout)
+
+From the `med_fabric` repository root, run the full stack with `./ops/dev.sh`:
+
+```bash
+./ops/dev.sh up                      # prepares lab & starts PostgreSQL
+./ops/dev.sh exam                    # Terminal 2: starts mf_exam
+./ops/dev.sh handheld                # Terminal 3: TLS relay + paired_exam
+./ops/dev.sh handheld plx_spot_check # Terminal 3: PLXS spot check
+```
+
 ## Configuration
 
 The CLI accepts a JSON fixture file (`--config`) describing the server URL,

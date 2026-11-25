@@ -37,15 +37,34 @@ listening while authoritative capture continues.
 
 ## Run a local demonstration
 
-Start the local dev lab (PostgreSQL, TLS certs, and Preview secret) and run
-Preview, Exam, and Handheld in three terminals:
+Start the local dev lab (isolated PostgreSQL, localhost TLS certs, and shared
+Preview credential) and run Preview, Exam, and Handheld in three terminals:
 
 ```bash
-./ops/dev.sh up         # prepares _build/handheld-demo and starts PostgreSQL
-./ops/dev.sh preview    # Terminal 1: isolated mf_preview sidecar
-./ops/dev.sh exam       # Terminal 2: mf_exam Phoenix server
-./ops/dev.sh handheld   # Terminal 3: TLS relay + mf_handheld (paired_exam)
-./ops/dev.sh down       # stops PostgreSQL when done
+./ops/dev.sh up                          # prepares _build/handheld-demo, starts Postgres, prints browser URL
+./ops/dev.sh preview                     # Terminal 1: isolated mf_preview sidecar (127.0.0.1:4090)
+./ops/dev.sh exam                        # Terminal 2: mf_exam Phoenix server + device TLS listener
+./ops/dev.sh handheld                    # Terminal 3: TLS relay + mf_handheld (paired_exam)
+./ops/dev.sh handheld plx_spot_check     # Terminal 3 (optional): pulse-oximetry spot check
+```
+
+Open the exact **HTTP** encounter URL printed by `./ops/dev.sh url`
+(`http://localhost:<http_port>/encounters/<exam>?key=<clinician_key>`). Do not
+open bare `/` (Exam only serves encounter routes) or the HTTPS device port
+(which uses the private lab CA for `mf_handheld` TLS WebSockets).
+
+Once open in the browser, follow **Handheld examinations and review** to:
+- play back verified acoustic segments and inspect ECG ranges, explicit gaps,
+  and clock-uncertainty bounds from `paired_exam`
+- review, request repeat, or accept `plx_spot_check` SpO2 and pulse-rate
+  measurements
+- enter manual pulse-rate readings and verify atomic acceptance
+
+When finished, stop Terminals 1 & 2 with `Ctrl-C`, then run:
+
+```bash
+./ops/dev.sh down                        # stops isolated PostgreSQL
+./ops/dev.sh reset                       # optional: removes _build/handheld-demo
 ```
 
 Use Elixir 1.20 with OTP 29 and ordinary Mix in the application directories.

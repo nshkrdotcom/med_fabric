@@ -168,6 +168,26 @@ Review report.json together with logs, chunk/index/manifest files, source identi
 
 ## Separate terminals or remote handheld
 
+For local development from the repository root, `./ops/dev.sh` automates
+PostgreSQL binary discovery, lab preparation, Preview secret wiring, and TLS
+relay lifecycle:
+
+```bash
+./ops/dev.sh up                      # prepares _build/handheld-demo & starts Postgres
+./ops/dev.sh preview                 # Terminal 1: mf_preview sidecar
+./ops/dev.sh exam                    # Terminal 2: mf_exam server
+./ops/dev.sh handheld                # Terminal 3: TLS relay + paired_exam
+./ops/dev.sh handheld plx_spot_check # Terminal 3: PLXS spot check
+./ops/dev.sh url                     # prints the HTTP clinician review URL
+./ops/dev.sh down                    # stops Postgres (or ./ops/dev.sh reset)
+```
+
+Open the exact HTTP URL printed by `./ops/dev.sh url`
+(`http://localhost:<http_port>/encounters/<exam>?key=<clinician_key>`), not
+bare `/` or the HTTPS device port.
+
+### Manual setup (custom or remote hosts)
+
 ```bash
 elixir ops/handheld_demo.exs prepare --run-dir _build/handheld-demo
 ```

@@ -23,6 +23,16 @@ WebRTC.
 Configure `mf_exam` with matching `MF_PREVIEW_URL` (for example,
 `http://127.0.0.1:4090`) and `MF_PREVIEW_CREDENTIAL_FILE`.
 
+## Quick Local Dev (Monorepo Checkout)
+
+From the `med_fabric` repository root, `./ops/dev.sh` creates the shared
+`preview.credential` file, wires it into `mf_exam`, and starts `mf_preview`:
+
+```bash
+./ops/dev.sh up       # creates preview.credential and prepares the dev lab
+./ops/dev.sh preview  # starts mf_preview on 127.0.0.1:4090
+```
+
 ## Running Locally or as a Release
 
 Development:

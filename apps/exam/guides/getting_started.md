@@ -23,6 +23,23 @@ Key runtime environment variables (`config/runtime.exs`):
 - `MF_PREVIEW_URL` & `MF_PREVIEW_CREDENTIAL_FILE` — Optional loopback sidecar
   configuration for isolated live monitoring.
 
+## Quick Local Dev (Monorepo Checkout)
+
+From the `med_fabric` repository root, `./ops/dev.sh` bootstraps an isolated
+PostgreSQL instance, TLS certificates, and Preview credentials automatically:
+
+```bash
+./ops/dev.sh up        # starts PostgreSQL and prints the clinician review URL
+./ops/dev.sh preview   # Terminal 1 (optional isolated monitor)
+./ops/dev.sh exam      # Terminal 2: starts mf_exam
+./ops/dev.sh handheld  # Terminal 3: uploads a synthetic paired_exam
+```
+
+Open the exact HTTP encounter URL printed by `./ops/dev.sh url`
+(`http://localhost:<http_port>/encounters/<exam>?key=<clinician_key>`). Bare
+`/` is intentionally unrouted, and the HTTPS port is reserved for device TLS
+WebSockets.
+
 ## Running as a Mix Release
 
 ```bash
