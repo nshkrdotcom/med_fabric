@@ -400,7 +400,7 @@ defmodule MedFabric.HandheldAcceptance do
     case :httpc.request(
            method,
            request,
-           [timeout: 6_000, connect_timeout: 2_000, autoredirect: true],
+           [timeout: 35_000, connect_timeout: 2_000, autoredirect: true],
            body_format: :binary
          ) do
       {:ok, {{_, status, _}, _, body}} -> {status, body}
