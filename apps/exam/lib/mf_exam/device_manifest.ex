@@ -60,7 +60,7 @@ defmodule MedFabric.Exam.DeviceManifest do
 
         {:build, inputs} ->
           with {:ok, built} <- prepare_staged_manifest(bind.id, inputs, :installed_or_recover) do
-            S.scoped(bind, &commit_staged(&1, bind.id, built), :update)
+            S.scoped(bind, fn tx, _ -> commit_staged(tx, bind.id, built) end, :update)
           end
       end
     end
