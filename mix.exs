@@ -58,6 +58,27 @@ defmodule MedFabric.Workspace.MixProject do
       {"apps/preview/README.md", filename: "preview", title: "Preview"}
     ]
 
+    app_guides = [
+      {"apps/exam/guides/getting_started.md",
+       filename: "exam_getting_started", title: "Exam: Getting Started"},
+      {"apps/exam/guides/browser_to_record.md",
+       filename: "exam_browser_to_record", title: "Exam: Browser to Record"},
+      {"apps/exam/guides/handheld_integration.md",
+       filename: "exam_handheld_integration", title: "Exam: Handheld Integration"},
+      {"apps/exam/guides/architecture.md",
+       filename: "exam_architecture", title: "Exam: Architecture"},
+      {"apps/handheld/guides/getting_started.md",
+       filename: "handheld_getting_started", title: "Handheld: Getting Started"},
+      {"apps/handheld/guides/spool_and_recovery.md",
+       filename: "handheld_spool_and_recovery", title: "Handheld: Spool & Recovery"},
+      {"apps/handheld/guides/deployment.md",
+       filename: "handheld_deployment", title: "Handheld: Deployment"},
+      {"apps/preview/guides/getting_started.md",
+       filename: "preview_getting_started", title: "Preview: Getting Started"},
+      {"apps/preview/guides/isolation_model.md",
+       filename: "preview_isolation_model", title: "Preview: Isolation Model"}
+    ]
+
     [
       main: "readme",
       before_closing_body_tag: &docs_diagrams/1,
@@ -76,11 +97,12 @@ defmodule MedFabric.Workspace.MixProject do
           {"README.md", filename: "readme", title: "Overview"},
           {"CHANGELOG.md", filename: "changelog", title: "Changelog"},
           {"LICENSE", filename: "license", title: "License"}
-        ] ++ guides ++ projects,
+        ] ++ guides ++ projects ++ app_guides,
       groups_for_extras: [
         Overview: ["README.md"],
         Guides: guides,
         Projects: Enum.map(projects, &elem(&1, 0)),
+        "Package Guides": Enum.map(app_guides, &elem(&1, 0)),
         Release: ~w(CHANGELOG.md LICENSE)
       ]
     ]

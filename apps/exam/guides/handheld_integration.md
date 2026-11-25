@@ -12,7 +12,7 @@ spot-check acquisitions.
   discontinuity gaps, and clock-alignment uncertainty bounds
   (`MedFabric.Exam.ClockObservations`).
 - Clinicians inspect verified segments and play back authenticated audio slices
-  via `MedFabric.ExamWeb.DeviceLive` and `MedFabric.ExamWeb.DeviceSegment`.
+  via `MedFabric.ExamWeb.DeviceLive` and the segment playback endpoint.
 
 ## Pulse-Oximetry Spot Checks (PLXS)
 

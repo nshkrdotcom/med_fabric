@@ -9,7 +9,7 @@
 
 `mf_store` (`core/store`) owns atomic persistence of encounters, typed evidence,
 clinician-accepted observations, and transactional FHIR export outbox intents in
-[Med Fabric](../../README.md).
+[Med Fabric](https://github.com/nshkrdotcom/med_fabric).
 
 ---
 
@@ -42,4 +42,4 @@ With `DATABASE_URL` set, the store's `mix test integration` exercises
 transaction rollback and concurrent acceptance. From `apps/exam`, use
 `mix test integration/recording_test.exs` against a dedicated test database
 with `MF_LAB` unset to exercise recording interruptions and near-limit range
-playback. [Browser-to-record guide](../../guides/browser_to_record.md)
+playback. [Browser-to-record guide](https://github.com/nshkrdotcom/med_fabric/blob/main/guides/browser_to_record.md)

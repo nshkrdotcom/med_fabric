@@ -8,7 +8,7 @@
 </p>
 
 `mf_domain` (`core/domain`) provides pure Elixir clinical evidence constructors
-for [Med Fabric](../../README.md), with zero database, Phoenix, or HTTP
+for [Med Fabric](https://github.com/nshkrdotcom/med_fabric), with zero database, Phoenix, or HTTP
 dependencies.
 
 ---
@@ -21,4 +21,4 @@ provenance) and operator-entered `pulse_rate` measurements (positive integer
 beats/minute with explicit manual provenance). PostgreSQL (`core/store`) owns
 concurrent review and acceptance state.
 
-Run `mix test` here, or see the [browser-to-record guide](../../guides/browser_to_record.md).
+Run `mix test` here, or see the [browser-to-record guide](https://github.com/nshkrdotcom/med_fabric/blob/main/guides/browser_to_record.md).

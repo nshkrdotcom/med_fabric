@@ -13,7 +13,10 @@ defmodule MedFabric.Exam.MixProject do
 
     {deps, paths} =
       if Code.ensure_loaded?(MedFabric.BuildSources) do
-        MedFabric.BuildSources.resolve(deps(legacy_media?), __DIR__, Path.expand("../..", __DIR__),
+        MedFabric.BuildSources.resolve(
+          deps(legacy_media?),
+          __DIR__,
+          Path.expand("../..", __DIR__),
           profile: profile
         )
       else

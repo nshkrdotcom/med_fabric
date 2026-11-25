@@ -2,21 +2,21 @@
   <title id="title">Interop</title>
   <desc id="desc">Two clinical documents linked by exchange arrows inside a beveled hexagonal frame.</desc>
   <defs>
-    <linearGradient id="metal" x2=".82" y2="1"><stop stop-color="#effbff"/><stop offset=".28" stop-color="#ffcd78"/><stop offset=".48" stop-color="#bd8962"/><stop offset=".53" stop-color="#ffcd78"/><stop offset="1" stop-color="#bd8962"/></linearGradient>
-    <linearGradient id="light" gradientUnits="userSpaceOnUse" x1="48" y1="60" x2="152" y2="140"><stop stop-color="#effbff"/><stop offset=".45" stop-color="#ffcd78"/><stop offset="1" stop-color="#bd8962"/></linearGradient>
-    <radialGradient id="field" cx=".37" cy=".28" r=".85"><stop stop-color="#365766"/><stop offset=".65" stop-color="#162f40"/><stop offset="1" stop-color="#091a26"/></radialGradient>
-    <pattern id="etch" width="12" height="12" patternUnits="userSpaceOnUse"><path d="M0 12 12 0" stroke="#ffcd78" stroke-opacity=".08"/><circle cx="6" cy="6" r=".8" fill="#ffcd78" opacity=".3"/></pattern>
+    <linearGradient id="metal" x2=".82" y2="1"><stop stop-color="#F5F7FA"/><stop offset=".28" stop-color="#D6AFB0"/><stop offset=".48" stop-color="#C2908A"/><stop offset=".53" stop-color="#D5B0AB"/><stop offset="1" stop-color="#C48F8E"/></linearGradient>
+    <linearGradient id="light" gradientUnits="userSpaceOnUse" x1="48" y1="60" x2="152" y2="140"><stop stop-color="#FBF7F7"/><stop offset=".45" stop-color="#D6AFB0"/><stop offset="1" stop-color="#C2908A"/></linearGradient>
+    <radialGradient id="field" cx=".37" cy=".28" r=".85"><stop stop-color="#132338"/><stop offset=".65" stop-color="#0B1320"/><stop offset="1" stop-color="#04070D"/></radialGradient>
+    <pattern id="etch" width="12" height="12" patternUnits="userSpaceOnUse"><path d="M0 12 12 0" stroke="#D1A8AF" stroke-opacity=".08"/><circle cx="6" cy="6" r=".8" fill="#D1A8AF" opacity=".25"/></pattern>
   </defs>
   <path d="M100 1 185.736515 50.5 185.736515 149.5 100 199 14.263485 149.5 14.263485 50.5Z" fill="url(#metal)"/>
   <g transform="translate(100 100) scale(.945) translate(-100 -100)">
     <path d="M100 1 185.736515 50.5 185.736515 149.5 100 199 14.263485 149.5 14.263485 50.5Z" fill="url(#field)"/><path d="M100 1 185.736515 50.5 185.736515 149.5 100 199 14.263485 149.5 14.263485 50.5Z" fill="url(#etch)"/>
-    <path d="M100 10 177.942286 55 177.942286 145 100 190 22.0577137 145 22.0577137 55Z" fill="none" stroke="#ffcd78" opacity=".52"/>
+    <path d="M100 10 177.942286 55 177.942286 145 100 190 22.0577137 145 22.0577137 55Z" fill="none" stroke="#D1A8AF" opacity=".38"/>
   </g>
   <g fill="none" stroke-linejoin="round" stroke-linecap="round">
-    <path d="M47 62h28l10 10v39h-38Z" fill="url(#metal)" stroke="#e1f6fd" stroke-width="1.5"/>
-    <path d="M75 62v11h10M54 84h21m-21 7h16m-16 7h19" stroke="#294759" stroke-width="2.5"/>
-    <path d="M115 94h28l10 10v39h-38Z" fill="url(#metal)" stroke="#e1f6fd" stroke-width="1.5"/>
-    <path d="M143 94v11h10M122 116h21m-21 7h16m-16 7h19" stroke="#294759" stroke-width="2.5"/>
+    <path d="M47 62h28l10 10v39h-38Z" fill="url(#metal)" stroke="#E9EDF5" stroke-width="1.5"/>
+    <path d="M75 62v11h10M54 84h21m-21 7h16m-16 7h19" stroke="#1E293B" stroke-width="2.5"/>
+    <path d="M115 94h28l10 10v39h-38Z" fill="url(#metal)" stroke="#E9EDF5" stroke-width="1.5"/>
+    <path d="M143 94v11h10M122 116h21m-21 7h16m-16 7h19" stroke="#1E293B" stroke-width="2.5"/>
     <path d="M93 76h36v11m-5-4 5 5 5-5M106 128H70v-11m-5 4 5-5 5 5" stroke="url(#light)" stroke-width="6"/>
   </g>
 </svg>

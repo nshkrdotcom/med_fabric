@@ -8,7 +8,7 @@
 </p>
 
 `mf_interop` (`core/interop`) is the single authoritative healthcare record
-exchange library for [Med Fabric](../../README.md) (kept outside
+exchange library for [Med Fabric](https://github.com/nshkrdotcom/med_fabric) (kept outside
 [MedEx](https://github.com/nshkrdotcom/med_ex)). It maps accepted observations
 into HL7 FHIR R4 `Observation` resources and delivers them idempotently over
 HTTP using `Req`. Qualified spot-check pulse rate and oxygen saturation
@@ -25,7 +25,7 @@ conditional create (`If-None-Exist`) and confirms remote identity and clinical
 values on read-back, including the presence or absence of a quantity comparator.
 
 Use `FHIR_BASE_URL` and `mix test integration` to exercise retry against native
-HAPI. See the [browser-to-record guide](../../guides/browser_to_record.md).
+HAPI. See the [browser-to-record guide](https://github.com/nshkrdotcom/med_fabric/blob/main/guides/browser_to_record.md).
 
 ## Accepted device metrics
 
