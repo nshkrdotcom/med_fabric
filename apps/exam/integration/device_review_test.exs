@@ -155,7 +155,111 @@ defmodule MedFabric.Exam.DeviceReviewTest do
     assert {:error, :unverified_manifest} =
              DeviceReviews.review_verified(c.enc, c.bind.id, c.actor, digest, choice)
 
-    assert outbox_count(c) == 0
+    assert [[0]] = outbox_count(c)
+  end
+
+  test "frame and gap capacity return the same verified terminal receipt on reopen", c do
+    S.rows(c.db, "UPDATE acquisitions SET state='interrupted' WHERE id=$1", [c.bind.id])
+    assert :ok = S.authorize(c.enc, c.bind.device, "paired_exam", "fixture", c.actor)
+    start_supervised!({Registry, keys: :unique, name: MedFabric.Exam.DeviceRegistry})
+    start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: MedFabric.Exam.Captures})
+
+    alias MedEx.Serialization
+    alias MedEx.Wire.FrameV1
+    alias MedFabric.Exam.DeviceIngress
+    alias MedFabric.ExamWeb.DeviceSocket
+
+    id = c.bind.id <> "-paired"
+
+    descriptors =
+      Map.new(["audio", "ecg"], fn name ->
+        spec = %MedEx.StreamSpec{
+          acquisition_id: id,
+          source_ref: c.bind.device,
+          boot_id: "boot-a",
+          stream_id: name,
+          source_epoch: 0,
+          descriptor_ref: String.duplicate("0", 64),
+          modality: "synthetic",
+          encoding: :s16le,
+          sample_rate: {1, 1},
+          channels: [%{id: "single", label: "Single", unit: :unknown, calibration: :unknown}],
+          capabilities: %{
+            encodings: [:s16le],
+            max_frame_samples: 4,
+            max_payload_bytes: 8,
+            commands: [],
+            replay: :durable_spool
+          }
+        }
+
+        {name, Serialization.to_map(%{spec | descriptor_ref: Serialization.descriptor_ref(spec)})}
+      end)
+
+    assert {:ok, bind} = S.reserve(c.bind.device, c.enc, id, "paired_exam", "boot-a", descriptors)
+
+    for {name, number} <- [{"audio", 1}, {"ecg", 2}] do
+      digest = descriptors[name]["descriptor_ref"]
+      assert {:ok, ingress, _} = DeviceIngress.open(bind, name, digest)
+      writer = :sys.get_state(ingress).writer
+      :sys.replace_state(writer, &put_in(&1.limits.duration_seconds, 1))
+
+      frame = %FrameV1{
+        stream_number: number,
+        source_epoch: 0,
+        config_epoch: 0,
+        sequence: 0,
+        first_sample: 0,
+        sample_count: 1,
+        payload: <<0, 0>>
+      }
+
+      {:ok, raw} = FrameV1.encode(frame)
+      state = %{kind: :stream, bind: bind, stream: name, writer: ingress, pending: false}
+
+      assert {:push, {:text, _}, pending} =
+               DeviceSocket.handle_in({raw, [opcode: :binary]}, state)
+
+      assert_receive :checkpoint
+      assert {:push, {:text, _}, state} = DeviceSocket.handle_info(:checkpoint, pending)
+
+      input =
+        if number == 1 do
+          {:ok, raw} = FrameV1.encode(%{frame | sequence: 1, first_sample: 1})
+          {raw, [opcode: :binary]}
+        else
+          gap = %{
+            "schema" => "medex.device.v1",
+            "type" => "gap",
+            "id" => "capacity-gap",
+            "first" => "1",
+            "end" => "2",
+            "first_sequence" => "1",
+            "next_sequence" => "2",
+            "irreversible" => true,
+            "cause" => "synthetic"
+          }
+
+          {Jason.encode!(gap), [opcode: :text]}
+        end
+
+      assert {:push, {:text, reply}, %{writer: nil, pending: false}} =
+               DeviceSocket.handle_in(input, state)
+
+      refute_received :checkpoint
+      assert %{"type" => "stream_finished"} = wire = Jason.decode!(reply)
+      assert {:ok, receipt} = Serialization.receipt(Map.drop(wire, ["schema", "type"]))
+      assert {receipt.durable_sequence, receipt.durable_sample} == {1, 1}
+      assert {:error, {:sealed, ^receipt}} = DeviceIngress.open(bind, name, digest)
+
+      assert [[index]] =
+               S.rows(c.db, "SELECT sealed_index FROM stream_attempts WHERE fence=$1", [
+                 receipt.fence
+               ])
+
+      assert index["terminal"] == "interrupted"
+      assert index["terminal_reason"] == "duration_limit"
+    end
   end
 
   defp seal_fixture(c, pulse_word) do
