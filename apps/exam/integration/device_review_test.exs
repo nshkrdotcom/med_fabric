@@ -180,7 +180,7 @@ defmodule MedFabric.Exam.DeviceReviewTest do
           stream_id: name,
           source_epoch: 0,
           descriptor_ref: String.duplicate("0", 64),
-          modality: "synthetic",
+          modality: "medex:synthetic",
           encoding: :s16le,
           sample_rate: {1, 1},
           channels: [%{id: "single", label: "Single", unit: :unknown, calibration: :unknown}],
