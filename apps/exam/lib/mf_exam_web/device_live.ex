@@ -150,9 +150,12 @@ defmodule MedFabric.ExamWeb.DeviceLive do
   def render(assigns) do
     ~H"""
     <main>
-      <a href={"/encounters/#{@enc}"}>Encounter</a>
+      <header class="mf-topbar">
+        <a href={"/encounters/#{@enc}"}>&larr; Encounter</a>
+        <span class="mf-brand">Med Fabric · Handheld Review</span>
+      </header>
       <h1>Simulated handheld examinations</h1>
-      <form phx-submit="grant">
+      <form class="mf-panel" phx-submit="grant">
         <label>Assigned device <select name="device"><option :for={d <- @devices}>{d}</option></select></label>
         <label>Protocol <select name="profile"><option value="paired_exam">Paired acoustic and ECG</option><option value="plx_spot_check">Pulse oximeter spot check</option></select></label>
         <label>Recording site <input required maxlength="100" name="site" /></label>
@@ -160,14 +163,15 @@ defmodule MedFabric.ExamWeb.DeviceLive do
       </form>
       <p role="status">{@message}</p>
       <section :for={r <- @rows} id={"device-"<>r.id}>
-        <h2>{r.profile} · {r.site}</h2><p>Gateway {r.device} · capture {r.phase}</p>
-        <p :for={{name,spec}<-r.descriptors}>{name} · {spec["modality"]} · {spec["encoding"]} · {Enum.join(spec["sample_rate"], "/")} samples/s · {spec["boot_id"]}</p>
+        <h2>{r.profile} · {r.site}</h2>
+        <p class="mf-meta">Gateway {r.device} · capture {r.phase}</p>
+        <p class="mf-meta" :for={{name,spec}<-r.descriptors}>{name} · {spec["modality"]} · {spec["encoding"]} · {Enum.join(spec["sample_rate"], "/")} samples/s · {spec["boot_id"]}</p>
         <figure :if={r.live}>
-          <svg viewBox="0 0 800 125" role="img" aria-label="Latest received ECG frame"><polyline points={r.live.points} fill="none" stroke="currentColor"/></svg>
+          <svg viewBox="0 0 800 125" role="img" aria-label="Latest received ECG frame"><polyline points={r.live.points} fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
           <figcaption>Latest received ECG · samples {r.live.first}–{r.live.end_sample} · {r.live.low}–{r.live.high} {r.live.unit}. Network transit time unknown.</figcaption>
         </figure>
-        <p :for={[kind,fact] <- r.facts}>{kind} · {JSON.encode!(fact)}</p>
-        <div :if={r.phase=="capturing"}>
+        <p class="mf-meta" :for={[kind,fact] <- r.facts}>{kind} · {JSON.encode!(fact)}</p>
+        <div class="mf-controls" :if={r.phase=="capturing"}>
           <button phx-click="stop" phx-value-id={r.id}>Request stop</button>
           <form :if={r.profile=="paired_exam"} phx-submit="gain">
             <input type="hidden" name="_id" value={r.id} />
@@ -180,9 +184,10 @@ defmodule MedFabric.ExamWeb.DeviceLive do
         </div>
         <article :if={r.manifest}>
           <p>Manifest <code>{r.digest}</code></p>
-          <p>Integrity {if r.manifest["defects"] == [], do: "complete", else: JSON.encode!(r.manifest["defects"])}</p>
-          <div :for={{name,v} <- r.manifest["streams"]}>
-            <h3>{name} · {v["index"]["stream"]["encoding"]}</h3><p>Alignment {v["clock"]["state"]}</p>
+          <p class="mf-meta">Integrity {if r.manifest["defects"] == [], do: "complete", else: JSON.encode!(r.manifest["defects"])}</p>
+          <div class="mf-stream" :for={{name,v} <- r.manifest["streams"]}>
+            <h3>{name} · {v["index"]["stream"]["encoding"]}</h3>
+            <p class="mf-meta">Alignment {v["clock"]["state"]}</p>
             <p :for={gap <- Enum.filter(v["index"]["spans"], &(&1["code"] == "source_gap"))}>
               Source gap · samples {gap["first_sample"]}–{gap["end_sample"]}
             </p>
@@ -197,9 +202,9 @@ defmodule MedFabric.ExamWeb.DeviceLive do
           </div>
           <form :if={r.profile=="paired_exam"} phx-submit="band"><input type="hidden" name="_id" value={r.id}/><input type="hidden" name="digest" value={r.digest}/><label>Audio sample <input name="sample" type="number" min="0" required/></label><button>Find corresponding ECG ranges</button></form>
           <p :if={@band && elem(@band,0)==r.id}>Possible ECG ranges {inspect(elem(@band,1))}</p>
-          <div :for={x <- r.manifest["inventory"]}>
+          <div class="mf-stream" :for={x <- r.manifest["inventory"]}>
             <p>{x["event"]["event_id"]} · Source {x["event"]["source"]} · SpO₂ {metric(x["event"]["metrics"]["spo2"],"%")} · device pulse {metric(x["event"]["metrics"]["pulse_rate"],"beats/min")} · source status {JSON.encode!(x["event"]["source_status"])}</p>
-            <p>Measured {x["event"]["measured_at"] || "unknown"} ({x["event"]["time_basis"]}) · received {x["received_at"]} · repeat of {x["event"]["repeat_of"] || "none"}</p>
+            <p class="mf-meta">Measured {x["event"]["measured_at"] || "unknown"} ({x["event"]["time_basis"]}) · received {x["received_at"]} · repeat of {x["event"]["repeat_of"] || "none"}</p>
           </div>
           <form :if={!r.choice} phx-submit="review">
             <input type="hidden" name="_id" value={r.id}/><input type="hidden" name="digest" value={r.digest}/>
