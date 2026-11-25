@@ -1,7 +1,13 @@
 defmodule MedFabric.HandheldDemo do
   @moduledoc false
   @loopback {127, 0, 0, 1}
-  @socket_options [:binary, active: false, send_timeout: 1_000, send_timeout_close: true]
+  @socket_options [
+    :binary,
+    active: false,
+    nodelay: true,
+    send_timeout: 1_000,
+    send_timeout_close: true
+  ]
 
   def main(args) do
     case OptionParser.parse(args, strict: [run_dir: :string]) do

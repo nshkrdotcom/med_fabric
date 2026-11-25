@@ -364,7 +364,9 @@ defmodule MedFabric.HandheldAcceptance do
     case :httpc.request(
            method,
            request,
-           [timeout: 6_000, connect_timeout: 2_000, autoredirect: true], body_format: :binary) do
+           [timeout: 6_000, connect_timeout: 2_000, autoredirect: true],
+           body_format: :binary
+         ) do
       {:ok, {{_, status, _}, _, body}} -> {status, body}
       {:error, reason} -> raise("HTTP transport failed: #{inspect(elem_or_self(reason))}")
     end
@@ -667,7 +669,7 @@ defmodule MedFabric.HandheldAcceptance do
     check!(status == expected, "#{action} returned #{status}, expected #{expected}")
   end
 
-  defp client!(lab, profile, name, settings \\ %{}) do
+  defp client!(lab, profile, name, settings) do
     cfg =
       Map.merge(
         lab.client,
