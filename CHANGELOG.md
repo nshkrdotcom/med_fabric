@@ -2,6 +2,9 @@
 
 ## 0.2.0 (unreleased)
 
+- Add a Weld 0.18.0 maintainer project and a release manifest for the standalone
+  Exam package, including its internal applications, static files, and SQL migrations.
+
 - Centralize transport membership checks and pass explicit workflow resources
   through recording and review services, including isolated integration tests.
 - Reuse the SDK's WAV validation and preview clock rules; retain full-file

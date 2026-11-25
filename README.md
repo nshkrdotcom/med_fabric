@@ -102,6 +102,14 @@ legacy media in Exam for the browser examination.
 | [apps/handheld](apps/handheld/README.md) | Standalone synthetic peripheral client, TLS transport and durable spool |
 | [apps/preview](apps/preview/README.md) | Optional isolated monitor encoding, RTC and signaling |
 
+## Exam package projection
+
+`mf_exam` is the Weld release artifact for this repository. Its
+[manifest](build_support/weld.exs) declares Exam and its internal dependency
+closure. Run `mix release.status` from `tools/maintainer` to see the projection,
+prepared bundle, and Git release tag. See [Release the Exam package](guides/releasing_exam.md)
+for the maintainer workflow.
+
 ## License
 
 Released under the MIT License.
