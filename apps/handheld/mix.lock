@@ -1,5 +1,5 @@
 %{
   "cowlib": {:hex, :cowlib, "2.22.0", "ed32663b11e0b96c4fc2e7d42cf627cd095f006e78a24d0c6b98a91f2e532cd3", [:make, :rebar3], [], "hexpm", "b1ea5995d8f1ab5086ae7afe710c2075c7872c7e1acaf45dd0db7595e900c0fc"},
   "gun": {:hex, :gun, "2.8.0", "556a7ca0eb399ba4597a40f540f3edb0f004d2a06984339f19b81ab3c557cf36", [:make, :rebar3], [{:cowlib, ">= 2.22.0 and < 3.0.0", [hex: :cowlib, repo: "hexpm", optional: false]}], "hexpm", "21a7c716f472fc5bc2c2bbcb2ec74ffa5d20d8073dc712acd054862b0a5176d8"},
-  "med_ex": {:git, "https://github.com/nshkrdotcom/med_ex.git", "b016bcc453b5e0c38a17be51ae22aa6477cd3f7d", [ref: "b016bcc453b5e0c38a17be51ae22aa6477cd3f7d"]},
+  "med_ex": {:git, "https://github.com/nshkrdotcom/med_ex.git", "34e14332fcb40ee766cf5b34b15986ba89e6a0b9", [ref: "34e14332fcb40ee766cf5b34b15986ba89e6a0b9"]},
 }
