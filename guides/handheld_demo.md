@@ -141,6 +141,47 @@ ops/qc_native.sh --evidence /private/path/to/new-evidence
 ops/qc_services.sh run -- bash -c 'cd core/interop && mix test integration'
 ```
 
+### Run just the paired gate or a storage soak
+
+Use the paired gate for changes to admission, replay, storage, Preview, or
+review. Each concurrent capture runs for 60 seconds. The rest of the suite
+exercises fault cuts and browser review, so allow several minutes.
+
+```bash
+ops/qc_native.sh --suite paired --volume /mnt/exam-data \
+  --evidence /tmp/fabric-paired-001
+```
+
+Use the soak after changes that may affect sustained capture or finalization,
+and when qualifying a target storage setup. It runs a single paired acquisition
+for 1,740 seconds by default, with native PostgreSQL and no Preview, HAPI, or
+browser setup. It requires a sealed, defect-free manifest, independent
+sample-byte verification and a committed review. Use `--seconds 3` for a
+quick wiring check of the same path. A successful soak qualifies that single
+workload on the recorded filesystem. The two-encounter gate covers concurrency.
+
+```bash
+ops/qc_native.sh --suite soak --volume /mnt/exam-data \
+  --evidence /tmp/fabric-soak-001
+```
+
+Before the SDK is published, append
+`--med-ex-project /path/to/med_ex/.weld/releases/med_ex` to either focused
+command. The wrapper accepts the Weld release directory containing `CURRENT`
+or an exact project directory. It uses isolated Mix paths and keeps the
+checkout's source-selection file and committed locks untouched. The full gate
+uses the default locked Hex packages and retains its release checks.
+
+Supply a new evidence directory for each run. The wrapper records `run.log`
+and `exit-status`. The runner writes `native.json` with the pass/fail
+result. For a soak, inspect `.scenarios.soak` for the last stage reached,
+per-stream durable progress, digest verification, and timings. The volume
+argument is an existing writable directory. It holds a fresh private lab
+with PostgreSQL data, artifacts, spool, and service logs. It is retained for
+inspection and contains synthetic credentials. The node and its services
+are stopped after the run. `filesystem.txt` records the volume filesystem.
+For the full gate, this volume applies to the native acquisition suite.
+
 Each invocation provisions fresh data and credentials. The wrapper verifies
 loopback service readiness and cleans up its own PostgreSQL and container on
 success, failure, or interruption. Add `--keep-failure` to retain private

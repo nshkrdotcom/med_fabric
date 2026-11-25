@@ -27,17 +27,27 @@ defmodule MedFabric.HandheldAcceptance do
           suite: :string,
           preview: :string,
           fhir: :string,
-          report: :string
+          report: :string,
+          seconds: :integer
         ]
       )
 
     suite = opts[:suite] || "paired"
     preview = opts[:preview] || "off"
+    seconds = opts[:seconds] || 1740
 
     check!(
-      rest in [[], ["acceptance"]] and errors == [] and suite in (@suites ++ ["all"]) and
+      rest in [[], ["acceptance"]] and errors == [] and suite in (@suites ++ ["all", "soak"]) and
         preview in ["off", "isolated"],
-      "Usage: elixir ops/handheld_acceptance.exs --suite paired|spot-check|legacy-browser|all --preview off|isolated [--fhir hapi] [--run-dir DIR] [--report FILE]"
+      "Usage: elixir ops/handheld_acceptance.exs --suite paired|spot-check|legacy-browser|all|soak --preview off|isolated [--fhir hapi] [--run-dir DIR] [--report FILE] [--seconds 3..1740]"
+    )
+
+    check!(
+      if(suite == "soak",
+        do: seconds in 3..1740 and preview == "off",
+        else: is_nil(opts[:seconds])
+      ),
+      "Soak requires no Preview and a duration from 3 to 1740 seconds"
     )
 
     required = if suite == "all", do: @suites, else: [suite]
@@ -77,7 +87,8 @@ defmodule MedFabric.HandheldAcceptance do
         "paired" => 900_000,
         "spot-check" => 300_000,
         "legacy-browser" => 300_000,
-        "all" => 1_500_000
+        "all" => 1_500_000,
+        "soak" => (seconds + 180) * 1000
       }[suite]
     )
 
@@ -112,6 +123,7 @@ defmodule MedFabric.HandheldAcceptance do
         lab =
           case name do
             "paired" -> paired!(lab)
+            "soak" -> soak!(lab, seconds)
             "spot-check" -> spot!(lab)
             "legacy-browser" -> legacy!(lab)
           end
@@ -196,7 +208,6 @@ defmodule MedFabric.HandheldAcceptance do
       check!(System.find_executable(binary) != nil, "Missing prerequisite #{binary}")
     end
 
-    check!(System.get_env("MF_MED_EX_PATH") == nil, "Use .mix_sources.json for the isolated lab")
     {:ok, _} = Application.ensure_all_started(:inets)
     {:ok, _} = Application.ensure_all_started(:ssl)
     :ok = :httpc.set_options(cookies: :enabled)
@@ -549,7 +560,8 @@ defmodule MedFabric.HandheldAcceptance do
             String.starts_with?(key, ["PG", "DATABASE_", "FHIR_"]) or
               (String.starts_with?(key, "MF_") and
                  not (role == "preview" and
-                        key in ["MF_PREVIEW_CREDENTIAL_FILE", "MF_PREVIEW_PORT"]))
+                        key in ["MF_PREVIEW_CREDENTIAL_FILE", "MF_PREVIEW_PORT"]) and
+                 key != "MF_MED_EX_PATH")
           end)
 
     # Check the mounted namespace, not just the intended mount list. The
@@ -1005,6 +1017,88 @@ defmodule MedFabric.HandheldAcceptance do
             }
         end
     end
+  end
+
+  defp soak!(lab, seconds) do
+    scenario("soak", %{requested_seconds: seconds, stage: "capture_and_seal"})
+    started = System.monotonic_time(:millisecond)
+    {cfg, child} = client!(lab, "paired_exam", "soak", %{"seconds" => seconds})
+    id = cfg["acquisition"]
+    exit_status = ProcessLab.await!(child, (seconds + 120) * 1000)
+
+    progress =
+      sql!(lab, """
+      SELECT json_build_object(
+        'phase', s.phase, 'generation', s.generation,
+        'streams', (SELECT json_object_agg(stream, json_build_object(
+          'durable_sequence', receipt->>'durable_sequence',
+          'durable_sample', receipt->>'durable_sample',
+          'terminal', sealed_index->>'terminal'))
+        FROM (SELECT DISTINCT ON (stream) stream,receipt,sealed_index FROM stream_attempts
+          WHERE acquisition_id=s.id ORDER BY stream,generation DESC) attempts))
+      FROM device_sessions s WHERE s.id='#{id}'
+      """)
+      |> case do
+        "" -> nil
+        json -> JSON.decode!(json)
+      end
+
+    result = %{
+      requested_seconds: seconds,
+      capture_and_seal_ms: System.monotonic_time(:millisecond) - started,
+      client_exit: exit_status,
+      progress: progress,
+      stage: "capture_and_seal"
+    }
+
+    scenario("soak", result)
+    check!(exit_status == 0, "Soak acquisition did not seal")
+    {root, digest, manifest} = manifest!(lab, cfg)
+    check!(manifest["defects"] == [], "Soak manifest includes defects")
+
+    result =
+      Map.merge(result, %{
+        stage: "artifact_verification",
+        manifest_digest: digest,
+        manifest_bytes: File.stat!(Path.join(root, "manifest.mej1")).size
+      })
+
+    scenario("soak", result)
+    started = System.monotonic_time(:millisecond)
+    verified = Oracle.verify!(lab.dir, cfg, root, manifest)
+
+    result =
+      Map.merge(result, %{
+        stage: "review",
+        artifact_verification_ms: System.monotonic_time(:millisecond) - started,
+        raw_payload_digests: verified.raw_payload_digests,
+        oracle_payload_digests: verified.oracle_payload_digests,
+        streams:
+          Map.new(verified.coverage, fn {name, coverage} ->
+            {name, %{samples: coverage.samples, segments: length(coverage.spans)}}
+          end)
+      })
+
+    scenario("soak", result)
+    started = System.monotonic_time(:millisecond)
+    choice = review_choice(manifest, "baseline")
+    check!(choice["decision"] == "complete", "Soak must reach complete review")
+    action!(lab, id, "review", %{"digest" => digest, "choice" => choice})
+
+    check!(
+      count!(lab, "device_reviews", "acquisition_id='#{id}' AND digest='#{digest}'") == 1,
+      "Soak review did not persist"
+    )
+
+    scenario(
+      "soak",
+      Map.merge(result, %{
+        stage: "complete",
+        review_ms: System.monotonic_time(:millisecond) - started
+      })
+    )
+
+    lab
   end
 
   defp paired!(lab) do

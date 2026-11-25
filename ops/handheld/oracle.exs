@@ -31,8 +31,8 @@ defmodule MedFabric.Acceptance.Oracle do
     channels = length(desc["channels"])
     source = if name == "audio", do: 1, else: 2
 
-    segments =
-      for seg <- index["segments"] do
+    {spans, raw} =
+      Enum.map_reduce(index["segments"], :crypto.hash_init(:sha256), fn seg, hash ->
         first = integer(seg["first_sample"])
         last = integer(seg["end_sample"])
         # Fixture manifest segment keys are relative filenames; refuse traversal.
@@ -52,8 +52,8 @@ defmodule MedFabric.Acceptance.Oracle do
           "Segment integrity or sample length differs"
         )
 
-        {first, last, bytes}
-      end
+        {{first, last}, :crypto.hash_update(hash, bytes)}
+      end)
 
     gaps =
       for span <- index["spans"],
@@ -74,7 +74,6 @@ defmodule MedFabric.Acceptance.Oracle do
       end
 
     check!(gaps == expected_gaps, "Unexpected source gaps for #{name}")
-    spans = Enum.map(segments, fn {first, last, _} -> {first, last} end)
 
     edge =
       Enum.reduce(Enum.sort(spans ++ gaps), 0, fn {first, last}, edge ->
@@ -95,8 +94,27 @@ defmodule MedFabric.Acceptance.Oracle do
         check!(edge == div(cfg["seconds"] * num, den), "Wrong sample count for #{name}")
     end
 
-    raw = sha(Enum.map(segments, &elem(&1, 2)) |> IO.iodata_to_binary())
-    expected = sha(samples(0, edge, channels, width, cfg["seed"], source, expected_gaps, 1))
+    raw = hash_hex(raw)
+
+    expected =
+      0..(edge - 1)//65_536
+      |> Enum.reduce(:crypto.hash_init(:sha256), fn first, hash ->
+        pcm =
+          samples(
+            first,
+            min(first + 65_536, edge),
+            channels,
+            width,
+            cfg["seed"],
+            source,
+            expected_gaps,
+            1
+          )
+
+        :crypto.hash_update(hash, pcm)
+      end)
+      |> hash_hex()
+
     check!(raw == expected, "Independent raw sample hash differs for #{name}")
     clock = clock!(directory, cfg, stream, name, edge, num, den)
     check!(clock.violations == 0, "Clock holdout outside interval for #{name}")
@@ -113,6 +131,8 @@ defmodule MedFabric.Acceptance.Oracle do
       clock: clock
     }
   end
+
+  defp hash_hex(hash), do: hash |> :crypto.hash_final() |> Base.encode16(case: :lower)
 
   defp assert_gap_sequences!(index) do
     check!(
