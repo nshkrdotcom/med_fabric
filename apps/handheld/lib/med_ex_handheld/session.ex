@@ -165,7 +165,7 @@ defmodule MedExHandheld.Session do
               :ok
 
             {:error, :denied} ->
-              raise "Admission refused by Exam for #{c["profile"]} (#{c["device"]}): no unused clinician grant. Confirm readiness in the clinician UI (/encounters/#{c["encounter"]}/devices) first."
+              raise "Admission refused by Exam for #{c["profile"]} (#{c["device"]}). Check the device, encounter, and active clinician authorization in /encounters/#{c["encounter"]}/devices."
 
             other ->
               raise "Unexpected Exam admission response for #{c["profile"]} (#{c["device"]}): #{inspect(other)}"

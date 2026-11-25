@@ -205,9 +205,16 @@ defmodule MedFabric.HandheldDemo do
     config = directory |> Path.join("server.json") |> File.read!() |> JSON.decode!()
     %{"tls_port" => upstream, "proxy_port" => listen} = config
     outage = Path.join(directory, "outage")
-    {:ok, server} = :gen_tcp.listen(listen, @socket_options ++ [ip: @loopback, reuseaddr: true])
-    IO.puts("TLS relay ready on 127.0.0.1:#{listen}")
-    accept_clients(server, upstream, outage)
+
+    case :gen_tcp.listen(listen, @socket_options ++ [ip: @loopback, reuseaddr: true]) do
+      {:ok, server} ->
+        IO.puts("TLS relay ready on 127.0.0.1:#{listen}")
+        accept_clients(server, upstream, outage)
+
+      {:error, reason} ->
+        IO.puts(:stderr, "error: TLS relay cannot listen on 127.0.0.1:#{listen}: #{reason}")
+        System.halt(1)
+    end
   end
 
   defp accept_clients(server, upstream, outage) do

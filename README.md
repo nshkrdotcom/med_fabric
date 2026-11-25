@@ -60,6 +60,11 @@ Once open in the browser, follow **Handheld examinations and review** to:
   measurements
 - enter manual pulse-rate readings and verify atomic acceptance
 
+Exam starts the lab with grants for both scenarios, valid for two hours.
+If a grant has expired, open **Handheld examinations and review**, select
+**reference-gateway** and the scenario's protocol, enter the recording site,
+and click **Confirm readiness and authorize collection**.
+
 When finished, stop Terminals 1 & 2 with `Ctrl-C`, then run:
 
 ```bash

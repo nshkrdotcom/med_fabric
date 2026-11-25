@@ -146,10 +146,20 @@ cmd_handheld() {
       "$lab/handheld-a.json" > "$config"
   fi
 
-  (cd "$repo_root" && elixir ops/handheld_demo.exs relay --run-dir "$lab") &
+  RELAY_LOG="$(mktemp "$lab/relay.XXXXXX")"
+  (cd "$repo_root" && exec elixir ops/handheld_demo.exs relay --run-dir "$lab") > "$RELAY_LOG" &
   RELAY_PID=$!
-  trap 'kill "${RELAY_PID:-}" 2>/dev/null || true; wait "${RELAY_PID:-}" 2>/dev/null || true' EXIT INT TERM
-  sleep 1
+  trap 'kill "$RELAY_PID" 2>/dev/null || true; wait "$RELAY_PID" 2>/dev/null || true; rm -f "$RELAY_LOG"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  local deadline=$((SECONDS + 10)) ready
+  until IFS= read -r ready < "$RELAY_LOG" && [[ "$ready" == "TLS relay ready on "* ]]; do
+    kill -0 "$RELAY_PID" 2>/dev/null || die "TLS relay exited before it was ready."
+    (( SECONDS < deadline )) || die "Timed out waiting for the TLS relay to start."
+    sleep 0.1
+  done
+  printf '%s\n' "$ready"
 
   cd "$repo_root/apps/handheld"
   mix run -e 'MedExHandheld.CLI.main(System.argv())' -- \
