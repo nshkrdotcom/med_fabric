@@ -4,7 +4,7 @@ defmodule MedFabric.BuildSources do
   @med_ex_apps [:med_ex, :med_ex_opus, :med_ex_rtc]
   @med_ex_requirement "~> 0.2.0"
   # Baseline provider revision. Repin this family after the verified MedEx push.
-  @med_ex_revision "3dbb770550ac1a4340eecb6951d5bf21c6f0fcb8"
+  @med_ex_revision "b30d517305f93b84c94664bb0f9767c9aad23c29"
   @repo_apps ~w(med_ex med_ex_opus med_ex_rtc mf_domain mf_store mf_interop)
   @git_keys [:github, :git, :ref, :subdir]
   @scm @git_keys ++ ~w(branch tag path in_umbrella sparse submodules depth hex repo organization)a
