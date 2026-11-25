@@ -5,7 +5,6 @@
 - Verify segment occurrence, contiguous review coverage, and fenced capacity completion.
 - Require MedEx 0.2.1.
 
-
 All notable changes to `mf_exam` will be documented in this file.
 
 ## 0.1.0 - 2026-11-24

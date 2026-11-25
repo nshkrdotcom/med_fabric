@@ -32,3 +32,20 @@ Run archive after Hex confirms publication. Prepared bundles and writable
 publish workspaces live under the checkout's ignored `.weld/` directory.
 The `projection/mf_exam` commit and annotated tag preserve the Git receipt
 for the same bundle identity.
+
+## Restore paired evidence and database state
+
+Quiesce Exam capture and outbox delivery before taking a coordinated
+`pg_dump` and copying the artifact root. Record the source versions and the
+database dump and manifest digests. Restore the dump into a fresh database,
+copy the artifact root to a separate writable volume owned by the service
+user, and configure the restored instance with those two paths. Keep the
+original database and volume available until verification succeeds.
+
+Confirm that a previously accepted revision opens at its recorded digest and
+that a verified segment still resolves to its documented sample coordinates.
+For a pending delivery with a known prior remote write, verify retry against
+the same qualified destination and confirm it resolves to the original
+remote observation. In a disposable restore copy, omit one required object
+and confirm that review refuses the manifest. Keep delivery disabled during
+restore except for the explicitly selected retry check.

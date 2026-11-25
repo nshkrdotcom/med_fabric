@@ -202,7 +202,7 @@ defmodule MedFabric.Exam.DeviceReviewTest do
       digest = descriptors[name]["descriptor_ref"]
       assert {:ok, ingress, _} = DeviceIngress.open(bind, name, digest)
       writer = :sys.get_state(ingress).writer
-      :sys.replace_state(writer, &put_in(&1.limits.duration_seconds, 1))
+      :sys.replace_state(writer, &put_in(&1.limits.duration_seconds, 2))
 
       frame = %FrameV1{
         stream_number: number,
@@ -214,28 +214,40 @@ defmodule MedFabric.Exam.DeviceReviewTest do
         payload: <<0, 0>>
       }
 
-      {:ok, raw} = FrameV1.encode(frame)
       state = %{kind: :stream, bind: bind, stream: name, writer: ingress, pending: false}
 
-      assert {:push, {:text, _}, pending} =
-               DeviceSocket.handle_in({raw, [opcode: :binary]}, state)
+      state =
+        Enum.reduce(0..1, state, fn q, state ->
+          {:ok, raw} = FrameV1.encode(%{frame | sequence: q, first_sample: q})
 
-      assert_receive :checkpoint
-      assert {:push, {:text, _}, state} = DeviceSocket.handle_info(:checkpoint, pending)
+          assert {:push, {:text, _}, pending} =
+                   DeviceSocket.handle_in({raw, [opcode: :binary]}, state)
+
+          assert_receive :checkpoint
+          assert {:push, {:text, _}, state} = DeviceSocket.handle_info(:checkpoint, pending)
+          state
+        end)
+
+      [[prior_receipt]] =
+        S.rows(
+          c.db,
+          "SELECT receipt FROM stream_attempts WHERE acquisition_id=$1 AND stream=$2",
+          [id, name]
+        )
 
       input =
         if number == 1 do
-          {:ok, raw} = FrameV1.encode(%{frame | sequence: 1, first_sample: 1})
+          {:ok, raw} = FrameV1.encode(%{frame | sequence: 2, first_sample: 2})
           {raw, [opcode: :binary]}
         else
           gap = %{
             "schema" => "medex.device.v1",
             "type" => "gap",
             "id" => "capacity-gap",
-            "first" => "1",
-            "end" => "2",
-            "first_sequence" => "1",
-            "next_sequence" => "2",
+            "first" => "2",
+            "end" => "3",
+            "first_sequence" => "2",
+            "next_sequence" => "3",
             "irreversible" => true,
             "cause" => "synthetic"
           }
@@ -249,7 +261,7 @@ defmodule MedFabric.Exam.DeviceReviewTest do
       refute_received :checkpoint
       assert %{"type" => "stream_finished"} = wire = Jason.decode!(reply)
       assert {:ok, receipt} = Serialization.receipt(Map.drop(wire, ["schema", "type"]))
-      assert {receipt.durable_sequence, receipt.durable_sample} == {1, 1}
+      assert {receipt.durable_sequence, receipt.durable_sample} == {2, 2}
       assert {:error, {:sealed, ^receipt}} = DeviceIngress.open(bind, name, digest)
 
       assert [[index]] =
@@ -259,7 +271,75 @@ defmodule MedFabric.Exam.DeviceReviewTest do
 
       assert index["terminal"] == "interrupted"
       assert index["terminal_reason"] == "duration_limit"
+
+      # Model the durable terminal after a lost SQL commit.
+      S.rows(
+        c.db,
+        "UPDATE stream_attempts SET sealed_index=NULL,index_digest=NULL,receipt=$2 WHERE fence=$1",
+        [receipt.fence, prior_receipt]
+      )
+
+      assert {:error, {:sealed, ^receipt}} = DeviceIngress.open(bind, name, digest)
     end
+
+    assert {:ok, digest} = MedFabric.Exam.DeviceManifest.finish(bind, %{})
+    hash = S.hash(<<0, 0>>)
+    workflow = MedFabric.Exam.DeviceWorkflow
+
+    assert {:ok, _, %{first_sample: 0}, <<0, 0>>} =
+             workflow.segment(c.enc, id, digest, "ecg", "0", hash)
+
+    assert {:ok, _, %{first_sample: 1}, <<0, 0>>} =
+             workflow.segment(c.enc, id, digest, "ecg", "1", hash)
+
+    assert {:error, :unverified_segment} = workflow.segment(c.enc, id, digest, "ecg", hash)
+
+    secret = "synthetic-router-fixture"
+
+    Application.put_env(:mf_exam, :lab, %{
+      artifact_dir: MedFabric.Exam.lab().artifact_dir,
+      proxy_secret: secret,
+      local?: false,
+      encounters: %{c.enc => %{"clinician_actor" => c.actor, "patient_actor" => "patient"}}
+    })
+
+    path = "/encounters/#{c.enc}/devices/#{id}/segment/ecg/1/#{hash}?revision=#{digest}"
+
+    request = fn path, actor, role, token ->
+      conn = fn ->
+        Plug.Test.conn(:get, path)
+        |> Plug.Conn.put_req_header("x-exam-proxy-token", token)
+        |> Plug.Conn.put_req_header("x-exam-actor", actor)
+      end
+
+      response =
+        conn.()
+        |> Plug.Test.init_test_session(%{
+          lab_encounter: c.enc,
+          exam_actor: actor,
+          exam_role: role
+        })
+        |> MedFabric.ExamWeb.Endpoint.call([])
+
+      if response.status == 303 do
+        conn.()
+        |> Plug.Test.recycle_cookies(response)
+        |> MedFabric.ExamWeb.Endpoint.call([])
+      else
+        response
+      end
+    end
+
+    assert %{status: 200, resp_body: body} = request.(path, c.actor, "clinician", secret)
+    assert body =~ "samples 1–2"
+    assert %{status: 403} = request.(path, c.actor, "clinician", "incorrect")
+    assert request.(path, "patient", "patient", secret).status in [403, 404]
+
+    other_path = String.replace(path, "/encounters/#{c.enc}/", "/encounters/unknown/")
+    assert %{status: 404} = request.(other_path, c.actor, "clinician", secret)
+
+    S.rows(c.db, "UPDATE encounters SET closed_at=now() WHERE id=$1", [c.enc])
+    assert %{status: 403} = request.(path, c.actor, "clinician", secret)
   end
 
   defp seal_fixture(c, pulse_word) do
