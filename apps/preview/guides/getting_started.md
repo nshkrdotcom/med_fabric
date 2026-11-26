@@ -11,7 +11,38 @@ WebRTC.
   building from source; precompiled binaries are used on supported Linux and
   macOS targets)
 
+## Installing Exam and Preview in one Mix project
+
+The normal deployment runs Exam and Preview as separate releases. A single Mix
+project that includes both must declare this dependency in its own `deps/0`.
+Exam uses Decimal 3, and the published Ratio dependency selected by Membrane
+excludes Decimal 3. The pinned revision below admits it.
+
+```elixir
+{:ratio,
+ git: "https://github.com/robertbenavidez/elixir-rational.git",
+ ref: "05191dbe8061b49a170352f3c35c21360bdbb328",
+ override: true}
+```
+
+Run `mix deps.get` and commit the resulting lockfile in the consuming project.
+This override fixes dependency resolution. Preview remains a separate process
+in the documented deployment.
+
 ## Configuration
+
+In the current source, for a file-based deployment, create `/etc/med_fabric/preview.json`:
+
+```json
+{
+  "port": 4100,
+  "credential_file": "/etc/med_fabric/credentials/preview"
+}
+```
+
+Use the same credential file content for Exam's `preview_credential_file`.
+Preview listens on loopback. The file takes precedence over the environment
+settings below outside Mix tests. Restart Preview after updating it.
 
 `mf_preview` reads two environment variables at startup (`config/runtime.exs`):
 

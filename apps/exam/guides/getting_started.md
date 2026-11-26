@@ -10,7 +10,53 @@ admission, lossless waveform capture, clinical review, and HL7 FHIR R4 export.
 - Optional HL7 FHIR R4 endpoint (such as HAPI FHIR) for outbox delivery
 - Optional `mf_preview` sidecar for isolated live acoustic monitoring
 
+## Installing Exam and Preview in one Mix project
+
+The normal deployment runs Exam and Preview as separate releases. A single Mix
+project that includes both must declare this dependency in its own `deps/0`.
+Exam uses Decimal 3, and the published Ratio dependency selected by Membrane
+excludes Decimal 3. The pinned revision below admits it.
+
+```elixir
+{:ratio,
+ git: "https://github.com/robertbenavidez/elixir-rational.git",
+ ref: "05191dbe8061b49a170352f3c35c21360bdbb328",
+ override: true}
+```
+
+Run `mix deps.get` and commit the resulting lockfile in the consuming project.
+This override fixes dependency resolution. Preview remains a separate process
+in the documented deployment.
+
 ## Configuration
+
+### File-based deployment (current source)
+
+Create `/etc/med_fabric/exam.json` on the deployment host before starting Exam.
+The file is read at startup outside Mix tests. When present, it supplies the
+entire Exam deployment configuration. Protect the files containing credentials
+and encounter access keys so only the service account can read them.
+
+```json
+{
+  "encounters_file": "/etc/med_fabric/encounters.json",
+  "artifact_dir": "/var/lib/med_fabric/artifacts",
+  "database_url_file": "/etc/med_fabric/credentials/database-url",
+  "secret_key_base_file": "/etc/med_fabric/credentials/secret-key-base",
+  "http_port": 4000
+}
+```
+
+Use absolute paths. Credential files contain one value each. The encounter
+file uses the existing encounter JSON format. Optional settings are
+`public_origin` with `proxy_secret_file` for public HTTPS,
+`device_tls_certfile` and `device_tls_keyfile` together for device TLS
+(with optional `device_tls_port` and `device_bind_ip`),
+`preview_url` with `preview_credential_file` for loopback Preview,
+and comma-separated `turn_urls` with `turn_secret_file` and optional
+boolean `relay_only`. Restart Exam after updating these files.
+
+### Environment-based launchers
 
 Key runtime environment variables (`config/runtime.exs`):
 

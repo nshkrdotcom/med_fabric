@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Support file-based deployment configuration and document the Ratio override for combined Mix consumers.
+
 ## 0.1.1 - 2026-11-25
 
 - Verify segment occurrence, contiguous review coverage, and fenced capacity completion.
