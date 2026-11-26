@@ -13,8 +13,8 @@ publish a reusable library once a second application defines its public API:
 - **`MedFabric.Interop` namespace (`:mf_interop`):** HL7 FHIR R4 Observation mapping, conditional create, and
   strict typed read-back confirmation.
 - **Rule:** `apps/exam` must consume MedEx and core modules through their public
-  APIs—no private reach-ins to `MedEx.PreviewSession` or removed `Membrane`
-  modules.
+  APIs. The internal preview-session implementation and the removed Membrane
+  modules are outside that public API.
 
 These are existing internal package boundaries, not a published second-host
 API contract. A reviewed function-by-function reusable API remains future work.
