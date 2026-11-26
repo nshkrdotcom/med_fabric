@@ -172,7 +172,7 @@ elixir ops/handheld/process_lab_test.exs
 elixir ops/handheld/soak_test.exs
 ops/qc_services.sh run "${options[@]}" -- bash -euc '
   evidence=$1
-  (cd apps/exam && mix test integration/{device_review,device_root_lock}_test.exs)
+  (cd apps/exam && mix test integration/{device_review,device_root_lock,preview_isolation}_test.exs)
   timeout --signal=TERM --kill-after=30s 1600s elixir ops/handheld_acceptance.exs \
     --suite all --preview isolated --fhir hapi --report "$evidence/native.json" "${@:2}"
   jq -e -f ops/verify_native_report.jq "$evidence/native.json"

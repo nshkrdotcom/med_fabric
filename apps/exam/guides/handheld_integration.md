@@ -29,7 +29,9 @@ spot-check acquisitions.
 When `MF_PREVIEW_URL` and `MF_PREVIEW_CREDENTIAL_FILE` are configured,
 `MedFabric.Exam.PreviewGateway` forwards validated monitor frames to the
 isolated `mf_preview` sidecar and mints short-lived HMAC-SHA256 viewer tokens
-for authorized clinicians.
+for authorized clinicians. A relay restart drops buffered monitor frames while
+capture and live ECG continue. Without a sidecar configured, Exam keeps live ECG
+and skips starting the audio relay.
 
 Review intervals can cross adjacent storage chunks within a single configuration
 epoch. They cannot cover missing samples. A complete-capture decision records

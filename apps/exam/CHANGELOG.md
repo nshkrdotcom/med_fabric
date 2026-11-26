@@ -5,6 +5,7 @@
 - Verify segment occurrence, contiguous review coverage, and fenced capacity completion.
 - Enable host-fenced 15-frame pipelined batching (`checkpoint_ms: :manual`), remove redundant finalization scans while preserving full byte verification on crash recovery and review, and emit `:telemetry` checkpoint timings.
 - Allow one active acquisition per encounter and profile, admit supported nonzero source epochs, and derive synthetic clock validity from the observed probe span.
+- Restart the optional preview relay without restarting the database pool or active capture writers. Keep live ECG available without a sidecar.
 - Require MedEx 0.2.1.
 
 All notable changes to `mf_exam` will be documented in this file.
