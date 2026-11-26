@@ -4,7 +4,7 @@
     "package": {
       "name": "mf_exam",
       "otp_app": "mf_exam",
-      "version": "0.1.0"
+      "version": "0.1.1"
     }
   },
   "graph": {
@@ -14,7 +14,7 @@
       "core/interop",
       "core/store"
     ],
-    "digest": "8375a003b23d7733edce6670bcb9e07afaa511fd380578cee1a978463cfd4ce6",
+    "digest": "5fa44bfa26632f319783f1bc58b781d583ce52c4d4197c90776e2dfc28031138",
     "edges": [
       {
         "app": "mf_domain",
@@ -70,11 +70,11 @@
     "violations": []
   },
   "manifest": {
-    "digest": "11cd3d3370092b39475938c2e82cb50b08de4680b7ccb4216e05f74add09cfa3",
+    "digest": "3ea85815df814a8929734b608cd7d5324ef82df21fc5e386a7d94023526ae451",
     "path": "build_support/weld.exs"
   },
   "projection": {
-    "artifact_id": "a07f6f5bf71d51b72e385836f1ae8ac6c572ed4f301c287e735f0b56a0380c92",
+    "artifact_id": "cffedebb491b3c3b412cca2e59078efaa85b8fad80a70f77106c47201c881799",
     "build_path": ".weld/full/mf_exam/project",
     "config_warnings": [
       {
@@ -157,8 +157,11 @@
       "priv/sql/003_recording_attempts.sql",
       "priv/sql/004_encounter_exports.sql",
       "priv/sql/005_device_acquisitions.sql",
+      "priv/sql/006_concurrent_device_profiles.sql",
+      "priv/sql/007_one_recording_per_encounter_profile.sql",
       "priv/static/exam.js",
       "test/apps_exam/artifact_test.exs",
+      "test/apps_exam/clock_observations_test.exs",
       "test/apps_exam/endpoint_test.exs",
       "test/apps_exam/proxy_identity_test.exs",
       "test/core_domain/device_measurement_test.exs",
@@ -173,7 +176,7 @@
       "test/test_helper.exs"
     ],
     "file_remaps": [],
-    "git_revision": "706b0bcdf44d4b3ff1ba9a1cccf3c23896b4b601",
+    "git_revision": "97d3ac6536f3401a04ed7394c0782db53755dcb3",
     "helper_transformations": [
       {
         "exunit_options": [],
@@ -407,7 +410,7 @@
       }
     ],
     "test_support_projects": [],
-    "tree_digest": "9208595bdb0d88ea3da6475f0310c4cd6dc829f13c08e6732eca1b0aacf44f1b",
+    "tree_digest": "02a2b1d03a9ccbcfb3bddefdfd826f76c72dcb4c605519bf3c68f7f5d6a9b565",
     "verification_files": [
       ".formatter.exs",
       "README.md",
@@ -480,8 +483,11 @@
       "priv/sql/003_recording_attempts.sql",
       "priv/sql/004_encounter_exports.sql",
       "priv/sql/005_device_acquisitions.sql",
+      "priv/sql/006_concurrent_device_profiles.sql",
+      "priv/sql/007_one_recording_per_encounter_profile.sql",
       "priv/static/exam.js",
       "test/apps_exam/artifact_test.exs",
+      "test/apps_exam/clock_observations_test.exs",
       "test/apps_exam/endpoint_test.exs",
       "test/apps_exam/proxy_identity_test.exs",
       "test/core_domain/device_measurement_test.exs",
@@ -495,7 +501,7 @@
       "test/support/weld_helpers/core_store_test_helper.exs",
       "test/test_helper.exs"
     ],
-    "verification_input_identity": "ae4addda534b2c862c4dbae8da2bf5ba0e6f88f6f3f8c208d1f6a2f2f03ca614"
+    "verification_input_identity": "19d6b2a2145f8948793b0e97699220805de86cf2b809041399eedb5003ac84ee"
   },
   "source": {
     "inventory": [
@@ -1484,6 +1490,24 @@
         "directory": false,
         "kind": "runtime",
         "operation": "link_or_copy",
+        "owner": "core/store",
+        "publish": true,
+        "source": "core/store/priv/sql/006_concurrent_device_profiles.sql",
+        "target": "priv/sql/006_concurrent_device_profiles.sql"
+      },
+      {
+        "directory": false,
+        "kind": "runtime",
+        "operation": "link_or_copy",
+        "owner": "core/store",
+        "publish": true,
+        "source": "core/store/priv/sql/007_one_recording_per_encounter_profile.sql",
+        "target": "priv/sql/007_one_recording_per_encounter_profile.sql"
+      },
+      {
+        "directory": false,
+        "kind": "runtime",
+        "operation": "link_or_copy",
         "owner": "apps/exam",
         "publish": true,
         "source": "apps/exam/priv/static/exam.js",
@@ -1497,6 +1521,15 @@
         "publish": false,
         "source": "apps/exam/test/artifact_test.exs",
         "target": "test/apps_exam/artifact_test.exs"
+      },
+      {
+        "directory": false,
+        "kind": "test",
+        "operation": "link_or_copy",
+        "owner": "apps/exam",
+        "publish": false,
+        "source": "apps/exam/test/clock_observations_test.exs",
+        "target": "test/apps_exam/clock_observations_test.exs"
       },
       {
         "directory": false,
@@ -1889,7 +1922,7 @@
         "target": "config/sources/apps_exam/config.exs"
       },
       {
-        "generated_digest": "c198e95659c3f635ca270f79c733a7ffd74b328add21eaafe75b8e6ac3eb834b",
+        "generated_digest": "eeddd02a6373a849c9705300c09c22fe2280a7b690dd0db440d6590c05af1815",
         "inputs": [
           {
             "owner": "apps/exam",
@@ -2590,7 +2623,7 @@
         "target": "lib/mf_store/records.ex"
       },
       {
-        "generated_digest": "2e9b76c1b677609a7b667d894b4ec3e295350bec2018c1d750e7a95670212cdb",
+        "generated_digest": "16cd13a137706bb0a61f61fd5e00fce792c96bf6e09ec51002990faa1e5c485a",
         "inputs": [
           {
             "owner": "apps/exam",
@@ -2714,6 +2747,32 @@
         "generated_digest": null,
         "inputs": [
           {
+            "owner": "core/store",
+            "source": "core/store/priv/sql/006_concurrent_device_profiles.sql"
+          }
+        ],
+        "kind": "runtime",
+        "operation": "link_or_copy",
+        "publish": true,
+        "target": "priv/sql/006_concurrent_device_profiles.sql"
+      },
+      {
+        "generated_digest": null,
+        "inputs": [
+          {
+            "owner": "core/store",
+            "source": "core/store/priv/sql/007_one_recording_per_encounter_profile.sql"
+          }
+        ],
+        "kind": "runtime",
+        "operation": "link_or_copy",
+        "publish": true,
+        "target": "priv/sql/007_one_recording_per_encounter_profile.sql"
+      },
+      {
+        "generated_digest": null,
+        "inputs": [
+          {
             "owner": "apps/exam",
             "source": "apps/exam/priv/static/exam.js"
           }
@@ -2735,6 +2794,19 @@
         "operation": "link_or_copy",
         "publish": false,
         "target": "test/apps_exam/artifact_test.exs"
+      },
+      {
+        "generated_digest": null,
+        "inputs": [
+          {
+            "owner": "apps/exam",
+            "source": "apps/exam/test/clock_observations_test.exs"
+          }
+        ],
+        "kind": "test",
+        "operation": "link_or_copy",
+        "publish": false,
+        "target": "test/apps_exam/clock_observations_test.exs"
       },
       {
         "generated_digest": null,
@@ -2927,7 +2999,7 @@
         {
           "app": "mf_exam",
           "project_id": "apps/exam",
-          "test_count": 12
+          "test_count": 13
         },
         {
           "app": "mf_store",
@@ -2947,7 +3019,7 @@
       ],
       "status": "ok",
       "task": "selected_tests_baseline",
-      "test_count": 25
+      "test_count": 26
     },
     {
       "env": "dev",
@@ -2969,7 +3041,7 @@
       "failure_count": 0,
       "status": "ok",
       "task": "test",
-      "test_count": 25
+      "test_count": 26
     },
     {
       "env": "dev",

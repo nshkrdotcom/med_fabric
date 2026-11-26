@@ -91,7 +91,13 @@ if System.get_env("MF_LAB") == "1" do
     artifact_dir: Path.expand(System.fetch_env!("MF_ARTIFACT_DIR"))
   }
 
+  # The Weld application bootstrap can apply runtime endpoint options
+  # independently of the static configuration.
   config :mf_exam, MedFabric.ExamWeb.Endpoint,
+    adapter: Bandit.PhoenixAdapter,
+    render_errors: [formats: [html: MedFabric.ExamWeb.ErrorHTML], layout: false],
+    pubsub_server: MedFabric.Exam.PubSub,
+    live_view: [signing_salt: "med_fabric_exam_lv_salt"],
     server: true,
     check_origin: if(local?, do: ["//localhost:#{port}", "//127.0.0.1:#{port}"], else: [origin]),
     url: [scheme: uri.scheme, host: uri.host, port: uri.port],

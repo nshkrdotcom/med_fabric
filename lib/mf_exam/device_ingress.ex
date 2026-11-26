@@ -13,6 +13,8 @@ defmodule MedFabric.Exam.DeviceIngress do
   alias MedFabric.Exam.{Barrier, DeviceManifest}
   alias MedFabric.Store.DeviceSessions, as: S
 
+  @capacity_reasons ~w(duration_limit artifact_limit frame_limit integrity_span_limit journal_limit)
+
   def start_link(key),
     do:
       GenServer.start_link(__MODULE__, nil,
@@ -58,35 +60,61 @@ defmodule MedFabric.Exam.DeviceIngress do
       active_socket?(old, b.generation, socket) ->
         {:reply, {:error, :already_open}, old}
 
-      old && old.bind.generation == b.generation && old.digest == digest ->
-        {:reply, StreamWriter.receipt(old.writer), %{old | socket: socket}}
+      old && old.bind.generation == b.generation && old.digest == digest &&
+          Process.alive?(old.writer) ->
+        reopen_socket(b, old, socket)
 
       true ->
         reserve_and_open(b, n, digest, socket, old)
     end
   end
 
+  def handle_call(:expire, _, nil), do: {:stop, :normal, :ok, nil}
+
   def handle_call(:expire, _, %{writer: writer} = s) do
-    result = StreamWriter.interrupt(writer, "resume_deadline")
-    if match?({:ok, _}, result), do: await_dead(writer)
-    {:stop, :normal, result, s}
+    :ok = stop_writer(writer)
+    {:stop, :normal, :ok, s}
   end
 
   def handle_call(op, {socket, _}, %{socket: socket} = s) do
+    started = if op == :checkpoint, do: System.monotonic_time(:microsecond)
+
     result =
       S.scoped(s.bind, fn tx, session ->
         unless session.phase in ["capturing", "finalizing"], do: S.abort(tx, :inactive)
 
-        observe_ingress(tx, op, s)
-        record_result(tx, op, act(op, s), s)
+        execute_scoped(tx, op, s)
       end)
 
+    if started do
+      :telemetry.execute(
+        [:mf_exam, :device_ingress, :checkpoint],
+        %{duration_us: System.monotonic_time(:microsecond) - started},
+        %{stream: s.name, acquisition_id: s.bind.id}
+      )
+    end
+
     case result do
-      {:ok, {:sealed, r}} -> {:stop, :normal, {:ok, r}, s}
-      {:ok, {:receipt, r}} -> {:reply, {:ok, r}, %{s | receipt: r}}
-      {:ok, {:error, :duplicate_conflict} = error} -> {:stop, :normal, error, s}
-      {:ok, error} -> {:reply, error, s}
-      error -> {:reply, error, s}
+      {:ok, {:sealed, r}} ->
+        {:stop, :normal, {:ok, r}, s}
+
+      {:ok, {:capacity, r}} ->
+        {:stop, :normal, {:capacity, r}, s}
+
+      {:ok, {:durable, accepted, durable}} ->
+        {:reply, {:durable, accepted, durable}, %{s | receipt: durable}}
+
+      {:ok, {:receipt, r}} ->
+        {:reply, {:ok, r}, %{s | receipt: r}}
+
+      {:ok, {:error, :duplicate_conflict} = error} ->
+        {:stop, :normal, error, s}
+
+      {:ok, error} ->
+        {:reply, error, s}
+
+      error ->
+        {:reply, error, s}
     end
   end
 
@@ -96,6 +124,30 @@ defmodule MedFabric.Exam.DeviceIngress do
     do: previous != socket and Process.alive?(previous)
 
   defp active_socket?(_, _, _), do: false
+
+  defp reopen_socket(bind, s, socket) do
+    result =
+      S.scoped(bind, fn tx, session ->
+        unless session.phase in ["capturing", "finalizing"], do: S.abort(tx, :inactive)
+
+        case StreamWriter.receipt(s.writer) do
+          {:ok, receipt} when receipt == s.receipt -> {:receipt, receipt}
+          {:ok, _} -> execute_scoped(tx, :checkpoint, s)
+          error -> error
+        end
+      end)
+
+    case result do
+      {:ok, {:receipt, receipt}} ->
+        {:reply, {:ok, receipt}, %{s | socket: socket, receipt: receipt}}
+
+      {:ok, error} ->
+        {:reply, error, s}
+
+      error ->
+        {:reply, error, s}
+    end
+  end
 
   defp reserve_and_open(bind, name, digest, socket, old) do
     case S.scoped(bind, &reserve(&1, &2, bind, name, digest, old), :update) do
@@ -135,7 +187,7 @@ defmodule MedFabric.Exam.DeviceIngress do
 
     {:ok, spec} = Serialization.stream_spec(session.descriptors[name])
     if spec.descriptor_ref != digest, do: S.abort(tx, :descriptor_changed)
-    quiesce(tx, old)
+    if old, do: stop_writer(old.writer)
 
     previous =
       S.rows(
@@ -163,15 +215,13 @@ defmodule MedFabric.Exam.DeviceIngress do
     end
   end
 
-  defp quiesce(_tx, nil), do: :ok
-
-  defp quiesce(tx, %{writer: writer}) do
-    if Process.alive?(writer) do
-      case StreamWriter.interrupt(writer, "transport_generation_rotated") do
-        {:ok, _} -> await_dead(writer)
-        _ -> S.abort(tx, :cannot_quiesce)
-      end
-    end
+  defp stop_writer(writer) do
+    # Rotation and expiry have already fenced this attempt. Its volatile tail
+    # belongs to the client spool and must not be flushed during handoff.
+    GenServer.stop(writer, :normal, 30_000)
+  catch
+    :exit, :noproc -> :ok
+    :exit, {:noproc, _} -> :ok
   end
 
   defp open_writer(bind, name, fence, spec, previous) do
@@ -179,38 +229,59 @@ defmodule MedFabric.Exam.DeviceIngress do
       owner: self(),
       stream: spec,
       fence: fence,
+      limits: %{checkpoint_ms: :manual},
       artifact_dir: DeviceManifest.attempt_dir(bind.id, name, fence),
       fault_hook: fn stage -> Barrier.hit(to_string(stage), name) end
     ]
 
-    with {:ok, writer} <- StreamWriter.start_link(opts ++ previous),
-         {:ok, receipt} <- StreamWriter.receipt(writer),
-         {:ok, _} <-
-           S.scoped(bind, fn tx, _ ->
+    case S.scoped(bind, fn tx, _ ->
+           with {:ok, writer} <- StreamWriter.start_link(opts ++ previous),
+                {:ok, receipt} <- StreamWriter.receipt(writer) do
              S.rows(tx, "UPDATE stream_attempts SET receipt=$2 WHERE fence=$1", [
                fence,
                Serialization.to_map(receipt)
              ])
-           end) do
-      {:ok, writer, receipt}
+
+             {:ok, writer, receipt}
+           end
+         end) do
+      {:ok, result} -> result
+      error -> error
     end
   end
 
-  defp observe_ingress(tx, {:frame, raw}, s) do
+  defp execute_scoped(tx, {:frame, raw}, s) do
     Barrier.hit("writer_stall", s.name)
     payload = max(0, byte_size(raw) - 48)
 
-    S.rows(
-      tx,
-      "INSERT INTO device_limits_observed(fence,max_frame_bytes,max_pending_bytes,max_pending_frames) VALUES($1,$2,$2,1) ON CONFLICT(fence) DO UPDATE SET max_frame_bytes=greatest(device_limits_observed.max_frame_bytes,$2),max_pending_bytes=greatest(device_limits_observed.max_pending_bytes,$2)",
-      [s.fence, payload]
-    )
+    with {:ok, f} <- FrameV1.decode(raw),
+         true <- f.stream_number == s.number and f.source_epoch == s.spec.source_epoch do
+      frame =
+        struct!(
+          SampleFrame,
+          Map.merge(
+            Map.take(Map.from_struct(f), [
+              :source_epoch,
+              :sequence,
+              :first_sample,
+              :sample_count,
+              :config_epoch,
+              :payload
+            ]),
+            %{descriptor_ref: s.digest, stream_id: s.name}
+          )
+        )
+
+      record_result(tx, {:frame, raw, f, payload}, StreamWriter.push(s.writer, frame), s)
+    else
+      _ -> {:error, :wrong_frame}
+    end
   end
 
-  defp observe_ingress(_, _, _), do: :ok
+  defp execute_scoped(tx, op, s), do: record_result(tx, op, act(op, s), s)
 
   defp record_result(tx, _op, {:ok, %StreamIndex{} = index}, s) do
-    {^index, receipt} = store_sealed(tx, s)
+    {^index, receipt} = store_sealed_index(tx, index, s)
     {:sealed, receipt}
   end
 
@@ -232,14 +303,49 @@ defmodule MedFabric.Exam.DeviceIngress do
   defp record_result(tx, op, {:ok, receipt}, s) do
     observe_transport(tx, op, s)
     usage = StreamWriter.stats(s.writer)
+    flushed? = receipt.journal_generation > s.receipt.journal_generation
+
+    payload =
+      case op do
+        {:frame, _, _, size} -> size
+        _ -> 0
+      end
+
+    if flushed?, do: Barrier.hit("journal_sync", s.name)
+    ack_inc = if flushed?, do: 1, else: 0
 
     S.rows(
       tx,
-      "UPDATE device_limits_observed SET max_pending_bytes=greatest(max_pending_bytes,$2),max_pending_frames=greatest(max_pending_frames,$3) WHERE fence=$1",
-      [s.fence, usage.peak_pending_bytes, usage.peak_pending_frames]
+      """
+      INSERT INTO device_limits_observed(fence,max_frame_bytes,max_pending_bytes,max_pending_frames,durable_acks)
+      VALUES($1,$2,$3,$4,$5)
+      ON CONFLICT(fence) DO UPDATE SET
+        max_frame_bytes=greatest(device_limits_observed.max_frame_bytes,$2),
+        max_pending_bytes=greatest(device_limits_observed.max_pending_bytes,$3),
+        max_pending_frames=greatest(device_limits_observed.max_pending_frames,$4),
+        durable_acks=device_limits_observed.durable_acks+$5
+      """,
+      [
+        s.fence,
+        payload,
+        max(payload, usage.peak_pending_bytes),
+        max(1, usage.peak_pending_frames),
+        ack_inc
+      ]
     )
 
-    {:receipt, receipt}
+    if flushed? do
+      durable = durable_prefix(receipt)
+
+      S.rows(tx, "UPDATE stream_attempts SET receipt=$2 WHERE fence=$1", [
+        s.fence,
+        Serialization.to_map(durable)
+      ])
+
+      {:durable, receipt, durable}
+    else
+      {:receipt, receipt}
+    end
   end
 
   defp record_result(tx, _op, {:error, :duplicate_conflict} = error, s) do
@@ -248,11 +354,25 @@ defmodule MedFabric.Exam.DeviceIngress do
     error
   end
 
+  defp record_result(tx, _op, {:error, {:capacity, reason}}, s) do
+    {index, receipt} = store_sealed(tx, s)
+
+    if index.terminal == :interrupted and index.terminal_reason == reason,
+      do: {:capacity, receipt},
+      else: S.abort(tx, :unexpected_terminal)
+  end
+
   defp record_result(_, _, error, _), do: error
 
-  defp observe_transport(tx, {:frame, raw}, s) do
-    {:ok, frame} = FrameV1.decode(raw)
+  defp durable_prefix(receipt) do
+    %{
+      receipt
+      | accepted_sequence: receipt.durable_sequence,
+        accepted_sample: receipt.durable_sample
+    }
+  end
 
+  defp observe_transport(tx, {:frame, raw, frame, _payload}, s) do
     if s.name == "ecg" and :ets.whereis(:mf_live_ecg) != :undefined do
       :ets.insert(:mf_live_ecg, {s.bind.id, System.monotonic_time(:millisecond), s.spec, frame})
     end
@@ -266,12 +386,57 @@ defmodule MedFabric.Exam.DeviceIngress do
 
   defp observe_transport(_, _, _), do: :ok
 
+  defp store_sealed_index(tx, %StreamIndex{} = index, s) do
+    await_dead(s.writer)
+    dir = DeviceManifest.attempt_dir(s.bind.id, s.name, s.fence)
+    bytes = Serialization.bytes(index)
+    hash = Serialization.sha256(bytes)
+    index_path = Path.join(dir, hash <> ".index.mej1")
+
+    with true <-
+           index.fence == s.fence and index.journal_id == s.receipt.journal_id and
+             index.journal_generation > s.receipt.journal_generation,
+         {:ok, ^bytes} <- File.read(index_path) do
+      receipt = %{
+        stream_id: index.stream.stream_id,
+        source_epoch: index.stream.source_epoch,
+        descriptor_ref: index.stream.descriptor_ref,
+        fence: index.fence,
+        journal_id: index.journal_id,
+        journal_generation: index.journal_generation,
+        journal_digest: index.journal_digest,
+        durable_sequence: index.next_sequence,
+        durable_sample: index.next_sample,
+        accepted_sequence: index.next_sequence,
+        accepted_sample: index.next_sample
+      }
+
+      S.rows(
+        tx,
+        "UPDATE stream_attempts SET sealed_index=$2,index_digest=$3,receipt=$4 WHERE fence=$1",
+        [
+          s.fence,
+          Serialization.to_map(index),
+          hash,
+          Serialization.to_map(receipt)
+        ]
+      )
+
+      {index, receipt}
+    else
+      _ -> store_sealed(tx, s)
+    end
+  end
+
   defp store_sealed(tx, s) do
     await_dead(s.writer)
     dir = DeviceManifest.attempt_dir(s.bind.id, s.name, s.fence)
 
+    [[known]] = S.rows(tx, "SELECT receipt FROM stream_attempts WHERE fence=$1", [s.fence])
+    {:ok, known_receipt} = Serialization.receipt(known)
+
     {:ok, %{sealed: true, index: index, receipt: receipt}} =
-      Storage.recover(dir, stream: s.spec, fence: s.fence)
+      Storage.recover(dir, stream: s.spec, fence: s.fence, known_receipt: known_receipt)
 
     S.rows(
       tx,
@@ -285,31 +450,6 @@ defmodule MedFabric.Exam.DeviceIngress do
     )
 
     {index, receipt}
-  end
-
-  defp act({:frame, raw}, s) do
-    with {:ok, f} <- FrameV1.decode(raw),
-         true <- f.stream_number == s.number and f.source_epoch == s.spec.source_epoch do
-      frame =
-        struct!(
-          SampleFrame,
-          Map.merge(
-            Map.take(Map.from_struct(f), [
-              :source_epoch,
-              :sequence,
-              :first_sample,
-              :sample_count,
-              :config_epoch,
-              :payload
-            ]),
-            %{descriptor_ref: s.digest, stream_id: s.name}
-          )
-        )
-
-      StreamWriter.push(s.writer, frame)
-    else
-      _ -> {:error, :wrong_frame}
-    end
   end
 
   defp act(
@@ -345,7 +485,18 @@ defmodule MedFabric.Exam.DeviceIngress do
     })
   end
 
-  defp act(:checkpoint, s), do: StreamWriter.checkpoint(s.writer)
+  defp act(:checkpoint, s) do
+    started = System.monotonic_time(:microsecond)
+    result = StreamWriter.checkpoint(s.writer)
+
+    :telemetry.execute(
+      [:mf_exam, :device_ingress, :writer_checkpoint],
+      %{duration_us: System.monotonic_time(:microsecond) - started},
+      %{stream: s.name, acquisition_id: s.bind.id}
+    )
+
+    result
+  end
 
   defp act({:finish, seq, count, interruption}, s) do
     with {:ok, r} <- StreamWriter.checkpoint(s.writer),
@@ -397,7 +548,13 @@ defmodule MedFabric.Exam.DeviceIngress do
   def handle_info(_, s), do: {:noreply, s}
 
   defp prior(_, [], _, _, _), do: []
-  defp prior(_, [[_, receipt, index]], _, _, _) when not is_nil(index), do: {:sealed, receipt}
+
+  defp prior(tx, [[_, receipt, index]], _, _, _) when not is_nil(index) do
+    case Serialization.receipt(receipt) do
+      {:ok, receipt} -> {:sealed, receipt}
+      _ -> S.abort(tx, :unverified_receipt)
+    end
+  end
 
   defp prior(tx, [[fence, known, nil]], id, name, spec) do
     dir = DeviceManifest.attempt_dir(id, name, fence)
@@ -428,15 +585,17 @@ defmodule MedFabric.Exam.DeviceIngress do
         end
 
       case recovery do
-        {:ok, %{sealed: true, index: %{terminal: terminal} = i, receipt: r}}
-        when terminal in [:finished, :failed] ->
+        {:ok,
+         %{sealed: true, index: %{terminal: terminal, terminal_reason: reason} = i, receipt: r}}
+        when terminal in [:finished, :failed] or
+               (terminal == :interrupted and reason in @capacity_reasons) ->
           S.rows(
             tx,
             "UPDATE stream_attempts SET sealed_index=$2,index_digest=$3,receipt=$4 WHERE fence=$1",
             [fence, Serialization.to_map(i), Serialization.digest(i), Serialization.to_map(r)]
           )
 
-          {:sealed, Serialization.to_map(r)}
+          {:sealed, r}
 
         {:ok, %{receipt: r}} ->
           [predecessor: %{artifact_dir: dir, receipt: r}]

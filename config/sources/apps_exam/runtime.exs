@@ -120,6 +120,10 @@ if System.get_env("MF_LAB") == "1" do
   }
 
   config :mf_exam, MedFabric.ExamWeb.Endpoint,
+    adapter: Bandit.PhoenixAdapter,
+    render_errors: [formats: [html: MedFabric.ExamWeb.ErrorHTML], layout: false],
+    pubsub_server: MedFabric.Exam.PubSub,
+    live_view: [signing_salt: "med_fabric_exam_lv_salt"],
     server: true,
     check_origin:
       (if local? do

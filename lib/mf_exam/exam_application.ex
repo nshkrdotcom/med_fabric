@@ -3,28 +3,34 @@ defmodule MedFabric.Exam.Application do
   use Application
 
   alias MedFabric.Exam
-  alias MedFabric.Exam.{DeviceManifest, Recordings}
+  alias MedFabric.Exam.{DeviceManifest, PreviewGateway, Recordings}
   alias MedFabric.ExamWeb.Endpoint
   alias MedFabric.Store.{Encounters, Postgres}
 
   @impl true
   def start(_type, _args) do
+    MedFabric.Exam.ClockObservations.initialize_host_generation()
+
     children = [{Phoenix.PubSub, name: MedFabric.Exam.PubSub}]
+    lab = Application.get_env(:mf_exam, :lab)
 
     lab_children =
-      case Application.get_env(:mf_exam, :lab) do
+      case lab do
         nil ->
           []
 
         lab ->
           device =
-            if lab[:device_enabled],
-              do: [
+            if lab[:device_enabled] do
+              :ets.new(:mf_live_ecg, [:named_table, :set, :public, write_concurrency: true])
+
+              [
                 {MedFabric.Exam.DeviceRootLock, lab.artifact_dir},
-                MedFabric.Exam.PreviewGateway,
                 {Registry, keys: :unique, name: MedFabric.Exam.DeviceRegistry}
-              ],
-              else: []
+              ]
+            else
+              []
+            end
 
           device ++
             [
@@ -34,9 +40,16 @@ defmodule MedFabric.Exam.Application do
             ] ++ if(lab[:device_enabled], do: [MedFabric.Exam.DeviceExpiry], else: [])
       end
 
-    Supervisor.start_link(children ++ lab_children ++ [Endpoint],
-      # The root lock precedes every writer. Any guard crash stops all later
-      # children before reacquisition, and reverse shutdown keeps it held last.
+    preview =
+      with %{device_enabled: true} <- lab,
+           %{} = sidecar <- Application.get_env(:mf_exam, :sidecar) do
+        [{PreviewGateway, sidecar}]
+      else
+        _ -> []
+      end
+
+    Supervisor.start_link(children ++ lab_children ++ [Endpoint] ++ preview,
+      # Keep the root guard before its writers and the disposable relay last.
       strategy: :rest_for_one,
       name: MedFabric.Exam.Supervisor
     )

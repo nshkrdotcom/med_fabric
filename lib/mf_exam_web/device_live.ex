@@ -145,7 +145,7 @@ defmodule MedFabric.ExamWeb.DeviceLive do
 
   defp segment_path(enc, row, stream, segment),
     do:
-      "/encounters/#{enc}/devices/#{row.id}/segment/#{stream}/#{segment["sha256"]}?revision=#{row.digest}"
+      "/encounters/#{enc}/devices/#{row.id}/segment/#{stream}/#{segment["first_sample"]}/#{segment["sha256"]}?revision=#{row.digest}"
 
   def render(assigns) do
     ~H"""
@@ -188,6 +188,9 @@ defmodule MedFabric.ExamWeb.DeviceLive do
           <div class="mf-stream" :for={{name,v} <- r.manifest["streams"]}>
             <h3>{name} · {v["index"]["stream"]["encoding"]}</h3>
             <p class="mf-meta">Alignment {v["clock"]["state"]}</p>
+            <p :if={v["index"]["terminal"] == "interrupted"}>
+              Capture interrupted · {v["index"]["terminal_reason"]}
+            </p>
             <p :for={gap <- Enum.filter(v["index"]["spans"], &(&1["code"] == "source_gap"))}>
               Source gap · samples {gap["first_sample"]}–{gap["end_sample"]}
             </p>
@@ -208,8 +211,8 @@ defmodule MedFabric.ExamWeb.DeviceLive do
           </div>
           <form :if={!r.choice} phx-submit="review">
             <input type="hidden" name="_id" value={r.id}/><input type="hidden" name="digest" value={r.digest}/>
-            <label>Decision <select name="decision"><option :for={v <- (if r.profile=="paired_exam", do: ~w(complete partial reject repeat), else: ~w(accept_metrics reject repeat))}>{v}</option></select></label>
-            <label :if={r.profile=="paired_exam"}>Selected interval (stream:first:end)<input name="range"/></label>
+            <label>Decision <select name="decision"><option :for={v <- (if r.profile=="paired_exam", do: ~w(complete partial reject repeat), else: ~w(accept_metrics reject repeat))}>{if v == "complete", do: "Accept interval from complete capture", else: v}</option></select></label>
+            <label :if={r.profile=="paired_exam"}>Selected interval (stream:first:end, within one configuration epoch and without gaps)<input name="range"/></label>
             <label :if={r.manifest["defects"] != []}><input type="checkbox" name="ack" value="yes"/>Acknowledge the listed defects</label>
             <div :if={r.profile=="plx_spot_check"}><label>Completed event <select name="event_id"><option :for={x<-r.manifest["inventory"]}>{x["event"]["event_id"]}</option></select></label>
               <label :for={m<- ~w(spo2 pulse_rate)}><input type="checkbox" name="metrics[]" value={m}/>{m}</label></div>

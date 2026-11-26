@@ -14,6 +14,7 @@ defmodule MedFabric.ExamWeb.DeviceSegment do
              p["id"],
              c.query_params["revision"],
              p["stream"],
+             p["first_sample"],
              p["sha"]
            ) do
       respond(put_resp_header(c, "cache-control", "no-store"), spec, seg, raw)

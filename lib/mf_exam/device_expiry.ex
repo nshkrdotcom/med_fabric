@@ -65,7 +65,7 @@ defmodule MedFabric.Exam.DeviceExpiry do
 
   defp quiescent?(id, stream) do
     case Registry.lookup(DeviceRegistry, {id, stream}) do
-      [{pid, _}] -> match?({:ok, _}, DeviceIngress.call(pid, :expire))
+      [{pid, _}] -> DeviceIngress.call(pid, :expire) == :ok
       [] -> true
     end
   end

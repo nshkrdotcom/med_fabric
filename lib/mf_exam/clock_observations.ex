@@ -2,13 +2,15 @@ defmodule MedFabric.Exam.ClockObservations do
   @moduledoc "Qualified synthetic acquisition anchors and transport probes pinned at review."
   alias MedEx.{ClockAlign, Serialization}
 
-  def host_generation do
-    key = {__MODULE__, :generation}
+  @key {__MODULE__, :generation}
 
-    case :persistent_term.get(key, nil) do
+  def host_generation, do: :persistent_term.get(@key)
+
+  def initialize_host_generation do
+    case :persistent_term.get(@key, nil) do
       nil ->
         gen = Base.encode16(:crypto.strong_rand_bytes(12))
-        :persistent_term.put(key, gen)
+        :persistent_term.put(@key, gen)
         gen
 
       gen ->
@@ -62,6 +64,13 @@ defmodule MedFabric.Exam.ClockObservations do
         error_us: n(a["error_us"])
       }
 
+      {min_d, max_d} =
+        ps
+        |> Enum.flat_map(&[&1.d2, &1.d3])
+        |> Enum.min_max()
+
+      margin_us = 3_600_000_000
+
       policy = %{
         generation: gen,
         a_min: {999_900, 1_000_000},
@@ -69,7 +78,7 @@ defmodule MedFabric.Exam.ClockObservations do
         epsilon_us: 2,
         host_now_us: now(),
         max_probe_age_us: 1_800_000_000,
-        valid_device_us: {0, 3_600_000_000},
+        valid_device_us: {max(0, min_d - margin_us), max_d + margin_us},
         holdover_rate: {1, 10_000}
       }
 

@@ -42,11 +42,23 @@ WebSockets.
 
 ## Running as a Mix Release
 
+From an unpacked Hex package or Weld projection, carry its generated runtime
+sources into the release using Mix's standard overlay. Set deployment
+environment variables before starting the resulting release.
+
 ```bash
-MIX_ENV=prod mix deps.get
-MIX_ENV=prod mix release
+export MIX_ENV=prod
+mix deps.get
+version=$(mix run --no-start -e 'IO.write(Mix.Project.config()[:version])')
+overlay="rel/overlays/releases/$version"
+mkdir -p "$overlay"
+cp -R config/runtime_sources "$overlay/"
+mix release
 _build/prod/rel/mf_exam/bin/mf_exam start
 ```
+
+The source checkout's Exam app has a single runtime configuration file. From
+`apps/exam`, run the same build and start commands without the overlay steps.
 
 On startup, `MedFabric.Store.Postgres` executes the SQL migrations in
 `priv/sql/` in filename order under an advisory transaction lock.

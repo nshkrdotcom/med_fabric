@@ -1,33 +1,37 @@
 defmodule MedFabric.Exam.PreviewGateway do
   @moduledoc "Disposable feed. One in-flight request and one latest replacement per active source."
   use GenServer
-  def start_link(_), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  def start_link(sidecar), do: GenServer.start_link(__MODULE__, sidecar, name: __MODULE__)
 
-  def init(_) do
-    :ets.new(:mf_live_ecg, [:named_table, :set, :public, write_concurrency: true])
+  def init(sidecar) do
     :ets.new(__MODULE__, [:named_table, :set, :public, write_concurrency: true])
     Process.send_after(self(), :drain, 10)
-    {:ok, nil}
+    {:ok, sidecar}
   end
 
   def feed(id, raw) do
-    if Application.get_env(:mf_exam, :sidecar),
-      do: :ets.insert(__MODULE__, {id, System.monotonic_time(:millisecond), raw})
+    if (table = :ets.whereis(__MODULE__)) != :undefined do
+      try do
+        :ets.insert(table, {id, System.monotonic_time(:millisecond), raw})
+      rescue
+        ArgumentError -> :ok
+      end
+    end
 
     :ok
   end
 
-  def handle_info(:drain, s) do
-    for {id, _, _} <- :ets.tab2list(__MODULE__), do: drain(id)
+  def handle_info(:drain, sidecar) do
+    for {id, _, _} <- :ets.tab2list(__MODULE__), do: drain(id, sidecar)
 
     Process.send_after(self(), :drain, 10)
-    {:noreply, s}
+    {:noreply, sidecar}
   end
 
-  defp drain(id) do
+  defp drain(id, sidecar) do
     with [{_, at, raw}] <- :ets.take(__MODULE__, id),
          true <- System.monotonic_time(:millisecond) - at <= 200 do
-      request("feed", id, raw, "application/octet-stream")
+      request("feed", id, raw, "application/octet-stream", sidecar)
     end
   end
 
@@ -45,8 +49,11 @@ defmodule MedFabric.Exam.PreviewGateway do
     end
   end
 
-  def request(path, id, body, ct) do
-    with %{url: url, secret: key} <- Application.get_env(:mf_exam, :sidecar),
+  def request(path, id, body, ct),
+    do: request(path, id, body, ct, Application.get_env(:mf_exam, :sidecar))
+
+  defp request(path, id, body, ct, sidecar) do
+    with %{url: url, secret: key} <- sidecar,
          {:ok, %{status: 200, body: out}} <-
            Req.post(url <> "/" <> path,
              body: body,

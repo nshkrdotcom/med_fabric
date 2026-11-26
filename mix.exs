@@ -4,7 +4,7 @@ defmodule MfExam.MixProject do
   def project do
     [
       app: :mf_exam,
-      version: "0.1.0",
+      version: "0.1.1",
       build_path: "_build",
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
@@ -29,9 +29,10 @@ defmodule MfExam.MixProject do
   defp deps do
     [
       {:bandit, "~> 1.6"},
+      {:db_connection, "~> 2.10.3"},
       {:decimal, "~> 3.2"},
       {:jason, "~> 1.4"},
-      {:med_ex, "~> 0.2.0", [hex: "med_ex", repo: "hexpm"]},
+      {:med_ex, "~> 0.2.1", [hex: "med_ex", repo: "hexpm"]},
       {:phoenix, "~> 1.8"},
       {:phoenix_html, "~> 4.2"},
       {:phoenix_live_view, "~> 1.0"},
@@ -82,7 +83,7 @@ defmodule MfExam.MixProject do
           {"Release", ["apps/exam/CHANGELOG.md", "apps/exam/LICENSE"]}
         ],
         assets: %{"apps/exam/assets" => "assets"},
-        source_ref: "mf_exam-v0.1.0-docs",
+        source_ref: "mf_exam-v0.1.1",
         source_url: "https://github.com/nshkrdotcom/med_fabric",
         logo: "apps/exam/assets/exam.svg",
         main: "readme",

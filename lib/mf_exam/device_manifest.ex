@@ -15,8 +15,8 @@ defmodule MedFabric.Exam.DeviceManifest do
 
   def finish(bind, final) do
     with {:ok, :ok} <- S.scoped(bind, &request_finish(&1, bind.id, &2, final), :update),
-         {:ok, _} <- S.scoped(bind, &stage(&1, bind.id, &2, final), :update) do
-      S.scoped(bind, &finalize(&1, bind.id, &2), :update)
+         {:ok, staged} <- stage_scoped(bind, final) do
+      finalize_scoped(bind, staged)
     end
   end
 
@@ -52,121 +52,174 @@ defmodule MedFabric.Exam.DeviceManifest do
 
   defp valid_inventory?(_), do: false
 
-  defp stage(tx, id, s, final) do
+  defp stage_scoped(bind, final) do
+    with {:ok, loaded} <- S.scoped(bind, &load_stage_inputs(&1, bind.id, &2, final), :update) do
+      case loaded do
+        {:staged, digest} ->
+          {:ok, {:existing, digest}}
+
+        {:build, inputs} ->
+          with {:ok, built} <- prepare_staged_manifest(bind.id, inputs, :installed_or_recover) do
+            S.scoped(bind, fn tx, _ -> commit_staged(tx, bind.id, built) end, :update)
+          end
+      end
+    end
+  end
+
+  defp load_stage_inputs(tx, id, s, final) do
     case S.rows(tx, "SELECT digest FROM device_manifest_staging WHERE acquisition_id=$1", [id]) do
       [[digest]] ->
-        digest
+        {:staged, digest}
 
       [] ->
-        build_staging(tx, id, s, final)
-    end
-  end
+        inventory = MeasurementEvents.inventory(tx, id)
 
-  defp build_staging(tx, id, s, final) do
-    inventory = MeasurementEvents.inventory(tx, id)
+        if s.profile == "plx_spot_check" and not inventory_matches?(inventory, final),
+          do: S.abort(tx, :inventory_pending)
 
-    if s.profile == "plx_spot_check" and not inventory_matches?(inventory, final),
-      do: S.abort(tx, :inventory_pending)
+        attempts =
+          Map.new(s.descriptors, fn {name, descriptor} ->
+            case S.rows(
+                   tx,
+                   "SELECT fence,index_digest,sealed_index,receipt FROM stream_attempts WHERE acquisition_id=$1 AND stream=$2 ORDER BY generation DESC LIMIT 1",
+                   [id, name]
+                 ) do
+              [attempt] -> {name, {descriptor, attempt}}
+              [] -> S.abort(tx, :missing_stream)
+            end
+          end)
 
-    :ok = DeviceCommands.close_pending(tx, id)
-    facts = S.facts(tx, id)
-    streams = Map.new(s.descriptors, &stage_stream(tx, id, &1, facts))
+        :ok = DeviceCommands.close_pending(tx, id)
+        facts = S.facts(tx, id)
 
-    defects =
-      for {name, stream} <- Enum.sort(streams),
-          code <- defects(stream),
-          do: %{"stream" => name, "code" => code}
+        [[gateway, repeat_of]] =
+          S.rows(tx, "SELECT device_id,repeat_of FROM device_sessions WHERE id=$1", [id])
 
-    defects =
-      defects ++
-        for f <- facts,
-            f["type"] in ["duplicate_conflict", "quarantine"],
-            do: %{"stream" => f["body"]["stream"], "code" => f["type"]}
+        obs_rows =
+          S.rows(
+            tx,
+            "SELECT a.stream,a.fence,o.sequence,o.raw_digest,o.received_at FROM device_transport_observations o JOIN stream_attempts a USING(fence) WHERE a.acquisition_id=$1 ORDER BY a.stream,a.generation,o.sequence,o.raw_digest",
+            [id]
+          )
 
-    reason =
-      if s.profile == "plx_spot_check" and inventory == [],
-        do: [%{"code" => "empty_inventory"}],
-        else: []
-
-    [[gateway, repeat_of]] =
-      S.rows(tx, "SELECT device_id,repeat_of FROM device_sessions WHERE id=$1", [id])
-
-    receipts =
-      for [name, fence, seq, digest, at] <-
-            S.rows(
-              tx,
-              "SELECT a.stream,a.fence,o.sequence,o.raw_digest,o.received_at FROM device_transport_observations o JOIN stream_attempts a USING(fence) WHERE a.acquisition_id=$1 ORDER BY a.stream,a.generation,o.sequence,o.raw_digest",
-              [id]
-            ),
-          do: [name, fence, to_string(seq), digest, DateTime.to_iso8601(at)]
-
-    summary = %{
-      "sha256" => J.digest(receipts),
-      "count" => to_string(length(receipts)),
-      "basis" => "server_transport_observation"
-    }
-
-    manifest = %{
-      "gateway" => gateway,
-      "repeat_of" => repeat_of,
-      "transport_inventory" => summary,
-      "schema" => "medfabric.device-manifest.v1",
-      "simulated" => true,
-      "acquisition" => id,
-      "encounter" => s.encounter,
-      "profile" => s.profile,
-      "site" => s.site,
-      "boot" => s.boot,
-      "streams" => streams,
-      "facts" => facts,
-      "inventory" => inventory,
-      "defects" => defects ++ reason
-    }
-
-    bytes = MedEx.CanonicalJSON.encode(manifest)
-    digest = S.hash(bytes)
-
-    S.rows(
-      tx,
-      "INSERT INTO device_manifest_staging(acquisition_id,digest,bytes) VALUES($1,$2,$3)",
-      [id, digest, bytes]
-    )
-
-    digest
-  end
-
-  defp inventory_matches?(inventory, final) do
-    to_string(length(inventory)) == final["count"] and
-      inventory_digest(inventory) == final["digest"] and
-      Enum.all?(Enum.with_index(inventory), fn {row, sequence} ->
-        row["event"]["gateway_sequence"] == to_string(sequence)
-      end)
-  end
-
-  defp stage_stream(tx, id, {name, descriptor}, facts) do
-    {:ok, spec} = J.stream_spec(descriptor)
-
-    case S.rows(
-           tx,
-           "SELECT fence,index_digest,receipt FROM stream_attempts WHERE acquisition_id=$1 AND stream=$2 ORDER BY generation DESC LIMIT 1",
-           [id, name]
-         ) do
-      [attempt] ->
-        {actual, index} = stage_index(tx, id, name, spec, attempt)
-
-        {name,
+        {:build,
          %{
-           "digest" => actual,
-           "index" => index,
-           "clock" => ClockObservations.freeze(name, spec, facts)
+           session: s,
+           inventory: inventory,
+           facts: facts,
+           attempts: attempts,
+           gateway: gateway,
+           repeat_of: repeat_of,
+           obs_rows: obs_rows
          }}
-
-      [] ->
-        S.abort(tx, :missing_stream)
     end
   end
 
-  defp stage_index(tx, id, name, spec, [fence, digest, known]) do
+  defp prepare_staged_manifest(id, inputs, verify_mode) do
+    %{
+      session: s,
+      inventory: inventory,
+      facts: facts,
+      attempts: attempts,
+      gateway: gateway,
+      repeat_of: repeat_of,
+      obs_rows: obs_rows
+    } = inputs
+
+    with {:ok, streams, updates} <- verify_stage_streams(id, attempts, facts, verify_mode) do
+      defects =
+        for {name, stream} <- Enum.sort(streams),
+            code <- defects(stream),
+            do: %{"stream" => name, "code" => code}
+
+      defects =
+        defects ++
+          for f <- facts,
+              f["type"] in ["duplicate_conflict", "quarantine"],
+              do: %{"stream" => f["body"]["stream"], "code" => f["type"]}
+
+      reason =
+        if s.profile == "plx_spot_check" and inventory == [],
+          do: [%{"code" => "empty_inventory"}],
+          else: []
+
+      receipts =
+        for [name, fence, seq, digest, at] <- obs_rows,
+            do: [name, fence, to_string(seq), digest, DateTime.to_iso8601(at)]
+
+      summary = %{
+        "sha256" => J.digest(receipts),
+        "count" => to_string(length(receipts)),
+        "basis" => "server_transport_observation"
+      }
+
+      manifest = %{
+        "gateway" => gateway,
+        "repeat_of" => repeat_of,
+        "transport_inventory" => summary,
+        "schema" => "medfabric.device-manifest.v1",
+        "simulated" => true,
+        "acquisition" => id,
+        "encounter" => s.encounter,
+        "profile" => s.profile,
+        "site" => s.site,
+        "boot" => s.boot,
+        "streams" => streams,
+        "facts" => facts,
+        "inventory" => inventory,
+        "defects" => defects ++ reason
+      }
+
+      bytes = MedEx.CanonicalJSON.encode(manifest)
+      digest = S.hash(bytes)
+
+      versions =
+        Map.new(attempts, fn {name, {_, [fence, index_digest, _, receipt]}} ->
+          {name, {fence, index_digest, receipt}}
+        end)
+
+      {:ok, %{digest: digest, bytes: bytes, updates: updates, versions: versions, facts: facts}}
+    end
+  end
+
+  defp verify_stage_streams(id, attempts, facts, verify_mode) do
+    Enum.reduce_while(attempts, {:ok, %{}, []}, fn {name, {descriptor, attempt}},
+                                                   {:ok, streams, updates} ->
+      {:ok, spec} = J.stream_spec(descriptor)
+
+      case verify_stage_attempt(id, name, spec, attempt, verify_mode) do
+        {:ok, actual, index_map, update} ->
+          entry = %{
+            "digest" => actual,
+            "index" => index_map,
+            "clock" => ClockObservations.freeze(name, spec, facts)
+          }
+
+          next_updates = if update, do: [update | updates], else: updates
+          {:cont, {:ok, Map.put(streams, name, entry), next_updates}}
+
+        :error ->
+          {:halt, {:error, :unverified_stream}}
+      end
+    end)
+  end
+
+  defp verify_stage_attempt(
+         id,
+         name,
+         _spec,
+         [fence, digest, sealed_index, _known],
+         :installed_or_recover
+       )
+       when is_binary(digest) and is_map(sealed_index) do
+    if installed_index_matches?(id, name, fence, sealed_index, digest) do
+      {:ok, digest, sealed_index, nil}
+    else
+      :error
+    end
+  end
+
+  defp verify_stage_attempt(id, name, spec, [fence, digest, _sealed_index, known], _mode) do
     with {:ok, receipt} <- J.receipt(known),
          {:ok, %{sealed: true, index: index, receipt: recovered_receipt}} <-
            Storage.recover(attempt_dir(id, name, fence),
@@ -176,75 +229,178 @@ defmodule MedFabric.Exam.DeviceManifest do
            ),
          actual = J.digest(index),
          true <- is_nil(digest) or digest == actual do
-      index = J.to_map(index)
-
-      S.rows(
-        tx,
-        "UPDATE stream_attempts SET index_digest=$2,sealed_index=$3,receipt=$4 WHERE fence=$1",
-        [fence, actual, index, J.to_map(recovered_receipt)]
-      )
-
-      {actual, index}
+      index_map = J.to_map(index)
+      {:ok, actual, index_map, {fence, actual, index_map, J.to_map(recovered_receipt)}}
     else
-      _ -> S.abort(tx, :unverified_stream)
+      _ -> :error
     end
   end
 
-  defp finalize(tx, id, s) do
-    [[digest, body]] =
-      S.rows(tx, "SELECT digest,bytes FROM device_manifest_staging WHERE acquisition_id=$1", [id])
+  defp commit_staged(tx, id, built) do
+    case S.rows(tx, "SELECT digest FROM device_manifest_staging WHERE acquisition_id=$1", [id]) do
+      [[existing]] ->
+        {:existing, existing}
 
-    unless S.hash(body) == digest, do: S.abort(tx, :manifest_conflict)
+      [] ->
+        # The build ran outside this lock. Refuse to stage a superseded snapshot.
+        current =
+          S.rows(
+            tx,
+            "SELECT DISTINCT ON (stream) stream,fence,index_digest,receipt FROM stream_attempts WHERE acquisition_id=$1 ORDER BY stream,generation DESC",
+            [id]
+          )
+          |> Map.new(fn [name, fence, index_digest, receipt] ->
+            {name, {fence, index_digest, receipt}}
+          end)
+
+        unless Map.take(current, Map.keys(built.versions)) == built.versions and
+                 S.facts(tx, id) == built.facts do
+          S.abort(tx, :stage_changed)
+        end
+
+        for {fence, actual, index_map, receipt_map} <- built.updates do
+          S.rows(
+            tx,
+            "UPDATE stream_attempts SET index_digest=$2,sealed_index=$3,receipt=$4 WHERE fence=$1",
+            [fence, actual, index_map, receipt_map]
+          )
+        end
+
+        S.rows(
+          tx,
+          "INSERT INTO device_manifest_staging(acquisition_id,digest,bytes) VALUES($1,$2,$3)",
+          [id, built.digest, built.bytes]
+        )
+
+        {:fresh, built.digest}
+    end
+  end
+
+  defp installed_index_matches?(id, name, fence, index_map, expected_digest)
+       when is_binary(fence) and is_map(index_map) and is_binary(expected_digest) do
+    bytes = MedEx.CanonicalJSON.encode(index_map)
+    hash = S.hash(bytes)
+
+    hash == expected_digest and
+      File.read(Path.join(attempt_dir(id, name, fence), hash <> ".index.mej1")) == {:ok, bytes}
+  rescue
+    _ -> false
+  end
+
+  defp installed_index_matches?(_, _, _, _, _), do: false
+
+  defp finalize_scoped(bind, staged) do
+    with {:ok, {digest, body, promoted?}} <-
+           S.scoped(bind, fn tx, _ -> staged_manifest(tx, bind.id) end),
+         true <- S.hash(body) == digest,
+         manifest = JSON.decode!(body),
+         # Only this invocation can reuse its fresh verification for promotion.
+         mode = if(promoted? or staged == {:fresh, digest}, do: :installed, else: :full),
+         :ok <- verify_manifest_streams(bind.id, manifest, mode),
+         :ok <- ensure_manifest_file(bind.id, body) do
+      S.scoped(bind, &promote_manifest(&1, bind.id, &2, digest, manifest), :update)
+    else
+      false -> {:error, :manifest_conflict}
+      error -> error
+    end
+  end
+
+  defp staged_manifest(tx, id) do
+    [[digest, body, promoted?]] =
+      S.rows(
+        tx,
+        """
+        SELECT s.digest,s.bytes,EXISTS(
+          SELECT 1 FROM device_manifests m WHERE m.acquisition_id=s.acquisition_id AND m.digest=s.digest
+        ) FROM device_manifest_staging s WHERE s.acquisition_id=$1
+        """,
+        [id]
+      )
+
+    {digest, body, promoted?}
+  end
+
+  defp ensure_manifest_file(id, body) do
     file = Path.join(root(id), "manifest.mej1")
 
     case File.read(file) do
-      {:ok, ^body} -> :ok
-      {:error, :enoent} -> install!(file, body)
-      _ -> S.abort(tx, :manifest_conflict)
+      {:ok, ^body} -> sync_manifest_directory(Path.dirname(file))
+      {:error, :enoent} -> install(file, body)
+      _ -> {:error, :manifest_conflict}
     end
+  end
 
+  defp verify_manifest_streams(id, m, :installed) do
+    ok? =
+      Enum.all?(m["streams"], fn {name, stream} ->
+        installed_index_matches?(
+          id,
+          name,
+          stream["index"]["fence"],
+          stream["index"],
+          stream["digest"]
+        )
+      end)
+
+    if ok?, do: :ok, else: {:error, :unverified_stream}
+  end
+
+  defp verify_manifest_streams(id, m, :full) do
+    ok? =
+      m["streams"]
+      |> Task.async_stream(&valid_review_stream?(id, &1),
+        ordered: false,
+        timeout: 35_000,
+        on_timeout: :kill_task
+      )
+      |> Enum.all?(fn
+        {:ok, true} -> true
+        _ -> false
+      end)
+
+    if ok?, do: :ok, else: {:error, :unverified_stream}
+  end
+
+  defp promote_manifest(tx, id, s, digest, m) do
     case S.rows(tx, "SELECT digest FROM device_manifests WHERE acquisition_id=$1", [id]) do
       [[^digest]] ->
         digest
 
       [] ->
-        complete(tx, id, s, digest, JSON.decode!(body))
+        Barrier.hit("manifest_install")
+        state = if m["defects"] == [], do: "ready", else: "ready_partial"
+
+        evidence = %{
+          "kind" => s.profile,
+          "manifest_digest" => digest,
+          "provenance" => %{"kind" => "simulated_device", "simulated" => true}
+        }
+
+        if S.rows(
+             tx,
+             "UPDATE acquisitions SET state=$3,evidence=$4,producer=NULL WHERE encounter_id=$1 AND id=$2 AND state='recording' RETURNING id",
+             [s.encounter, id, state, evidence]
+           ) == [], do: S.abort(tx, :completion_conflict)
+
+        S.rows(tx, "INSERT INTO device_manifests VALUES($1,$2,$3,now())", [id, digest, m])
+
+        S.rows(tx, "UPDATE device_sessions SET phase='sealed',manifest_digest=$2 WHERE id=$1", [
+          id,
+          digest
+        ])
+
+        if :ets.whereis(:mf_live_ecg) != :undefined, do: :ets.delete(:mf_live_ecg, id)
+        Barrier.hit("db_completion")
+        digest
     end
   end
 
-  defp complete(tx, id, s, digest, m) do
-    # Each retry revalidates the selected immutable journal and native objects.
-    for {name, stream} <- m["streams"] do
-      {:ok, spec} = J.stream_spec(stream["index"]["stream"])
-
-      unless sealed_index?(id, name, stream, spec), do: S.abort(tx, :unverified_stream)
-    end
-
-    Barrier.hit("manifest_install")
-    state = if m["defects"] == [], do: "ready", else: "ready_partial"
-
-    evidence = %{
-      "kind" => s.profile,
-      "manifest_digest" => digest,
-      "provenance" => %{"kind" => "simulated_device", "simulated" => true}
-    }
-
-    if S.rows(
-         tx,
-         "UPDATE acquisitions SET state=$3,evidence=$4,producer=NULL WHERE encounter_id=$1 AND id=$2 AND state='recording' RETURNING id",
-         [s.encounter, id, state, evidence]
-       ) == [], do: S.abort(tx, :completion_conflict)
-
-    S.rows(tx, "INSERT INTO device_manifests VALUES($1,$2,$3,now())", [id, digest, m])
-
-    S.rows(tx, "UPDATE device_sessions SET phase='sealed',manifest_digest=$2 WHERE id=$1", [
-      id,
-      digest
-    ])
-
-    if :ets.whereis(:mf_live_ecg) != :undefined, do: :ets.delete(:mf_live_ecg, id)
-    Barrier.hit("db_completion")
-    digest
+  defp inventory_matches?(inventory, final) do
+    to_string(length(inventory)) == final["count"] and
+      inventory_digest(inventory) == final["digest"] and
+      Enum.all?(Enum.with_index(inventory), fn {row, sequence} ->
+        row["event"]["gateway_sequence"] == to_string(sequence)
+      end)
   end
 
   defp sealed_index?(id, name, stream, spec) do
@@ -266,7 +422,7 @@ defmodule MedFabric.Exam.DeviceManifest do
       [[^digest, m]] ->
         with {:ok, bytes} <- File.read(Path.join(root(id), "manifest.mej1")),
              true <- S.hash(bytes) == digest and MedEx.CanonicalJSON.encode(m) == bytes,
-             true <- Enum.all?(m["streams"], &valid_review_stream?(id, &1)) do
+             :ok <- verify_manifest_streams(id, m, :full) do
           :ok
         else
           _ -> {:error, :unverified_manifest}
@@ -313,20 +469,50 @@ defmodule MedFabric.Exam.DeviceManifest do
 
   defp recover_finish(id, session, final) do
     prepare =
-      Postgrex.transaction(Postgres, fn tx ->
-        S.rows(tx, "SELECT id FROM device_sessions WHERE id=$1 FOR UPDATE", [id])
-        stage(tx, id, session, final)
-      end)
+      with {:ok, loaded} <-
+             Postgrex.transaction(Postgres, fn tx ->
+               require_finalizing!(tx, id)
+               load_stage_inputs(tx, id, session, final)
+             end) do
+        case loaded do
+          {:staged, digest} ->
+            {:ok, {:existing, digest}}
+
+          {:build, inputs} ->
+            with {:ok, built} <- prepare_staged_manifest(id, inputs, :full) do
+              Postgrex.transaction(Postgres, fn tx ->
+                require_finalizing!(tx, id)
+                commit_staged(tx, id, built)
+              end)
+            end
+        end
+      end
 
     result =
-      with {:ok, _} <- prepare do
+      with {:ok, staged} <- prepare,
+           {:ok, {digest, body, _}} <-
+             Postgrex.transaction(Postgres, &staged_manifest(&1, id)),
+           true <- S.hash(body) == digest,
+           manifest = JSON.decode!(body),
+           mode = if(staged == {:fresh, digest}, do: :installed, else: :full),
+           :ok <- verify_manifest_streams(id, manifest, mode),
+           :ok <- ensure_manifest_file(id, body) do
         Postgrex.transaction(Postgres, fn tx ->
-          S.rows(tx, "SELECT id FROM device_sessions WHERE id=$1 FOR UPDATE", [id])
-          finalize(tx, id, session)
+          require_finalizing!(tx, id)
+          promote_manifest(tx, id, session, digest, manifest)
         end)
+      else
+        false -> {:error, :manifest_conflict}
+        error -> error
       end
 
     recovery_result(id, result)
+  end
+
+  defp require_finalizing!(tx, id) do
+    unless S.rows(tx, "SELECT phase FROM device_sessions WHERE id=$1 FOR UPDATE", [id]) ==
+             [["finalizing"]],
+           do: S.abort(tx, :inactive)
   end
 
   defp recovery_result(_, {:ok, _}), do: :ok
@@ -338,7 +524,7 @@ defmodule MedFabric.Exam.DeviceManifest do
     :blocked
   end
 
-  def install!(file, bytes) do
+  defp install(file, bytes) do
     dir = Path.dirname(file)
     File.mkdir_p!(dir)
     tmp = file <> "." <> S.nonce()
@@ -349,16 +535,30 @@ defmodule MedFabric.Exam.DeviceManifest do
         :ok = :file.sync(io)
       end)
 
-      :ok = File.ln(tmp, file)
-      {:ok, fd} = :file.open(String.to_charlist(dir), [:raw, :read, :directory])
+      case File.ln(tmp, file) do
+        :ok ->
+          sync_manifest_directory(dir)
 
-      try do
-        :ok = :file.sync(fd)
-      after
-        :file.close(fd)
+        {:error, :eexist} ->
+          if File.read(file) == {:ok, bytes},
+            do: sync_manifest_directory(dir),
+            else: {:error, :manifest_conflict}
+
+        error ->
+          error
       end
     after
       File.rm(tmp)
+    end
+  end
+
+  defp sync_manifest_directory(dir) do
+    with {:ok, fd} <- :file.open(String.to_charlist(dir), [:raw, :read, :directory]) do
+      try do
+        :file.sync(fd)
+      after
+        :file.close(fd)
+      end
     end
   end
 end

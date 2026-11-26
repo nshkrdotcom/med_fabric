@@ -79,7 +79,8 @@ defmodule MedFabric.Exam.DeviceWorkflow do
 
     plotted =
       Enum.map_join(points, " ", fn {i, v} ->
-        "#{i * 800 / max(1, rows - 1)},#{120 - (v - low) * 115 / max(1, high - low)}"
+        y = if high == low, do: 62.5, else: 120 - (v - low) * 115 / (high - low)
+        "#{i * 800 / max(1, rows - 1)},#{y}"
       end)
 
     %{
@@ -94,7 +95,9 @@ defmodule MedFabric.Exam.DeviceWorkflow do
     }
   end
 
-  def segment(enc, id, digest, name, sha) when name in ["audio", "ecg"] do
+  def segment(enc, id, digest, name, sha), do: segment(enc, id, digest, name, nil, sha)
+
+  def segment(enc, id, digest, name, first, sha) when name in ["audio", "ecg"] do
     with [[^digest, m]] <-
            S.rows(
              Postgres,
@@ -102,20 +105,9 @@ defmodule MedFabric.Exam.DeviceWorkflow do
              [enc, id]
            ),
          %{"index" => ix} <- m["streams"][name],
-         %{} = row <- Enum.find(ix["segments"], &(&1["sha256"] == sha)),
+         [row] <- Enum.filter(ix["segments"], &segment_matches?(&1, first, sha)),
          {:ok, spec} <- MedEx.Serialization.stream_spec(ix["stream"]),
-         segment = %MedEx.SegmentRef{
-           key: row["key"],
-           sha256: sha,
-           byte_size: n(row["byte_size"]),
-           first_sample: n(row["first_sample"]),
-           end_sample: n(row["end_sample"]),
-           first_sequence: n(row["first_sequence"]),
-           next_sequence: n(row["next_sequence"]),
-           descriptor_ref: row["descriptor_ref"],
-           config_epoch:
-             if(row["config_epoch"] == "unknown", do: :unknown, else: n(row["config_epoch"]))
-         },
+         {:ok, segment} <- MedEx.Serialization.segment_ref(row),
          {:ok, raw} <-
            MedEx.Storage.File.read_segment(
              DeviceManifest.attempt_dir(id, name, ix["fence"]),
@@ -127,7 +119,10 @@ defmodule MedFabric.Exam.DeviceWorkflow do
     end
   end
 
-  def segment(_, _, _, _, _), do: {:error, :unknown_stream}
+  def segment(_, _, _, _, _, _), do: {:error, :unknown_stream}
+
+  defp segment_matches?(row, first, sha),
+    do: row["sha256"] == sha and (is_nil(first) or row["first_sample"] == first)
 
   def band(m, index) do
     a = m["streams"]["audio"]
@@ -174,7 +169,7 @@ defmodule MedFabric.Exam.DeviceWorkflow do
   def stop(enc, id, actor) do
     case S.rows(
            Postgres,
-           "INSERT INTO device_facts(acquisition_id,kind,fact) SELECT s.id,'operator_stop',jsonb_build_object('actor',$3::text) FROM device_sessions s JOIN encounters e ON e.id=s.encounter_id WHERE s.id=$1 AND e.id=$2 AND e.clinician_actor=$3 AND e.closed_at IS NULL AND s.phase='capturing' RETURNING ordinal",
+           "INSERT INTO device_facts(acquisition_id,kind,fact) SELECT s.id,'operator_stop',jsonb_build_object('actor',$3::text) FROM device_sessions s JOIN encounters e ON e.id=s.encounter_id WHERE s.id=$1 AND e.id=$2 AND e.clinician_actor=$3 AND e.closed_at IS NULL AND s.phase='capturing' FOR SHARE OF s,e RETURNING ordinal",
            [id, enc, actor]
          ) do
       [[_]] -> :ok

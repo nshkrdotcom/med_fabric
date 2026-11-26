@@ -11,7 +11,7 @@ defmodule MedFabric.Exam.DeviceReviews do
          do: review(enc, id, actor, digest, choice)
   end
 
-  def review(enc, id, actor, digest, choice) do
+  defp review(enc, id, actor, digest, choice) do
     Postgrex.transaction(Postgres, fn tx ->
       case S.rows(
              tx,
@@ -135,15 +135,44 @@ defmodule MedFabric.Exam.DeviceReviews do
 
   defp range?(manifest, %{"stream" => stream, "first" => first, "end" => last})
        when is_binary(first) and is_binary(last) do
-    with {a, ""} <- Integer.parse(first), {b, ""} <- Integer.parse(last), true <- a < b do
-      Enum.any?(get_in(manifest, ["streams", stream, "index", "segments"]) || [], fn segment ->
-        String.to_integer(segment["first_sample"]) <= a and
-          String.to_integer(segment["end_sample"]) >= b
-      end)
+    with {:ok, a} <- sample_number(first),
+         {:ok, b} <- sample_number(last),
+         true <- a < b do
+      segments = get_in(manifest, ["streams", stream, "index", "segments"]) || []
+
+      segments
+      |> Enum.drop_while(&(String.to_integer(&1["end_sample"]) <= a))
+      |> covers?(a, b)
     else
       _ -> false
     end
   end
 
   defp range?(_, _), do: false
+
+  defp covers?([first | rest], a, b) do
+    start = String.to_integer(first["first_sample"])
+    ending = String.to_integer(first["end_sample"])
+    start <= a and a < ending and covers_next?(rest, ending, b, first["config_epoch"])
+  end
+
+  defp covers?([], _, _), do: false
+
+  defp covers_next?(_, ending, target, _) when ending >= target, do: true
+
+  defp covers_next?([segment | rest], ending, target, epoch) do
+    segment["config_epoch"] == epoch and String.to_integer(segment["first_sample"]) == ending and
+      covers_next?(rest, String.to_integer(segment["end_sample"]), target, epoch)
+  end
+
+  defp covers_next?([], _, _, _), do: false
+
+  defp sample_number(value) do
+    if byte_size(value) <= 20 and Regex.match?(~r/\A(0|[1-9][0-9]*)\z/, value) do
+      sample = String.to_integer(value)
+      if sample <= 0xFFFFFFFFFFFFFFFF, do: {:ok, sample}, else: :error
+    else
+      :error
+    end
+  end
 end

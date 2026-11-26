@@ -22,13 +22,13 @@ Add `mf_exam` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:mf_exam, "~> 0.1.0"}
+    {:mf_exam, "~> 0.1.1"}
   ]
 end
 ```
 
 `mf_exam` requires Elixir `~> 1.20` (OTP 29), PostgreSQL for durable encounter
-and outbox storage, and the base `med_ex ~> 0.2.0` SDK.
+and outbox storage, and the base `med_ex ~> 0.2.1` SDK.
 
 ## Workflows
 
@@ -48,13 +48,13 @@ and outbox storage, and the base `med_ex ~> 0.2.0` SDK.
 
 ## Guides
 
-- [Getting Started](https://mf-exam.hexdocs.pm/0.1.0/getting_started.html) — Prerequisites, configuration,
+- [Getting Started](https://mf-exam.hexdocs.pm/0.1.1/getting_started.html) — Prerequisites, configuration,
   and Mix release startup.
-- [Browser to Record](https://mf-exam.hexdocs.pm/0.1.0/browser_to_record.html) — Two-way talkback, lossless
+- [Browser to Record](https://mf-exam.hexdocs.pm/0.1.1/browser_to_record.html) — Two-way talkback, lossless
   WAV capture, review, and FHIR R4 export.
-- [Handheld Integration](https://mf-exam.hexdocs.pm/0.1.0/handheld_integration.html) — Device admission,
+- [Handheld Integration](https://mf-exam.hexdocs.pm/0.1.1/handheld_integration.html) — Device admission,
   TLS replay, and spot-check review.
-- [Architecture](https://mf-exam.hexdocs.pm/0.1.0/architecture.html) — Domain, store, interop, and web
+- [Architecture](https://mf-exam.hexdocs.pm/0.1.1/architecture.html) — Domain, store, interop, and web
   boundaries.
 
 ## Optional Legacy Media Profile
