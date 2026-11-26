@@ -135,7 +135,7 @@ defmodule MedExHandheld.Paired do
     end
 
     pending = [{p.seq, record, next.seq, next.first} | pending]
-    batch_size = if n == "audio" and not c["variant"], do: 5, else: 1
+    batch_size = if n == "audio" and c["variant"] != true, do: 5, else: 1
     persist_stride = if n == "audio", do: 50, else: 10
 
     flush? =
