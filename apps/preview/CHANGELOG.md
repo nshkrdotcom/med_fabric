@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 — 2026-11-26
+
+- Align release qualification and dependency floors with MedEx 0.3.1 and its 0.2.1 providers.
+
 ## 0.2.0 - 2026-11-25
 
 - Reject empty shared credentials and invalid environment-configured listener ports.

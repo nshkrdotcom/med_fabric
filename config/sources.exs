@@ -15,9 +15,9 @@ defmodule MedFabric.BuildSources do
   def med_ex_dependency(app) when app in @med_ex_apps do
     requirement =
       case app do
-        :med_ex -> "~> 0.3.0"
-        :med_ex_opus -> "~> 0.2.0"
-        :med_ex_rtc -> "~> 0.2.0"
+        :med_ex -> "~> 0.3.1"
+        :med_ex_opus -> "~> 0.2.1"
+        :med_ex_rtc -> "~> 0.2.1"
       end
 
     options = [hex: Atom.to_string(app), repo: "hexpm"]

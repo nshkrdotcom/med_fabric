@@ -115,6 +115,25 @@ defmodule MedFabric.Exam.DeviceReviewTest do
              )
   end
 
+  test "invalid FHIR references leave the review and outbox untouched", c do
+    {digest, choice} = seal_fixture(c, 72)
+
+    S.rows(c.db, "UPDATE encounter_exports SET patient_ref='invalid' WHERE encounter_id=$1", [
+      c.enc
+    ])
+
+    assert {:error, :metric_not_exportable} =
+             DeviceReviews.review_verified(c.enc, c.bind.id, c.actor, digest, choice)
+
+    assert [[0]] = derived_count(c)
+    assert [[0]] = outbox_count(c)
+
+    assert [[0]] =
+             S.rows(c.db, "SELECT count(*) FROM device_reviews WHERE acquisition_id=$1", [
+               c.bind.id
+             ])
+  end
+
   test "failure of the second selected metric rolls back the first, review, acceptance and outbox",
        c do
     # PLXS SFLOAT NaN is source evidence, never a numeric pulse value.

@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.1 — 2026-11-26
+
+- Use MedEx receipt progression before verifying local spool coverage and reclaiming records.
 
 - Isolate local monitor processing from authoritative paired capture. Durable spool batches, upload and operator stop continue through a stalled or failed monitor.
 

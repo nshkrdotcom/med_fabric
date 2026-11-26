@@ -66,6 +66,11 @@ flowchart LR
 
 An encounter outlives its peer connections. A diagnostic acquisition owns its
 capture lifetime. A preview listener can disconnect independently. Loss of the patient producer ends an unfinished recording.
+Selected device metrics must be representable as FHIR Observations at
+acceptance. Clinical ineligibility and FHIR mapping failure have distinct
+outcomes. Either aborts the whole review transaction. A successful review
+stores its observations and retryable export intents atomically.
+
 After evidence is finalized and stored, PostgreSQL owns review, acceptance, and
 export status across application restarts. Acceptance and its FHIR delivery
 intent commit in one SQL transaction. FHIR HTTP runs outside that transaction

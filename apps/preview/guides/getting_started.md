@@ -20,7 +20,7 @@ binaries. The native qualification scope is Ubuntu Linux `x86_64`.
 
 The normal deployment runs Exam and Preview as separate OS releases so native
 WebRTC NIFs (`ex_dtls` / `ex_libsrtp`) stay isolated from authoritative capture.
-Because `med_ex_opus ~> 0.2.0` runs a standalone C11 `libopus` Port encoder
+Because `med_ex_opus ~> 0.2.1` runs a standalone C11 `libopus` Port encoder
 with no Membrane dependencies, a single Mix project that includes both `mf_exam`
 and `mf_preview` resolves cleanly from Hex with no overrides (requires POSIX
 `cc`, `make`, `tar`, `sh`, and `curl` or `MED_EX_OPUS_TARBALL`; natively
@@ -34,7 +34,7 @@ deploy Preview in a separate host/release for the isolation guarantees below.
 
 Mix loads runtime configuration from the top-level host project. It does not
 automatically load `deps/mf_preview/config/runtime.exs`. After adding
-`{:mf_preview, "~> 0.2.0"}` and fetching dependencies, copy the supplied runtime
+`{:mf_preview, "~> 0.2.1"}` and fetching dependencies, copy the supplied runtime
 configuration into a new dedicated Preview host:
 
 ```bash

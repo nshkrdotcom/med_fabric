@@ -25,6 +25,7 @@ API contract. A reviewed function-by-function reusable API remains future work.
 | --- | --- | --- | --- | --- |
 | `0.2.0` (apps `0.1.1`) | `~> 0.2.1` | `~> 0.1.0` (Membrane) | `~> 0.1.0` | Qualified & released |
 | `0.3.0` (apps `0.2.0`) | `~> 0.3.0` | `~> 0.2.0` (libopus Port, no Membrane) | `~> 0.2.0` | Prepared for coordinated release train (Weld `0.19.0` → MedEx family → Med Fabric apps). |
+| `0.3.1` (apps `0.2.1`) | `~> 0.3.1` | `~> 0.2.1` | `~> 0.2.1` | Candidate |
 
 ## 3. Unified Qualification Pipeline
 
@@ -48,4 +49,4 @@ aliases include only format and compile; they do not run Credo or Dialyzer.
 Use the command arguments required by each native runner (including report
 paths), refresh the old Hex locks after the upstream packages are published,
 and retain the resulting evidence. This list does not attest that the pending
-0.3.0 release has passed those gates.
+0.3.1 candidate has passed those gates.

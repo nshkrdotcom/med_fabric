@@ -11,6 +11,7 @@ defmodule MedFabric.HandheldAcceptance do
 
   @root Path.expand("..", __DIR__)
   @suites ~w(paired spot-check legacy-browser)
+  @checkpoint_suite "checkpoint-recovery"
   @limits %{
     pending_frames: 16,
     pending_bytes: 262_144,
@@ -18,7 +19,7 @@ defmodule MedFabric.HandheldAcceptance do
     frame_bytes: 65_536,
     metadata_records: 100_000
   }
-  @faults ~w(accepted_before_durable.audio durable_before_ack.audio after_object_install.audio manifest_install.all db_completion.all)
+  @faults ~w(accepted_before_durable.audio durable_before_ack.audio journal_sync.audio after_object_install.audio manifest_install.all db_completion.all)
 
   def main(args) do
     {opts, rest, errors} =
@@ -38,9 +39,10 @@ defmodule MedFabric.HandheldAcceptance do
     seconds = opts[:seconds] || 1740
 
     check!(
-      rest in [[], ["acceptance"]] and errors == [] and suite in (@suites ++ ["all", "soak"]) and
+      rest in [[], ["acceptance"]] and errors == [] and
+        suite in (@suites ++ ["all", "soak", @checkpoint_suite]) and
         preview in ["off", "isolated"],
-      "Usage: elixir ops/handheld_acceptance.exs --suite paired|spot-check|legacy-browser|all|soak --preview off|isolated [--fhir hapi] [--run-dir DIR] [--report FILE] [--seconds 3..1740]"
+      "Usage: elixir ops/handheld_acceptance.exs --suite paired|spot-check|legacy-browser|checkpoint-recovery|all|soak --preview off|isolated [--fhir hapi] [--run-dir DIR] [--report FILE] [--seconds 3..1740]"
     )
 
     check!(
@@ -86,6 +88,7 @@ defmodule MedFabric.HandheldAcceptance do
       directory,
       %{
         "paired" => 900_000,
+        @checkpoint_suite => 120_000,
         "spot-check" => 300_000,
         "legacy-browser" => 300_000,
         "all" => 1_500_000,
@@ -125,6 +128,12 @@ defmodule MedFabric.HandheldAcceptance do
           case name do
             "paired" ->
               paired!(lab)
+
+            @checkpoint_suite ->
+              {lab, _} =
+                paired_case!(lab, "journal_sync", %{"seconds" => 4}, "journal_sync.audio")
+
+              lab
 
             "soak" ->
               soak!(
@@ -950,9 +959,21 @@ defmodule MedFabric.HandheldAcceptance do
             {digest, bytes}
           end
 
-        ProcessLab.kill!(lab.server)
-        File.rm!(reached(armed))
-        {lab |> start_server!() |> login!(), staged}
+        if fault == "journal_sync.audio" do
+          backend = armed |> reached() |> File.read!() |> integer()
+
+          check!(
+            sql!(lab, "SELECT pg_terminate_backend(#{backend}, 3000)") == "t",
+            "Could not terminate the checkpoint transaction backend"
+          )
+
+          File.rm!(reached(armed))
+          {lab, staged}
+        else
+          ProcessLab.kill!(lab.server)
+          File.rm!(reached(armed))
+          {lab |> start_server!() |> login!(), staged}
+        end
       else
         {lab, nil}
       end

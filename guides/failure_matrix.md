@@ -1,7 +1,7 @@
 # Med Fabric Failure Matrix
 
 Each row maps a component failure to its expected behaviour and the source
-tests that cover it. This is a coverage map, not a record of a passing 0.3.0
+tests that cover it. This is a coverage map, not a record of a passing 0.3.1
 qualification run. The release must run the named suites against the exact
 candidate packages. A path-existence check cannot establish that a scenario
 passed; gaps are called out explicitly.
@@ -10,8 +10,9 @@ passed; gaps are called out explicitly.
 | --- | --- | --- | --- |
 | `mf_exam` + `MedEx.StreamWriter` | Writer stalls or crashes mid-encounter | Independent encounters remain durable; fenced batching preserves only committed durable prefixes; no volatile frames leak across handoff. | `apps/exam/integration/device_network_test.exs`, `ops/handheld_acceptance.exs` |
 | `mf_exam` + `MedEx.StreamWriter` | Capture reaches a configured capacity limit | Terminal capacity receipt is preserved durably for both frame and gap submissions. | `apps/exam/integration/device_review_test.exs`: “frame and gap capacity return the same verified terminal receipt on reopen” exercises a duration limit. Physical disk-full failure is not covered by this case. |
+| Exam writer + PostgreSQL | Journal synced and receipt transaction loses its backend | The socket cannot acknowledge the failed transaction. Reopen under the active binding verifies the durable journal prefix and resumes without duplicating evidence. | `elixir ops/handheld_acceptance.exs --suite checkpoint-recovery` terminates the actual backend at the journal barrier and checks both streams against the source oracle. |
 | `mf_exam` + PostgreSQL | Interrupted manifest promotion | Staged facts are preserved; reverification recovers finalized evidence cleanly. | `apps/exam/integration/device_review_test.exs` forces a promotion conflict and rejects corruption before retry; `ops/handheld_acceptance.exs` injects `manifest_install` and `db_completion` interruptions. |
-| `mf_exam` + PostgreSQL | Database unavailable at commit | Clinical acceptance and FHIR outbox intent must fail atomically. | `core/store/integration/postgres_test.exs` proves explicit transaction rollback, and `apps/exam/integration/device_review_test.exs` proves rollback when a second metric fails. **Gap:** neither injects an actual PostgreSQL outage at commit. |
+| `mf_exam` + PostgreSQL | Database unavailable at commit | Clinical acceptance and FHIR outbox intent must fail atomically. | `core/store/integration/postgres_test.exs` proves explicit transaction rollback, and `apps/exam/integration/device_review_test.exs` proves rollback when a second metric fails. The acceptance outage at SQL commit remains a separate case from the writer checkpoint fault. |
 | Handheld local monitor | Monitor stalls or dies mid-session | The audio producer hands off a bounded batch after spool commit. Both streams continue to upload, and stop remains available. | The paired native `local-monitor-stall` and `local-monitor-kill` cases check durable progress during the fault and compare final Exam evidence against source bytes. |
 | `mf_handheld` + TLS uplink | Network drop / TLS disconnect | Handheld continues collecting into bounded local spool (5-frame audio batches, O(k) ack reclamation) and replays on reconnect with explicit multi-sequence gap handling. | `ops/handheld_acceptance.exs`, `ops/handheld/oracle_test.exs` |
 | `mf_handheld` | Crash during staged spool write | Leftover temp files are swept on startup; partial batch spool recovers cleanly. | `apps/handheld/test/spool_receipt_test.exs`: staged-write, partial-batch, and restart recovery cases. |

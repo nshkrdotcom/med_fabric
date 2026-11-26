@@ -14,7 +14,7 @@ admission, lossless waveform capture, clinical review, and HL7 FHIR R4 export.
 
 The normal deployment runs Exam and Preview as separate OS releases so native
 WebRTC NIFs (`ex_dtls` / `ex_libsrtp`) stay isolated from authoritative capture.
-Because `med_ex_opus ~> 0.2.0` runs a standalone C11 `libopus` Port encoder
+Because `med_ex_opus ~> 0.2.1` runs a standalone C11 `libopus` Port encoder
 with no Membrane dependencies, a single Mix project that includes both `mf_exam`
 and `mf_preview` resolves cleanly from Hex with no overrides (requires POSIX
 `cc`, `make`, `tar`, `sh`, and `curl` or `MED_EX_OPUS_TARBALL`; natively

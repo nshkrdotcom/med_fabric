@@ -22,13 +22,13 @@ Add `mf_handheld` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:mf_handheld, "~> 0.2.0"}
+    {:mf_handheld, "~> 0.2.1"}
   ]
 end
 ```
 
 Requires Elixir `~> 1.20` (OTP 29), Linux with `util-linux` `flock`, a local
-filesystem supporting directory `fsync`, OTP TLS, and MedEx `~> 0.3.0`.
+filesystem supporting directory `fsync`, OTP TLS, and MedEx `~> 0.3.1`.
 
 ## Key Capabilities
 
@@ -57,11 +57,11 @@ bin/mf_handheld eval \
 
 ## Guides
 
-- [Getting Started](https://mf-handheld.hexdocs.pm/0.2.0/getting_started.html) — Fixture configuration, TLS
+- [Getting Started](https://mf-handheld.hexdocs.pm/0.2.1/getting_started.html) — Fixture configuration, TLS
   credentials, and CLI scenarios.
-- [Spool & Recovery](https://mf-handheld.hexdocs.pm/0.2.0/spool_and_recovery.html) — Disk spool layout, journal
+- [Spool & Recovery](https://mf-handheld.hexdocs.pm/0.2.1/spool_and_recovery.html) — Disk spool layout, journal
   sync guarantees, and reconnect replay.
-- [Deployment](https://mf-handheld.hexdocs.pm/0.2.0/deployment.html) — Building and shipping a standalone Mix
+- [Deployment](https://mf-handheld.hexdocs.pm/0.2.1/deployment.html) — Building and shipping a standalone Mix
   release without a server checkout.
 
 ## License

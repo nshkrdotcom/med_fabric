@@ -1,6 +1,8 @@
 # Med Fabric changelog
 
-## Unreleased
+## 0.3.1 — 2026-11-26
+
+- Use MedEx receipt progression in Exam and Handheld, retire ingress after a failed database transaction, and report FHIR mapping failures separately from clinical eligibility.
 
 - Isolate local monitor processing from authoritative paired capture. Durable spool batches, upload and operator stop continue through a stalled or failed monitor.
 

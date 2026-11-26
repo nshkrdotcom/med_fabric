@@ -30,7 +30,7 @@ def exact_coverage:
 (.configured_limits as $limit | [.measured_maxima | to_entries[] | .value <= $limit[.key]] | all) and
 (.scenarios as $cases |
   ["baseline", "local-monitor-stall", "local-monitor-kill", "local-monitor-stop", "source-gap", "multi-sequence-gap", "concurrent-encounter", "rational-s24", "accepted_before_durable", "durable_before_ack",
-   "after_object_install", "manifest_install", "db_completion", "spool-capacity",
+   "journal_sync", "after_object_install", "manifest_install", "db_completion", "spool-capacity",
    "source-reset", "handheld-restart"] |
   map($cases[.] | .raw_payload_digests == .oracle_payload_digests and
       .duplicate_logical_frames == 0 and ([.coverage[] | exact_coverage] | all)) | all) and

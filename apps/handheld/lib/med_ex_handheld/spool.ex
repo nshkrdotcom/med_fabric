@@ -438,43 +438,13 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  defp verify_progress(last, r) do
-    cond do
-      r.accepted_sequence != r.durable_sequence or r.accepted_sample != r.durable_sample ->
-        {:error, :not_durable_receipt}
+  defp verify_progress(%{fence: _} = last, receipt),
+    do: MedEx.Serialization.receipt_progress(last, receipt, :verified_handoff)
 
-      r.durable_sequence < last.durable_sequence or r.durable_sample < last.durable_sample ->
-        {:error, :receipt_rollback}
-
-      Map.has_key?(last, :descriptor_ref) and
-          {last.stream_id, last.source_epoch, last.descriptor_ref} !=
-            {r.stream_id, r.source_epoch, r.descriptor_ref} ->
-        {:error, :receipt_identity}
-
-      Map.get(last, :fence) == r.fence ->
-        verify_journal_progress(last, r)
-
-      true ->
-        :ok
-    end
-  end
-
-  defp verify_journal_progress(last, r) do
-    cond do
-      r.journal_id != last.journal_id or r.journal_generation < last.journal_generation ->
-        {:error, :receipt_rollback}
-
-      r.journal_generation == last.journal_generation and
-          {r.journal_digest, r.durable_sequence, r.durable_sample} !=
-            {last.journal_digest, last.durable_sequence, last.durable_sample} ->
-        {:error, :receipt_conflict}
-
-      r.journal_generation > last.journal_generation and r.journal_digest == last.journal_digest ->
-        {:error, :receipt_conflict}
-
-      true ->
-        :ok
-    end
+  defp verify_progress(_empty, receipt) do
+    if MedEx.Serialization.durable_prefix(receipt) == receipt,
+      do: :ok,
+      else: {:error, :not_durable_receipt}
   end
 
   defp verify_coverage(s, name, last, r) do
