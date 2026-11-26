@@ -37,6 +37,9 @@ listening while authoritative capture continues.
 
 ## Run a local demonstration
 
+To try all six published packages in one standalone Mix project, run the
+[Hex smoke test](examples/README.md).
+
 Start the local dev lab (isolated PostgreSQL, localhost TLS certs, and shared
 Preview credential) and run Preview, Exam, and Handheld in three terminals:
 

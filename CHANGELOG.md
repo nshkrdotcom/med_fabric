@@ -1,5 +1,9 @@
 # Med Fabric changelog
 
+## Unreleased
+
+- Add a standalone example that exercises all six published Hex packages, including native Opus encoding and WebRTC delivery.
+
 ## 0.3.1 — 2026-11-26
 
 - Preserve fresh monitor audio across gap-only batches and distinguish ineligible clinical measurements in Exam.
