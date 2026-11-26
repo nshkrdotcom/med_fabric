@@ -1,17 +1,31 @@
 defmodule MedExHandheld.Monitor do
   @moduledoc "Persistent per-boot absolute monitor setting, applied at an observed audio-frame boundary."
-  use GenServer
+  use GenServer, restart: :temporary
+  alias MedEx.Serialization
+  alias MedEx.Wire.FrameV1
   alias MedExHandheld.Spool
-  def start_link({dir, boot}), do: GenServer.start_link(__MODULE__, {dir, boot})
+  def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
 
-  def init({dir, boot}) do
+  def offer(pid, table, batch) do
+    # A suspended monitor can have one batch queued, irrespective of session length.
+    if :ets.insert_new(table, {:batch, System.monotonic_time(:millisecond), batch}),
+      do: send(pid, {:batch, table})
+
+    :ok
+  end
+
+  def init({dir, boot}) when is_binary(dir), do: init({%{"spool" => dir}, boot})
+  def init({config, boot}), do: {:ok, nil, {:continue, {config, boot}}}
+
+  def handle_continue({config, boot}, _) do
+    dir = config["spool"]
     file = Path.join(dir, "monitor.json")
 
     state =
       Spool.read_json(file, %{"boot" => boot, "epoch" => "0", "gain" => "unity", "cache" => %{}})
 
     if state["boot"] != boot, do: raise("monitor boot domain changed")
-    {:ok, %{file: file, state: state, pending: nil}}
+    {:noreply, %{file: file, state: state, pending: nil, config: config}}
   end
 
   def handle_call({:command, %{"id" => id} = c}, _, %{pending: %{"id" => id} = pending} = s) do
@@ -49,6 +63,57 @@ defmodule MedExHandheld.Monitor do
   end
 
   def handle_call({:frame, first, pcm}, _, s) do
+    {reply, next} = apply_frame(first, pcm, s)
+    {:reply, reply, next}
+  end
+
+  def handle_call({:state, c}, _, s) do
+    result =
+      if s.pending && s.pending["id"] == c["id"] do
+        %{"id" => c["id"], "status" => "pending"}
+      else
+        s.state["cache"][c["id"]] ||
+          Map.merge(
+            Map.take(c, ~w(id fingerprint)),
+            Map.merge(Map.take(s.state, ~w(boot epoch gain)), %{
+              "status" => "reconciled",
+              "first_sample" => nil
+            })
+          )
+      end
+
+    {:reply, result, s}
+  end
+
+  def handle_info({:batch, table}, state) do
+    [{:batch, captured_at, batch}] = :ets.take(table, :batch)
+
+    {frames, next} =
+      Enum.map_reduce(batch, state, fn
+        {_, <<"MEX1", _::binary>> = raw, _, _}, s ->
+          {:ok, frame} = FrameV1.decode(raw)
+          {{epoch, pcm}, next} = apply_frame(frame.first_sample, frame.payload, s)
+          trace_monitor(s.config, frame, epoch, pcm)
+
+          {:ok, derived} =
+            FrameV1.encode(%{
+              frame
+              | stream_number: 3,
+                config_epoch: String.to_integer(epoch),
+                payload: pcm
+            })
+
+          {derived, next}
+
+        _, s ->
+          {nil, s}
+      end)
+
+    :ets.insert(table, {:latest, captured_at, Enum.reject(frames, &is_nil/1)})
+    {:noreply, next}
+  end
+
+  defp apply_frame(first, pcm, s) do
     state =
       if c = s.pending do
         epoch = to_string(String.to_integer(s.state["epoch"]) + 1)
@@ -71,25 +136,24 @@ defmodule MedExHandheld.Monitor do
         s.state
       end
 
-    {:reply, {state["epoch"], transform(pcm, state["gain"])}, %{s | state: state, pending: nil}}
+    {{state["epoch"], transform(pcm, state["gain"])}, %{s | state: state, pending: nil}}
   end
 
-  def handle_call({:state, c}, _, s) do
-    result =
-      if s.pending && s.pending["id"] == c["id"] do
-        %{"id" => c["id"], "status" => "pending"}
-      else
-        s.state["cache"][c["id"]] ||
-          Map.merge(
-            Map.take(c, ~w(id fingerprint)),
-            Map.merge(Map.take(s.state, ~w(boot epoch gain)), %{
-              "status" => "reconciled",
-              "first_sample" => nil
-            })
-          )
-      end
+  defp trace_monitor(c, frame, epoch, pcm) do
+    if c["trace_monitor"] do
+      trace = %{
+        "first" => frame.first_sample,
+        "count" => frame.sample_count,
+        "epoch" => epoch,
+        "sha256" => Serialization.sha256(pcm)
+      }
 
-    {:reply, result, s}
+      File.write!(
+        Path.join(c["spool"], "monitor-truth.jsonl"),
+        [JSON.encode!(trace), "\n"],
+        [:append]
+      )
+    end
   end
 
   defp accept_command(c, s, decision) do

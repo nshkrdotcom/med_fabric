@@ -1,5 +1,9 @@
 # Med Fabric changelog
 
+## Unreleased
+
+- Isolate local monitor processing from authoritative paired capture. Durable spool batches, upload and operator stop continue through a stalled or failed monitor.
+
 ## 0.3.0 — 2026-11-25
 
 - Reject empty Preview credentials and out-of-range environment listener ports;

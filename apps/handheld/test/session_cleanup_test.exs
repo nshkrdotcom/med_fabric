@@ -64,12 +64,16 @@ defmodule MedExHandheld.SessionCleanupTest do
 
     links = caller_links()
 
-    error =
-      assert_raise MatchError, fn ->
-        Session.run(Map.put(paired, "spool_root", dir), "paired_exam")
-      end
+    # Even an unreadable monitor state allows the session to reach admission.
+    config =
+      Map.merge(paired, %{
+        "spool_root" => dir,
+        "seed" => 1,
+        "server" => "wss://localhost:443",
+        "credential_file" => Path.join(dir, "missing-device-credential")
+      })
 
-    assert {:error, {{%RuntimeError{message: "monitor boot domain changed"}, _}, _}} = error.term
+    assert_raise File.Error, fn -> Session.run(config, "paired_exam") end
     assert caller_links() == links
     assert File.read!(monitor_file) == bytes
     pid = start_supervised!({Spool, root: root, limit: 1000})

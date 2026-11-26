@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Isolate local monitor processing from authoritative paired capture. Durable spool batches, upload and operator stop continue through a stalled or failed monitor.
+
 ## 0.2.0 - 2026-11-25
 
 - Align base SDK requirement to `med_ex ~> 0.3.0`.

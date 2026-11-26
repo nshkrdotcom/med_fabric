@@ -5,7 +5,7 @@ defmodule MedExHandheld.Paired do
   @moduledoc "Reference peripheral acquisition runs independently of server connectivity."
   alias MedEx.{Serialization, StreamSpec}
   alias MedEx.Wire.FrameV1
-  alias MedExHandheld.{ReferencePeripheral, Spool, Transport}
+  alias MedExHandheld.{Monitor, ReferencePeripheral, Spool, Transport}
 
   def sources(c) do
     for {n, s} <- [{"audio", 1}, {"ecg", 2}], into: %{} do
@@ -79,7 +79,7 @@ defmodule MedExHandheld.Paired do
   defp loop(%{config: c, hub: hub, name: name, spec: spec} = source, peripheral, pending) do
     {rn, rd} = spec.sample_rate
     target = div((c["seconds"] || 60) * rn, rd)
-    stop = Agent.get(hub, & &1.stop)
+    stop = :ets.member(hub, :stop)
     reset = source_reset?(c, name, peripheral)
 
     if peripheral.first >= target or stop or reset do
@@ -89,8 +89,8 @@ defmodule MedExHandheld.Paired do
     end
   end
 
-  defp stop_source(%{config: c, spool: spool, name: name} = source, peripheral, pending, reset) do
-    case flush_pending(c, spool, name, pending) do
+  defp stop_source(%{spool: spool, name: name} = source, peripheral, pending, reset) do
+    case flush_pending(source, pending) do
       :ok ->
         {_, result, []} = ReferencePeripheral.transact(peripheral, "stop")
 
@@ -110,7 +110,7 @@ defmodule MedExHandheld.Paired do
 
   defp stop_on_full_spool(%{spool: spool, hub: hub, name: name}) do
     mark = Spool.watermark(spool, name)
-    Agent.update(hub, &Map.put(&1, :stop, true))
+    :ets.insert(hub, {:stop, true})
     :ok = Spool.finish_source(spool, name, mark["sequence"], mark["sample"], "spool_full")
   end
 
@@ -125,7 +125,7 @@ defmodule MedExHandheld.Paired do
   end
 
   defp capture_frame(source, peripheral, target, pending) do
-    %{config: c, monitor: monitor, hub: hub, name: name, spec: spec} = source
+    %{config: c, name: name, spec: spec} = source
     {rn, rd} = spec.sample_rate
     wait_for_sample(c, name, peripheral.first, spec.sample_rate)
     step = frame_step(c, name)
@@ -140,10 +140,6 @@ defmodule MedExHandheld.Paired do
       if gap,
         do: lost_frame(c, peripheral, next, step, target, spec.sample_rate),
         else: {next, raw}
-
-    if not gap and {name, spec.encoding} == {"audio", :s16le} do
-      publish_monitor_frame(c, monitor, hub, frame)
-    end
 
     pending = [{peripheral.seq, record, next.seq, next.first} | pending]
     buffer_frames(source, next, pending, gap, target)
@@ -161,8 +157,8 @@ defmodule MedExHandheld.Paired do
     end
   end
 
-  defp flush_frames(%{config: c, spool: spool, name: name} = source, next, pending, persist) do
-    case flush_pending(c, spool, name, pending) do
+  defp flush_frames(%{spool: spool, name: name} = source, next, pending, persist) do
+    case flush_pending(source, pending) do
       :ok ->
         if persist, do: :ok = Spool.persist_watermark(spool, name)
         loop(source, next, [])
@@ -172,10 +168,19 @@ defmodule MedExHandheld.Paired do
     end
   end
 
-  defp flush_pending(_c, _spool, _n, []), do: :ok
+  defp flush_pending(_, []), do: :ok
 
-  defp flush_pending(c, spool, n, pending) do
-    Spool.put_batch_and_advance(spool, c["spool"], n, Enum.reverse(pending))
+  defp flush_pending(source, pending) do
+    batch = Enum.reverse(pending)
+
+    with :ok <-
+           Spool.put_batch_and_advance(source.spool, source.config["spool"], source.name, batch) do
+      if source.name == "audio" and source.spec.encoding == :s16le do
+        Monitor.offer(source.monitor, source.hub, batch)
+      end
+
+      :ok
+    end
   end
 
   defp wait_for_sample(c, n, first, {rn, rd}) do
@@ -249,42 +254,6 @@ defmodule MedExHandheld.Paired do
        "first_sequence" => to_string(p.seq),
        "next_sequence" => to_string(boundary.sequence)
      })}
-  end
-
-  defp publish_monitor_frame(c, monitor, hub, frame) do
-    {epoch, pcm} = GenServer.call(monitor, {:frame, frame.first_sample, frame.payload})
-
-    trace_monitor(c, frame, epoch, pcm)
-
-    {:ok, derived} =
-      FrameV1.encode(%{
-        frame
-        | stream_number: 3,
-          config_epoch: String.to_integer(epoch),
-          payload: pcm
-      })
-
-    Agent.update(
-      hub,
-      &Map.put(&1, :latest, {System.monotonic_time(:millisecond), derived})
-    )
-  end
-
-  defp trace_monitor(c, frame, epoch, pcm) do
-    if c["trace_monitor"] do
-      trace = %{
-        "first" => frame.first_sample,
-        "count" => frame.sample_count,
-        "epoch" => epoch,
-        "sha256" => Serialization.sha256(pcm)
-      }
-
-      File.write!(
-        Path.join(c["spool"], "monitor-truth.jsonl"),
-        [JSON.encode!(trace), "\n"],
-        [:append]
-      )
-    end
   end
 
   def device_us(c, n),

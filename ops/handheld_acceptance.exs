@@ -733,20 +733,24 @@ defmodule MedFabric.HandheldAcceptance do
   defp run_client!(lab, cfg, profile) do
     path = at(lab, cfg["acquisition"] <> ".json")
 
+    entry =
+      if cfg["local_monitor_fault"],
+        do: ["integration/local_monitor_fault.exs"],
+        else: ["-e", "MedExHandheld.CLI.main(System.argv())"]
+
     isolate!(
       lab,
       "handheld",
       "mix",
-      [
-        "run",
-        "-e",
-        "MedExHandheld.CLI.main(System.argv())",
-        "--",
-        "--config",
-        path,
-        "--scenario",
-        profile
-      ],
+      ["run"] ++
+        entry ++
+        [
+          "--",
+          "--config",
+          path,
+          "--scenario",
+          profile
+        ],
       path
     )
   end
@@ -891,6 +895,34 @@ defmodule MedFabric.HandheldAcceptance do
     if armed, do: arm!(armed)
     {cfg, child} = client!(lab, "paired_exam", name, settings)
 
+    if cfg["local_monitor_fault"] == "stop" do
+      marker = at(lab, "spool/#{cfg["acquisition"]}/monitor-fault.json")
+
+      ProcessLab.wait!(
+        fn -> File.regular?(marker) end,
+        25_000,
+        child,
+        "durable progress with monitor suspended"
+      )
+
+      action!(lab, cfg["acquisition"], "monitor_gain", %{"gain" => "half"})
+
+      ProcessLab.wait!(
+        fn ->
+          count!(
+            lab,
+            "device_facts",
+            "acquisition_id='#{cfg["acquisition"]}' AND kind='command_outcome_unknown'"
+          ) > 0
+        end,
+        15_000,
+        child,
+        "stalled monitor command remains unknown"
+      )
+
+      action!(lab, cfg["acquisition"], "stop")
+    end
+
     {lab, concurrent} =
       if name == "baseline" do
         {lab, concurrent} = command_and_stall!(lab, cfg, child)
@@ -934,6 +966,26 @@ defmodule MedFabric.HandheldAcceptance do
       result = Oracle.verify!(lab.dir, other_cfg, root, manifest)
       scenario("concurrent-encounter", Map.put(result, :manifest_digest, digest))
     end
+
+    cfg =
+      if cfg["local_monitor_fault"] == "stop" do
+        cutoffs =
+          Map.new(~w(audio ecg), fn stream ->
+            state = read(at(lab, "spool/#{cfg["acquisition"]}/#{stream}/source.json"))
+            rate = if stream == "audio", do: 48_000, else: 250
+
+            check!(
+              state["done"] and state["sample"] > 0 and state["sample"] < cfg["seconds"] * rate,
+              "Operator stop did not terminate #{stream} early"
+            )
+
+            {stream, state["sample"]}
+          end)
+
+        Map.put(cfg, "restart_cutoffs", cutoffs)
+      else
+        cfg
+      end
 
     {root, digest, manifest} = manifest!(lab, cfg)
 
@@ -1264,6 +1316,17 @@ defmodule MedFabric.HandheldAcceptance do
   end
 
   defp paired!(lab) do
+    lab =
+      Enum.reduce(["stall", "kill", "stop"], lab, fn fault, current ->
+        {next, _} =
+          paired_case!(current, "local-monitor-" <> fault, %{
+            "seconds" => if(fault == "stop", do: 30, else: 6),
+            "local_monitor_fault" => fault
+          })
+
+        next
+      end)
+
     {lab, _} =
       paired_case!(lab, "baseline", %{
         "seconds" => 60,

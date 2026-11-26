@@ -24,10 +24,13 @@ defmodule MedExHandheld.Session do
     File.mkdir_p!(root)
     {:ok, resources} = Supervisor.start_link([], strategy: :one_for_one, max_restarts: 0)
 
+    hub = :ets.new(:paired_session, [:set, :public])
+
     try do
-      collect_session(config, profile, root, resources)
+      collect_session(config, profile, root, resources, hub)
     after
       stop_resources(resources)
+      :ets.delete(hub)
     end
   end
 
@@ -44,7 +47,7 @@ defmodule MedExHandheld.Session do
     Supervisor.stop(resources)
   end
 
-  defp collect_session(config, profile, root, resources) do
+  defp collect_session(config, profile, root, resources, hub) do
     {:ok, spool} =
       Supervisor.start_child(
         resources,
@@ -53,18 +56,19 @@ defmodule MedExHandheld.Session do
 
     c = load_identity(config, profile, root)
 
-    {monitor, hub, producers, sources} =
+    {monitor, producers, sources} =
       if profile == "paired_exam" do
-        {:ok, monitor} = Supervisor.start_child(resources, {Monitor, {root, c["boot"]}})
-
-        {:ok, hub} =
-          Supervisor.start_child(resources, {Agent, fn -> %{latest: nil, stop: false} end})
+        {:ok, monitor} =
+          Supervisor.start_child(
+            resources,
+            {Monitor, {Map.take(c, ["spool", "trace_monitor"]), c["boot"]}}
+          )
 
         # Stop producers before closing their monitor and durable spool.
         {:ok, producers} = Supervisor.start_child(resources, {Task.Supervisor, []})
-        {monitor, hub, producers, Paired.sources(c)}
+        {monitor, producers, Paired.sources(c)}
       else
-        {nil, nil, nil, %{}}
+        {nil, nil, %{}}
       end
 
     marker = Path.join(root, "source_started.json")
@@ -290,7 +294,7 @@ defmodule MedExHandheld.Session do
           acc
 
         {_, {:ok, {:interrupted, :premature_terminal}}}, acc ->
-          Agent.update(hub, &Map.put(&1, :stop, true))
+          :ets.insert(hub, {:stop, true})
           acc
 
         _, {list, _} ->
@@ -301,7 +305,7 @@ defmodule MedExHandheld.Session do
 
     if active != [] do
       {:ok, reply} = Transport.request(s, "heartbeat")
-      if reply["stop_requested"], do: Agent.update(hub, &Map.put(&1, :stop, true))
+      if reply["stop_requested"], do: :ets.insert(hub, {:stop, true})
 
       case reply["type"] do
         "command" -> apply_monitor_command(reply, c, s, monitor)
@@ -335,21 +339,31 @@ defmodule MedExHandheld.Session do
   end
 
   defp apply_monitor_command(reply, c, s, monitor) do
-    case GenServer.call(monitor, {:command, reply}) do
+    case monitor_call(monitor, {:command, reply}) do
       {:result, result} -> Transport.request(s, "result", result)
       _ -> :ok
     end
 
     if !c["lose_command_ack"] do
       Process.sleep(25)
-      state = GenServer.call(monitor, {:state, reply})
-      if state["status"] == "applied", do: Transport.request(s, "result", state)
+      state = monitor_call(monitor, {:state, reply})
+      if is_map(state) and state["status"] == "applied", do: Transport.request(s, "result", state)
     end
   end
 
   defp reconcile_monitor_state(reply, s, monitor) do
-    state = GenServer.call(monitor, {:state, reply})
-    if state["status"] != "pending", do: Transport.request(s, "result", state)
+    state = monitor_call(monitor, {:state, reply})
+    if is_map(state) and state["status"] != "pending", do: Transport.request(s, "result", state)
+  end
+
+  defp monitor_call(pid, request) do
+    # A timed-out mutation is reconciled through the existing state query.
+    # Avoid accumulating calls behind an unavailable device monitor.
+    with {:message_queue_len, n} when n <= 1 <- Process.info(pid, :message_queue_len) do
+      GenServer.call(pid, request, 75)
+    end
+  catch
+    :exit, _ -> nil
   end
 
   defp monitor_feed(c, bind, hub) do
@@ -364,18 +378,28 @@ defmodule MedExHandheld.Session do
   end
 
   defp send_latest(s, hub, last) do
-    case Agent.get(hub, & &1.latest) do
-      {at, bytes} when at != last ->
-        if System.monotonic_time(:millisecond) - at <= 200 do
-          :ok = Transport.send_frame(s, {:binary, bytes})
-          {:ok, %{"type" => "monitor_credit"}} = Transport.recv(s)
-        end
-
+    case :ets.lookup(hub, :latest) do
+      [{:latest, at, frames}] when at != last ->
+        send_batch(s, at, frames)
         send_latest(s, hub, at)
 
       _ ->
         Process.sleep(10)
         send_latest(s, hub, last)
+    end
+  end
+
+  defp send_batch(s, at, frames) do
+    # Committing five 20 ms frames together must still give the viewer
+    # five playback opportunities, paced independently of capture.
+    for {bytes, i} <- Enum.with_index(frames) do
+      now = System.monotonic_time(:millisecond)
+
+      if now - at <= 200 do
+        Process.sleep(max(0, at + i * 20 - now))
+        :ok = Transport.send_frame(s, {:binary, bytes})
+        {:ok, %{"type" => "monitor_credit"}} = Transport.recv(s)
+      end
     end
   end
 
