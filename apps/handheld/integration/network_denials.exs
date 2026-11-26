@@ -4,7 +4,13 @@ alias MedEx.{Serialization, Wire.FrameV1}
 [cfgpath] = System.argv() |> Enum.reject(&(&1 == "--"))
 c = File.read!(cfgpath) |> JSON.decode!()
 sources = Paired.sources(c)
-descriptors = Map.new(sources, fn {n, {_, spec}} -> {n, Serialization.to_map(spec)} end)
+epoch = 2
+
+descriptors =
+  Map.new(sources, fn {name, {_, spec}} ->
+    spec = %{spec | source_epoch: epoch}
+    {name, Serialization.to_map(%{spec | descriptor_ref: Serialization.descriptor_ref(spec)})}
+  end)
 
 hello = %{
   "acquisition" => c["acquisition"],
@@ -60,7 +66,7 @@ true = old["generation"] != new["generation"]
 
 f = %FrameV1{
   stream_number: 1,
-  source_epoch: 0,
+  source_epoch: epoch,
   config_epoch: 0,
   sequence: 0,
   first_sample: 0,
@@ -79,9 +85,17 @@ Transport.close(ctl)
 denied.(Transport.recv(stream))
 Transport.close(stream)
 {{:ok, %{"type" => "durable"}}, stream} = open.(binding.(new))
+{:ok, bad_epoch} = FrameV1.encode(%{f | source_epoch: 0})
+:ok = Transport.send_frame(stream, {:binary, bad_epoch})
+denied.(Transport.recv(stream))
+Transport.close(stream)
+{{:ok, %{"type" => "durable"}}, stream} = open.(binding.(new))
 :ok = Transport.send_frame(stream, {:binary, raw})
 {:ok, %{"type" => "accepted"}} = Transport.recv(stream)
-{:ok, %{"type" => "durable", "durable_sample" => "1"}} = Transport.recv(stream)
+
+{:ok, %{"type" => "durable", "durable_sample" => "1", "source_epoch" => "2"}} =
+  Transport.recv(stream)
+
 {:ok, changed} = FrameV1.encode(%{f | payload: <<6::little-16>>})
 :ok = Transport.send_frame(stream, {:binary, changed})
 denied.(Transport.recv(stream))
@@ -92,6 +106,6 @@ File.write!(
   c["negative_result"],
   JSON.encode!(%{
     "checked" =>
-      ~w(wrong_encounter duplicate_json descriptor_mismatch competing_producer stale_generation swapped_number conflicting_replay)
+      ~w(wrong_encounter duplicate_json descriptor_mismatch competing_producer stale_generation swapped_number mismatched_epoch nonzero_epoch conflicting_replay)
   })
 )

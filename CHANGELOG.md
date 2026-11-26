@@ -19,7 +19,7 @@
   decisions, and preserve durable receipt identity when capture reaches capacity.
 - Handle multi-sequence replay gaps and retire Preview peers on encoder failure.
 - Enable host-fenced 15-frame pipelined batching with O(k) Handheld spool reclamation and verified 29-minute ext4 capture, finalization, and review.
-- Allow concurrent multi-profile acquisitions per encounter, non-zero `source_epoch` admission, probe-derived clock validity bounds, and end-to-end exercise of `MedEx.ControlInterlock`, `MedEx.StatusEvent`, and `MedEx.Serialization.measurement/1`.
+- Allow one active acquisition per encounter and profile, admit supported nonzero source epochs, and derive synthetic clock validity from probes. Use the SDK interlock for Handheld command decisions and check the synthetic PLXS mapping against SDK serialization.
 - Qualify Exam, Handheld and Preview 0.1.1 against MedEx 0.2.1. The release guide
   describes artifact preparation, qualification and publication.
 

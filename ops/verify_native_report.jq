@@ -38,7 +38,7 @@ def exact_coverage:
 .scenarios.manifest_install.staged_bytes_preserved and
 .scenarios.db_completion.staged_bytes_preserved and
 (.scenarios["network-denials"].checked |
-  sort == ["competing_producer","conflicting_replay","descriptor_mismatch","duplicate_json",
+  sort == ["competing_producer","conflicting_replay","descriptor_mismatch","duplicate_json","mismatched_epoch","nonzero_epoch",
            "stale_generation","swapped_number","wrong_encounter"]) and
 .scenarios["handheld-restart"].second_owner_refused and
 (.scenarios["handheld-restart"] | .coverage.audio.samples == .synchronized_cutoffs.audio and

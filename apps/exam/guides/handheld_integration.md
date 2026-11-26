@@ -36,13 +36,21 @@ epoch. They cannot cover missing samples. A complete-capture decision records
 the selected interval from a defect-free capture. An interrupted stream retains
 its verified prefix and terminal reason.
 
-The native synthetic qualification covers 60-second paired fault/recovery gates
-and a 29-minute (1,740 s) sustained paired `ext4` soak (83,520,000 audio samples
-and 435,000 ECG samples) using host-fenced 15-frame pipelined batching,
-independent byte verification, and full-stream review verification. Distinct
-device profiles (for example `paired_exam` and `plx_spot_check`) can run
-concurrently in the same encounter, peripherals may advertise any valid
-`source_epoch >= 0`, and clock-alignment validity bounds are derived from
-observed probe spans rather than a fixed one-hour device-uptime ceiling. Capture,
-finalization and review under concurrent multi-exam load depend on the target
-storage and host sizing.
+The native synthetic qualification includes the 60-second paired
+fault and recovery suite. A 29-minute ext4 soak on Fabric `90f796f` with
+MedEx `48b8de2` captured and byte-verified 83,520,000 audio samples and
+435,000 ECG samples, then completed synthetic review.
+
+An encounter can have one active recording per profile, including during
+finalization. A waveform exam and a spot check can therefore overlap.
+Migration 007 tightens the earlier Phase 3A candidate policy. If that
+candidate admitted overlapping recordings of the same profile, finish
+or interrupt all but one through the application before applying 007.
+Resolve overlapping profiles before downgrading to a schema that allows
+only one active recording per encounter.
+
+Exam accepts a supported nonzero source epoch at admission and checks
+frames against the admitted epoch. Changing epochs within the same
+acquisition is outside this contract. The synthetic clock fixture derives
+its validity interval from the probe span. Physical clock drift and
+multi-exam capacity require separate evidence.

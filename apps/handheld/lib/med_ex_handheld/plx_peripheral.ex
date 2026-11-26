@@ -66,6 +66,7 @@ defmodule MedExHandheld.PLXPeripheral do
     }
   end
 
+  @doc "Check the synthetic PLXS adapter mapping against the SDK serialization contract."
   def validate_sdk(e, c) do
     metrics = Map.new(e["metrics"], fn {name, value} -> {name, sdk_metric(name, value)} end)
 

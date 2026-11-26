@@ -53,6 +53,13 @@ defmodule MedFabric.Store.DeviceAdmissionTest do
     assert {:ok, paired} = reserve(c, "paired_exam", "paired-" <> c.enc)
     assert {:ok, plx} = reserve(c, "plx_spot_check", "plx-" <> c.enc)
 
+    other = c.device <> "-second"
+    assert S.enroll(other, :crypto.strong_rand_bytes(32))
+    assert :ok = S.authorize(c.enc, other, "paired_exam", "left-upper-chest", c.actor)
+
+    assert {:error, :active_slot_busy} =
+             S.reserve(other, c.enc, "other-" <> c.enc, "paired_exam", "boot-b", %{})
+
     tasks =
       for suffix <- ["a", "b"] do
         Task.async(fn -> reserve(c, "plx_spot_check", "dup-#{suffix}-" <> c.enc) end)
@@ -102,10 +109,14 @@ defmodule MedFabric.Store.DeviceAdmissionTest do
 
           receive do
             :read_grant ->
-              S.rows(tx, """
-              SELECT site FROM device_grants
-              WHERE encounter_id=$1 AND device_id=$2 AND profile='paired_exam' FOR SHARE
-              """, [c.enc, c.device])
+              S.rows(
+                tx,
+                """
+                SELECT site FROM device_grants
+                WHERE encounter_id=$1 AND device_id=$2 AND profile='paired_exam' FOR SHARE
+                """,
+                [c.enc, c.device]
+              )
           after
             5000 -> raise "resume did not reach the held session lock"
           end
@@ -116,13 +127,16 @@ defmodule MedFabric.Store.DeviceAdmissionTest do
     resume = Task.async(fn -> reserve(c, "paired_exam", bind.id) end)
 
     assert Enum.any?(1..100, fn _ ->
-      [[waiting]] =
-        S.rows(c.db, "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))",
-          [backend])
+             [[waiting]] =
+               S.rows(
+                 c.db,
+                 "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))",
+                 [backend]
+               )
 
-      unless waiting, do: Process.sleep(10)
-      waiting
-    end)
+             unless waiting, do: Process.sleep(10)
+             waiting
+           end)
 
     send(holder.pid, :read_grant)
     assert {:ok, [["left-upper-chest"]]} = Task.await(holder)
@@ -168,10 +182,14 @@ defmodule MedFabric.Store.DeviceAdmissionTest do
           {"newer", bind.boot, "2", 10},
           {"other-boot", "other-boot", "99", 1}
         ] do
-      S.rows(c.db, """
-      INSERT INTO device_commands(id,acquisition_id,fingerprint,request,state,result,updated_at)
-      VALUES($1,$2,'test',$3,'applied',$4,clock_timestamp()-$5::int*interval '1 second')
-      """, [bind.id <> suffix, bind.id, %{"boot" => boot}, %{"epoch" => epoch}, seconds_old])
+      S.rows(
+        c.db,
+        """
+        INSERT INTO device_commands(id,acquisition_id,fingerprint,request,state,result,updated_at)
+        VALUES($1,$2,'test',$3,'applied',$4,clock_timestamp()-$5::int*interval '1 second')
+        """,
+        [bind.id <> suffix, bind.id, %{"boot" => boot}, %{"epoch" => epoch}, seconds_old]
+      )
     end
 
     assert {:ok, :ok} = DeviceCommands.request(c.enc, bind.id, c.actor, "half")

@@ -14,30 +14,37 @@ defmodule MedExHandheld.Monitor do
     {:ok, %{file: file, state: state, pending: nil}}
   end
 
+  def handle_call({:command, %{"id" => id} = c}, _, %{pending: %{"id" => id} = pending} = s) do
+    if pending == c, do: {:reply, :pending, s}, else: {:reply, {:error, :conflict}, s}
+  end
+
   def handle_call({:command, c}, _, s) do
+    id = c["id"]
+    cache = s.state["cache"]
+
     ledger =
-      Map.new(s.state["cache"], fn {id, entry} ->
-        {id, %{fingerprint: entry["fingerprint"], result: entry}}
-      end)
+      case Map.fetch(cache, id) do
+        {:ok, entry} -> %{id => %{fingerprint: entry["fingerprint"], result: entry}}
+        :error -> %{}
+      end
 
     cmd = %{
-      id: c["id"],
+      id: id,
       fingerprint: c["fingerprint"],
       expected_epoch: parse_epoch(c["expected_epoch"])
     }
 
-    case MedEx.ControlInterlock.device_decide(ledger, cmd, String.to_integer(s.state["epoch"])) do
+    epoch = String.to_integer(s.state["epoch"])
+
+    case MedEx.ControlInterlock.device_decide(ledger, cmd, epoch) do
       {:cached, r} ->
         {:reply, {:result, r}, s}
 
       {:error, :command_id_conflict} ->
         {:reply, {:error, :conflict}, s}
 
-      {:error, :stale_configuration} ->
-        reject_command(c, s)
-
-      {:execute_and_persist_result, _} ->
-        accept_command(c, s)
+      decision ->
+        accept_command(c, s, decision)
     end
   end
 
@@ -85,15 +92,15 @@ defmodule MedExHandheld.Monitor do
     {:reply, result, s}
   end
 
-  defp accept_command(c, s) do
-    cond do
-      s.pending == c ->
-        {:reply, :pending, s}
+  defp accept_command(c, s, decision) do
+    reserved = if s.pending, do: 1, else: 0
 
-      map_size(s.state["cache"]) >= 4096 ->
+    cond do
+      map_size(s.state["cache"]) + reserved >= 4096 ->
         {:reply, {:error, :command_cache_exhausted}, s}
 
-      not is_nil(s.pending) or c["boot"] != s.state["boot"] or c["gain"] not in ["unity", "half"] ->
+      decision == {:error, :stale_configuration} or not is_nil(s.pending) or
+        c["boot"] != s.state["boot"] or c["gain"] not in ["unity", "half"] ->
         reject_command(c, s)
 
       true ->
@@ -110,7 +117,7 @@ defmodule MedExHandheld.Monitor do
 
   defp parse_epoch(v) when is_binary(v) do
     case Integer.parse(v) do
-      {n, ""} when n >= 0 -> n
+      {n, ""} when n >= 0 -> if(to_string(n) == v, do: n, else: :invalid)
       _ -> :invalid
     end
   end

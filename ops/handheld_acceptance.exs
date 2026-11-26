@@ -1349,7 +1349,7 @@ defmodule MedFabric.HandheldAcceptance do
     check!(
       Enum.sort(result["checked"]) ==
         Enum.sort(
-          ~w(wrong_encounter duplicate_json descriptor_mismatch competing_producer stale_generation swapped_number conflicting_replay)
+          ~w(wrong_encounter duplicate_json descriptor_mismatch competing_producer stale_generation swapped_number mismatched_epoch nonzero_epoch conflicting_replay)
         ),
       "Network denial coverage incomplete"
     )
