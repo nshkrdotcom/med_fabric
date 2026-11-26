@@ -45,7 +45,7 @@ defmodule MedFabric.Exam.DeviceReviews do
         :ok
 
       [] ->
-        validate!(tx, manifest, choice)
+        unless valid_choice?(manifest, choice), do: S.abort(tx, :invalid_review)
 
         [[at]] =
           S.rows(
@@ -57,6 +57,11 @@ defmodule MedFabric.Exam.DeviceReviews do
         Enum.each(choice["metrics"] || [], fn code ->
           event = Enum.find_value(manifest["inventory"], &matching_event(&1, choice["event_id"]))
           insert_metric(tx, id, actor, source, event, code, at)
+        end)
+
+        MedFabric.Exam.Barrier.hit("review_before_commit", "all", fn ->
+          [[pid]] = S.rows(tx, "SELECT pg_backend_pid()", [])
+          Integer.to_string(pid)
         end)
 
         :ok
@@ -71,39 +76,45 @@ defmodule MedFabric.Exam.DeviceReviews do
   end
 
   defp insert_metric(tx, id, actor, source, event, code, at) do
-    with {:ok, evidence} <-
-           DeviceMeasurement.derived(event, code, id, source.device, DateTime.to_iso8601(at)),
-         metric_id =
-           S.hash(
-             "medfabric.metric.v1" <>
-               <<0>> <> MedEx.CanonicalJSON.encode([id, event["event_id"], code])
-           ),
-         external = source.encounter_id <> ":" <> metric_id,
-         {:ok, resource} <- FhirClient.resource_checked(evidence, external, actor, source.refs) do
-      S.rows(
-        tx,
-        "INSERT INTO acquisitions(encounter_id,id,evidence,capture_profile,parent_acquisition_id,source_event_id) VALUES($1,$2,$3,'derived_device_metric',$4,$5)",
-        [source.encounter_id, metric_id, evidence, id, event["event_id"]]
+    evidence =
+      case DeviceMeasurement.derived(event, code, id, source.device, DateTime.to_iso8601(at)) do
+        {:ok, evidence} -> evidence
+        {:error, _} -> S.abort(tx, :ineligible_metric)
+      end
+
+    metric_id =
+      S.hash(
+        "medfabric.metric.v1" <>
+          <<0>> <> MedEx.CanonicalJSON.encode([id, event["event_id"], code])
       )
 
-      Records.insert_acceptance(tx, [source.encounter_id, metric_id, actor], [
-        source.destination,
-        external,
-        resource
-      ])
-    else
-      _ -> S.abort(tx, :ineligible_metric)
-    end
+    external = source.encounter_id <> ":" <> metric_id
+
+    resource =
+      case FhirClient.resource_checked(evidence, external, actor, source.refs) do
+        {:ok, resource} -> resource
+        {:error, _} -> S.abort(tx, :metric_not_exportable)
+      end
+
+    S.rows(
+      tx,
+      "INSERT INTO acquisitions(encounter_id,id,evidence,capture_profile,parent_acquisition_id,source_event_id) VALUES($1,$2,$3,'derived_device_metric',$4,$5)",
+      [source.encounter_id, metric_id, evidence, id, event["event_id"]]
+    )
+
+    Records.insert_acceptance(tx, [source.encounter_id, metric_id, actor], [
+      source.destination,
+      external,
+      resource
+    ])
   end
 
-  defp validate!(tx, manifest, choice) do
+  defp valid_choice?(manifest, choice) do
     metrics = choice["metrics"] || []
     note = choice["note"]
 
-    unless is_list(metrics) and is_binary(note) and byte_size(note) <= 2000 and
-             valid_decision?(choice["decision"], manifest, choice, metrics) do
-      S.abort(tx, :invalid_review)
-    end
+    is_list(metrics) and is_binary(note) and byte_size(note) <= 2000 and
+      valid_decision?(choice["decision"], manifest, choice, metrics)
   end
 
   defp valid_decision?(decision, _, _, metrics) when decision in ["reject", "repeat"],

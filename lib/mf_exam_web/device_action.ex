@@ -17,8 +17,17 @@ defmodule MedFabric.ExamWeb.DeviceAction do
       id = p["id"]
 
       case run_action(body["action"], body, enc, id, actor) do
-        v when v in [:ok, {:ok, :ok}] -> send_resp(c, 200, "saved")
-        _ -> send_resp(c, 409, "Review or acquisition state changed")
+        v when v in [:ok, {:ok, :ok}] ->
+          send_resp(c, 200, "saved")
+
+        {:error, :ineligible_metric} ->
+          send_resp(c, 409, "Selected measurement is ineligible for clinical acceptance")
+
+        {:error, :metric_not_exportable} ->
+          send_resp(c, 409, "Metric could not be represented for FHIR export")
+
+        _ ->
+          send_resp(c, 409, "Review or acquisition state changed")
       end
     else
       send_resp(c, 403, "Clinician access required")

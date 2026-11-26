@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 — 2026-11-26
+
+- Report clinical ineligibility separately from a concurrent review change.
+- Use shared durable receipt progression, retire the writer after a failed scoped transaction, and report FHIR mapping failures separately.
+
 ## 0.2.0 - 2026-11-25
 
 - Reject empty Preview signing credentials and include the hardening guides in projected package docs.

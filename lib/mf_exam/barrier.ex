@@ -1,10 +1,12 @@
 defmodule MedFabric.Exam.Barrier do
   @moduledoc false
-  def hit(name, stream \\ "all") do
+  def hit(name, stream \\ "all", details \\ fn -> "" end) do
     if dir = Application.get_env(:mf_exam, :barriers) do
       key = Path.join(dir, name <> "." <> stream)
 
-      if File.exists?(key <> ".armed") and File.rename(key <> ".armed", key <> ".reached") == :ok do
+      if File.rename(key <> ".armed", key <> ".claimed") == :ok do
+        File.write!(key <> ".claimed", details.())
+        File.rename!(key <> ".claimed", key <> ".reached")
         deadline = System.monotonic_time(:millisecond) + 30_000
         wait(key, deadline)
       end

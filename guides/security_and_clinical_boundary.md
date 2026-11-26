@@ -33,7 +33,7 @@ artifacts and ordinary log collection. A complete PHI/logging audit remains open
   checks, 29-minute ext4 soak, TLS reconnect/replay, and HAPI FHIR R4 retry
   read-back.
 - **Current release gate:** Re-run those suites, including the 29-minute ext4
-  soak, against the exact 0.3.0 SDK and 0.2.0 application/provider candidates.
+  soak, against the exact 0.3.1 SDK and 0.2.1 application/provider candidates.
 - **Not clinically qualified:** Physical peripheral timing, hardware
   calibration, regulatory device clearance, and production clinical deployment
   require separate qualification outside this repository.

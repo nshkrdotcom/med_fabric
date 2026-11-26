@@ -114,7 +114,7 @@ defmodule MedFabric.Exam.DeviceIngress do
         {:reply, {:durable, accepted, durable}, %{s | receipt: durable}}
 
       {:ok, {:receipt, r}} ->
-        {:reply, {:ok, r}, %{s | receipt: r}}
+        {:reply, {:ok, r}, %{s | receipt: Serialization.durable_prefix(r)}}
 
       {:ok, {:error, :duplicate_conflict} = error} ->
         {:stop, :normal, error, s}
@@ -122,8 +122,12 @@ defmodule MedFabric.Exam.DeviceIngress do
       {:ok, error} ->
         {:reply, error, s}
 
-      error ->
+      {:error, reason} = error when reason in [:stale_lease, :inactive] ->
         {:reply, error, s}
+
+      error ->
+        :ok = stop_writer(s.writer)
+        {:stop, :normal, error, s}
     end
   end
 
@@ -151,8 +155,12 @@ defmodule MedFabric.Exam.DeviceIngress do
       {:ok, error} ->
         {:reply, error, s}
 
-      error ->
+      {:error, reason} = error when reason in [:stale_lease, :inactive] ->
         {:reply, error, s}
+
+      error ->
+        :ok = stop_writer(s.writer)
+        {:stop, :normal, error, s}
     end
   end
 
@@ -295,7 +303,8 @@ defmodule MedFabric.Exam.DeviceIngress do
   end
 
   defp record_result(tx, :checkpoint, {:ok, receipt}, s) do
-    Barrier.hit("journal_sync", s.name)
+    verify_progress!(tx, s, receipt)
+    checkpoint_barrier(tx, s.name)
 
     S.rows(tx, "UPDATE device_limits_observed SET durable_acks=durable_acks+1 WHERE fence=$1", [
       s.fence
@@ -312,7 +321,9 @@ defmodule MedFabric.Exam.DeviceIngress do
   defp record_result(tx, op, {:ok, receipt}, s) do
     observe_transport(tx, op, s)
     usage = StreamWriter.stats(s.writer)
-    flushed? = receipt.journal_generation > s.receipt.journal_generation
+    durable = Serialization.durable_prefix(receipt)
+    verify_progress!(tx, s, durable)
+    flushed? = durable.journal_generation > s.receipt.journal_generation
 
     payload =
       case op do
@@ -320,7 +331,7 @@ defmodule MedFabric.Exam.DeviceIngress do
         _ -> 0
       end
 
-    if flushed?, do: Barrier.hit("journal_sync", s.name)
+    if flushed?, do: checkpoint_barrier(tx, s.name)
     ack_inc = if flushed?, do: 1, else: 0
 
     S.rows(
@@ -344,8 +355,6 @@ defmodule MedFabric.Exam.DeviceIngress do
     )
 
     if flushed? do
-      durable = durable_prefix(receipt)
-
       S.rows(tx, "UPDATE stream_attempts SET receipt=$2 WHERE fence=$1", [
         s.fence,
         Serialization.to_map(durable)
@@ -373,12 +382,18 @@ defmodule MedFabric.Exam.DeviceIngress do
 
   defp record_result(_, _, error, _), do: error
 
-  defp durable_prefix(receipt) do
-    %{
-      receipt
-      | accepted_sequence: receipt.durable_sequence,
-        accepted_sample: receipt.durable_sample
-    }
+  defp checkpoint_barrier(tx, stream) do
+    Barrier.hit("journal_sync", stream, fn ->
+      [[pid]] = S.rows(tx, "SELECT pg_backend_pid()", [])
+      Integer.to_string(pid)
+    end)
+  end
+
+  defp verify_progress!(tx, s, receipt) do
+    case Serialization.receipt_progress(s.receipt, receipt) do
+      :ok -> :ok
+      {:error, reason} -> S.abort(tx, reason)
+    end
   end
 
   defp observe_transport(tx, {:frame, raw, frame, _payload}, s) do
@@ -539,20 +554,6 @@ defmodule MedFabric.Exam.DeviceIngress do
     end
   end
 
-  def handle_info({:med_ex_durable, pid, r}, %{writer: pid} = s) do
-    if r.fence == s.fence do
-      S.scoped(s.bind, fn tx, _ ->
-        S.rows(
-          tx,
-          "UPDATE stream_attempts SET receipt=$2 WHERE fence=$1 AND coalesce((receipt->>'journal_generation')::bigint,0)<$3",
-          [s.fence, Serialization.to_map(r), r.journal_generation]
-        )
-      end)
-    end
-
-    {:noreply, s}
-  end
-
   def handle_info({:med_ex_storage_failed, pid, _}, %{writer: pid} = s), do: {:stop, :normal, s}
   def handle_info(_, s), do: {:noreply, s}
 
@@ -587,7 +588,16 @@ defmodule MedFabric.Exam.DeviceIngress do
   defp recover_prior(tx, dir, fence, known, spec) do
     opts =
       [stream: spec, fence: fence] ++
-        if(known, do: [known_receipt: elem(Serialization.receipt(known), 1)], else: [])
+        case known do
+          nil ->
+            []
+
+          wire ->
+            case Serialization.receipt(wire) do
+              {:ok, receipt} -> [known_receipt: receipt]
+              {:error, _} -> S.abort(tx, :unverified_receipt)
+            end
+        end
 
     recovery =
       case Storage.recover(dir, opts) do

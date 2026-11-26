@@ -4,7 +4,7 @@
     "package": {
       "name": "mf_exam",
       "otp_app": "mf_exam",
-      "version": "0.2.0"
+      "version": "0.2.1"
     }
   },
   "graph": {
@@ -14,7 +14,7 @@
       "core/interop",
       "core/store"
     ],
-    "digest": "598919f9cafce780c5bb451e1ad7d28ebeaa9bb97469f6e1737b19c7858aff7a",
+    "digest": "a63be816b35c23df7f374884851da950a47f84adf114b51c471b55f45b52cd63",
     "edges": [
       {
         "app": "mf_domain",
@@ -74,7 +74,7 @@
     "path": "build_support/weld.exs"
   },
   "projection": {
-    "artifact_id": "b38b9af16a0f121cfa09c2afc3d98b6051d01792174586ef30b0ce07cfa486c1",
+    "artifact_id": "fb496365e6c85f5c58581a68030a6823e7d005f005ae9f44bebc865f71dca0d8",
     "build_path": ".weld/full/mf_exam/project",
     "config_warnings": [
       {
@@ -183,7 +183,7 @@
       "test/test_helper.exs"
     ],
     "file_remaps": [],
-    "git_revision": "3576ef1502f20350347dfbcb67e43c357a4928cf",
+    "git_revision": "bfddb3f56e8a3d23b7ab4680f7d10a75116a8946",
     "helper_transformations": [
       {
         "exunit_options": [],
@@ -418,7 +418,7 @@
       }
     ],
     "test_support_projects": [],
-    "tree_digest": "dc59a081fce814c4a38b1e061df42b7848b073f9501da4bc65a4a59d907dd7c6",
+    "tree_digest": "dd1176bb079eeeedd1149c5da0872340aebef4b778d6259e46266305dcd8b2e3",
     "verification_files": [
       ".formatter.exs",
       "README.md",
@@ -516,7 +516,7 @@
       "test/support/weld_helpers/core_store_test_helper.exs",
       "test/test_helper.exs"
     ],
-    "verification_input_identity": "9024b5fe16fca26745cd2c0dfa5e42048e32582670cd7d758bd37481c81fcc28"
+    "verification_input_identity": "a2d4f96b101ae9915ba69e38fdf1f92006ccb9581d898903c1144c87694aba8f"
   },
   "source": {
     "inventory": [
@@ -2753,7 +2753,7 @@
         "target": "lib/mf_store/records.ex"
       },
       {
-        "generated_digest": "bc33608e6a475442c9969c79fba6d24285cb4321270c51c9345226f2b68b128e",
+        "generated_digest": "ce0e06c8bd393a8190af40a99e31dbaeefe2115970905267d35991887ab612f1",
         "inputs": [
           {
             "owner": "apps/exam",
