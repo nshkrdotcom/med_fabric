@@ -81,7 +81,7 @@ if contract == "stream_v1" do
   deps = Map.keys(Mix.Project.deps_paths())
   wanted_opus? = profile in ["opus", "both"]
   wanted_rtc? = profile in ["rtc", "both"]
-  for {dep, wanted?} <- [med_ex_opus: wanted_opus?, membrane_opus_plugin: wanted_opus?,
+  for {dep, wanted?} <- [med_ex_opus: wanted_opus?, elixir_make: wanted_opus?,
                         med_ex_rtc: wanted_rtc?, ex_webrtc: wanted_rtc?] do
     unless (dep in deps) == wanted?, do: raise("Unexpected package #{dep} in #{profile}")
   end

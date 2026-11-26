@@ -50,9 +50,11 @@ for app <- Map.keys(paths) do
 end
 
 if native? do
-  for app <- [:membrane_opus_plugin, :ex_webrtc] do
+  for app <- [:elixir_make, :ex_webrtc] do
     unless Map.has_key?(paths, app), do: raise("Native provider dependency missing: #{app}")
   end
+
+  if Map.has_key?(paths, :membrane_core), do: raise("Unexpected membrane_core in #{profile}")
 end
 
 config = Mix.Project.config()
@@ -72,10 +74,6 @@ else
 end
 
 lock = Mix.Dep.Lock.read()
-
-if profile == "legacy-exam" do
-  {:git, _, "05191dbe8061b49a170352f3c35c21360bdbb328", _} = Map.fetch!(lock, :ratio)
-end
 
 for {app, requirement, source} <- config[:deps], app in [:med_ex, :med_ex_opus, :med_ex_rtc] do
   cond do

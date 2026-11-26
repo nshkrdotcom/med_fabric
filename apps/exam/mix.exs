@@ -65,11 +65,6 @@ defmodule MedFabric.Exam.MixProject do
     ] ++
       if(legacy_media?,
         do: [
-          # Membrane needs Ratio compatible with the server's Decimal 3.
-          {:ratio,
-           git: "https://github.com/robertbenavidez/elixir-rational.git",
-           ref: "05191dbe8061b49a170352f3c35c21360bdbb328",
-           override: true},
           MedFabric.BuildSources.med_ex_dependency(:med_ex_opus),
           MedFabric.BuildSources.med_ex_dependency(:med_ex_rtc)
         ],

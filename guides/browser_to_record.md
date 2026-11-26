@@ -12,9 +12,6 @@ manual listening check, and optional local workspace SDK testing.
    sudo apt-get install -y git curl tar build-essential pkg-config libssl-dev jq openssl
    ```
 
-   *(Install `libopus-dev` as well if compiling `membrane_opus_plugin` from
-   source instead of using precompiled binaries.)*
-
 2. **Pinned runtimes (`.tool-versions` via `asdf` or `mise`):**
    - Erlang `29.1.2`
    - Elixir `1.20.5-otp-29`
