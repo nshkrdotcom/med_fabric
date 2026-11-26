@@ -111,15 +111,17 @@ defmodule MedExHandheld.Spool do
 
         many ->
           many
-          |> Enum.map(fn {seq, bytes, next_seq, next_sample} ->
-            Task.async(fn -> stage_batch_item!(dir, seq, bytes, next_seq, next_sample) end)
-          end)
+          |> Enum.map(&stage_batch_item_async(dir, &1))
           |> Task.await_many(30_000)
       end
 
     # A timed-out call can still commit. Only the spool may unlink the staged
     # files after transfer. Startup reclaims them if the spool exits first.
     GenServer.call(p, {:commit_batch_and_advance, stream, staged}, timeout)
+  end
+
+  defp stage_batch_item_async(dir, {seq, bytes, next_seq, next_sample}) do
+    Task.async(fn -> stage_batch_item!(dir, seq, bytes, next_seq, next_sample) end)
   end
 
   defp stage_batch_item!(dir, seq, bytes, next_seq, next_sample) do
@@ -319,6 +321,15 @@ defmodule MedExHandheld.Spool do
     end
   end
 
+  defp reconcile_batch_item(file, item, state, name, renamed?) do
+    if read_record!(file) == item.bytes do
+      mark = %{"sequence" => item.next_seq, "sample" => item.next_sample, "done" => false}
+      {:cont, {:ok, %{state | watermarks: Map.put(state.watermarks, name, mark)}, renamed?}}
+    else
+      {:halt, {{:error, :spool_conflict}, state, renamed?}}
+    end
+  end
+
   defp commit_staged_batch(s, name, staged) do
     dir = Path.join(s.root, name)
 
@@ -332,12 +343,7 @@ defmodule MedExHandheld.Spool do
             {:halt, {{:error, :invalid_stage_path}, acc, renamed?}}
 
           File.exists?(f) ->
-            if read_record!(f) == item.bytes do
-              mark = %{"sequence" => item.next_seq, "sample" => item.next_sample, "done" => false}
-              {:cont, {:ok, %{acc | watermarks: Map.put(acc.watermarks, name, mark)}, renamed?}}
-            else
-              {:halt, {{:error, :spool_conflict}, acc, renamed?}}
-            end
+            reconcile_batch_item(f, item, acc, name, renamed?)
 
           total > acc.limit ->
             {:halt, {{:error, :spool_full}, acc, renamed?}}

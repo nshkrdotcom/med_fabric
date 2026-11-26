@@ -54,16 +54,18 @@ defmodule MedFabric.Exam.DeviceManifest do
 
   defp stage_scoped(bind, final) do
     with {:ok, loaded} <- S.scoped(bind, &load_stage_inputs(&1, bind.id, &2, final), :update) do
-      case loaded do
-        {:staged, digest} ->
-          {:ok, {:existing, digest}}
-
-        {:build, inputs} ->
-          with {:ok, built} <- prepare_staged_manifest(bind.id, inputs, :installed_or_recover) do
-            S.scoped(bind, fn tx, _ -> commit_staged(tx, bind.id, built) end, :update)
-          end
-      end
+      prepare_loaded(bind.id, loaded, :installed_or_recover, &commit_scoped(bind, &1))
     end
+  end
+
+  defp commit_scoped(bind, built) do
+    S.scoped(bind, fn tx, _ -> commit_staged(tx, bind.id, built) end, :update)
+  end
+
+  defp prepare_loaded(_id, {:staged, digest}, _mode, _commit), do: {:ok, {:existing, digest}}
+
+  defp prepare_loaded(id, {:build, inputs}, mode, commit) do
+    with {:ok, built} <- prepare_staged_manifest(id, inputs, mode), do: commit.(built)
   end
 
   defp load_stage_inputs(tx, id, s, final) do
@@ -77,17 +79,7 @@ defmodule MedFabric.Exam.DeviceManifest do
         if s.profile == "plx_spot_check" and not inventory_matches?(inventory, final),
           do: S.abort(tx, :inventory_pending)
 
-        attempts =
-          Map.new(s.descriptors, fn {name, descriptor} ->
-            case S.rows(
-                   tx,
-                   "SELECT fence,index_digest,sealed_index,receipt FROM stream_attempts WHERE acquisition_id=$1 AND stream=$2 ORDER BY generation DESC LIMIT 1",
-                   [id, name]
-                 ) do
-              [attempt] -> {name, {descriptor, attempt}}
-              [] -> S.abort(tx, :missing_stream)
-            end
-          end)
+        attempts = latest_attempts(tx, id, s.descriptors)
 
         :ok = DeviceCommands.close_pending(tx, id)
         facts = S.facts(tx, id)
@@ -113,6 +105,19 @@ defmodule MedFabric.Exam.DeviceManifest do
            obs_rows: obs_rows
          }}
     end
+  end
+
+  defp latest_attempts(tx, id, descriptors) do
+    Map.new(descriptors, fn {name, descriptor} ->
+      case S.rows(
+             tx,
+             "SELECT fence,index_digest,sealed_index,receipt FROM stream_attempts WHERE acquisition_id=$1 AND stream=$2 ORDER BY generation DESC LIMIT 1",
+             [id, name]
+           ) do
+        [attempt] -> {name, {descriptor, attempt}}
+        [] -> S.abort(tx, :missing_stream)
+      end
+    end)
   end
 
   defp prepare_staged_manifest(id, inputs, verify_mode) do
@@ -189,19 +194,23 @@ defmodule MedFabric.Exam.DeviceManifest do
 
       case verify_stage_attempt(id, name, spec, attempt, verify_mode) do
         {:ok, actual, index_map, update} ->
-          entry = %{
+          staged = %{
             "digest" => actual,
             "index" => index_map,
             "clock" => ClockObservations.freeze(name, spec, facts)
           }
 
-          next_updates = if update, do: [update | updates], else: updates
-          {:cont, {:ok, Map.put(streams, name, entry), next_updates}}
+          {:cont, put_staged_stream(streams, updates, name, staged, update)}
 
         :error ->
           {:halt, {:error, :unverified_stream}}
       end
     end)
+  end
+
+  defp put_staged_stream(streams, updates, name, staged, update) do
+    updates = if update, do: [update | updates], else: updates
+    {:ok, Map.put(streams, name, staged), updates}
   end
 
   defp verify_stage_attempt(
@@ -468,28 +477,8 @@ defmodule MedFabric.Exam.DeviceManifest do
   end
 
   defp recover_finish(id, session, final) do
-    prepare =
-      with {:ok, loaded} <-
-             Postgrex.transaction(Postgres, fn tx ->
-               require_finalizing!(tx, id)
-               load_stage_inputs(tx, id, session, final)
-             end) do
-        case loaded do
-          {:staged, digest} ->
-            {:ok, {:existing, digest}}
-
-          {:build, inputs} ->
-            with {:ok, built} <- prepare_staged_manifest(id, inputs, :full) do
-              Postgrex.transaction(Postgres, fn tx ->
-                require_finalizing!(tx, id)
-                commit_staged(tx, id, built)
-              end)
-            end
-        end
-      end
-
     result =
-      with {:ok, staged} <- prepare,
+      with {:ok, staged} <- prepare_recovery(id, session, final),
            {:ok, {digest, body, _}} <-
              Postgrex.transaction(Postgres, &staged_manifest(&1, id)),
            true <- S.hash(body) == digest,
@@ -507,6 +496,25 @@ defmodule MedFabric.Exam.DeviceManifest do
       end
 
     recovery_result(id, result)
+  end
+
+  defp prepare_recovery(id, session, final) do
+    loaded =
+      Postgrex.transaction(Postgres, fn tx ->
+        require_finalizing!(tx, id)
+        load_stage_inputs(tx, id, session, final)
+      end)
+
+    with {:ok, loaded} <- loaded do
+      prepare_loaded(id, loaded, :full, &commit_recovery(id, &1))
+    end
+  end
+
+  defp commit_recovery(id, built) do
+    Postgrex.transaction(Postgres, fn tx ->
+      require_finalizing!(tx, id)
+      commit_staged(tx, id, built)
+    end)
   end
 
   defp require_finalizing!(tx, id) do

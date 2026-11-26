@@ -71,39 +71,47 @@ defmodule MedExHandheld.Paired do
         })
 
       p = %{p | first: cursor["sample"], seq: cursor["sequence"]}
-      loop(c, spool, monitor, hub, n, p, spec, [])
+      source = %{config: c, spool: spool, monitor: monitor, hub: hub, name: n, spec: spec}
+      loop(source, p, [])
     end
   end
 
-  defp loop(c, spool, monitor, hub, n, p, spec, pending) do
+  defp loop(%{config: c, hub: hub, name: name, spec: spec} = source, peripheral, pending) do
     {rn, rd} = spec.sample_rate
     target = div((c["seconds"] || 60) * rn, rd)
     stop = Agent.get(hub, & &1.stop)
+    reset = source_reset?(c, name, peripheral)
 
-    reset = source_reset?(c, n, p)
-
-    if p.first >= target or stop or reset do
-      case flush_pending(c, spool, n, pending) do
-        :ok ->
-          {_, res, []} = ReferencePeripheral.transact(p, "stop")
-
-          :ok =
-            Spool.finish_source(
-              spool,
-              n,
-              String.to_integer(res["sequence"]),
-              String.to_integer(res["sample"]),
-              if(reset, do: "source_reset", else: nil)
-            )
-
-        {:error, :spool_full} ->
-          mark = Spool.watermark(spool, n)
-          Agent.update(hub, &Map.put(&1, :stop, true))
-          :ok = Spool.finish_source(spool, n, mark["sequence"], mark["sample"], "spool_full")
-      end
+    if peripheral.first >= target or stop or reset do
+      stop_source(source, peripheral, pending, reset)
     else
-      capture_frame(c, spool, monitor, hub, n, p, spec, target, pending)
+      capture_frame(source, peripheral, target, pending)
     end
+  end
+
+  defp stop_source(%{config: c, spool: spool, name: name} = source, peripheral, pending, reset) do
+    case flush_pending(c, spool, name, pending) do
+      :ok ->
+        {_, result, []} = ReferencePeripheral.transact(peripheral, "stop")
+
+        :ok =
+          Spool.finish_source(
+            spool,
+            name,
+            String.to_integer(result["sequence"]),
+            String.to_integer(result["sample"]),
+            if(reset, do: "source_reset", else: nil)
+          )
+
+      {:error, :spool_full} ->
+        stop_on_full_spool(source)
+    end
+  end
+
+  defp stop_on_full_spool(%{spool: spool, hub: hub, name: name}) do
+    mark = Spool.watermark(spool, name)
+    Agent.update(hub, &Map.put(&1, :stop, true))
+    :ok = Spool.finish_source(spool, name, mark["sequence"], mark["sample"], "spool_full")
   end
 
   defp source_reset?(c, n, p) do
@@ -116,48 +124,51 @@ defmodule MedExHandheld.Paired do
     end
   end
 
-  defp capture_frame(c, spool, monitor, hub, n, p, spec, target, pending) do
+  defp capture_frame(source, peripheral, target, pending) do
+    %{config: c, monitor: monitor, hub: hub, name: name, spec: spec} = source
     {rn, rd} = spec.sample_rate
-    wait_for_sample(c, n, p.first, spec.sample_rate)
-    step = frame_step(c, n)
-    gap = n == "audio" and c["gap"] in [true, 3] and p.seq == 2
-    count = min(if(gap, do: 100, else: step), target - p.first)
-    tick = 8_640_000 + div(p.first * 48_000_000 * rd, rn)
-    {next, packet} = ReferencePeripheral.emit(p, count, tick, c["seed"])
-    frame = decode_frame(p, packet, count)
+    wait_for_sample(c, name, peripheral.first, spec.sample_rate)
+    step = frame_step(c, name)
+    gap = name == "audio" and c["gap"] in [true, 3] and peripheral.seq == 2
+    count = min(if(gap, do: 100, else: step), target - peripheral.first)
+    tick = 8_640_000 + div(peripheral.first * 48_000_000 * rd, rn)
+    {next, packet} = ReferencePeripheral.emit(peripheral, count, tick, c["seed"])
+    frame = decode_frame(peripheral, packet, count)
     {:ok, raw} = FrameV1.encode(frame)
 
     {next, record} =
-      if gap, do: lost_frame(c, p, next, step, target, spec.sample_rate), else: {next, raw}
+      if gap,
+        do: lost_frame(c, peripheral, next, step, target, spec.sample_rate),
+        else: {next, raw}
 
-    if not gap and {n, spec.encoding} == {"audio", :s16le} do
+    if not gap and {name, spec.encoding} == {"audio", :s16le} do
       publish_monitor_frame(c, monitor, hub, frame)
     end
 
-    pending = [{p.seq, record, next.seq, next.first} | pending]
-    batch_size = if n == "audio" and c["variant"] != true, do: 5, else: 1
-    persist_stride = if n == "audio", do: 50, else: 10
+    pending = [{peripheral.seq, record, next.seq, next.first} | pending]
+    buffer_frames(source, next, pending, gap, target)
+  end
 
-    flush? =
-      gap or next.first >= target or length(pending) >= batch_size or
-        rem(next.seq, persist_stride) == 0
+  defp buffer_frames(%{config: c, name: name} = source, next, pending, gap, target) do
+    batch_size = if name == "audio" and c["variant"] != true, do: 5, else: 1
+    persist_stride = if name == "audio", do: 50, else: 10
+    persist = rem(next.seq, persist_stride) == 0
 
-    if flush? do
-      case flush_pending(c, spool, n, pending) do
-        :ok ->
-          if rem(next.seq, persist_stride) == 0 do
-            :ok = Spool.persist_watermark(spool, n)
-          end
-
-          loop(c, spool, monitor, hub, n, next, spec, [])
-
-        {:error, :spool_full} ->
-          mark = Spool.watermark(spool, n)
-          Agent.update(hub, &Map.put(&1, :stop, true))
-          :ok = Spool.finish_source(spool, n, mark["sequence"], mark["sample"], "spool_full")
-      end
+    if gap or next.first >= target or length(pending) >= batch_size or persist do
+      flush_frames(source, next, pending, persist)
     else
-      loop(c, spool, monitor, hub, n, next, spec, pending)
+      loop(source, next, pending)
+    end
+  end
+
+  defp flush_frames(%{config: c, spool: spool, name: name} = source, next, pending, persist) do
+    case flush_pending(c, spool, name, pending) do
+      :ok ->
+        if persist, do: :ok = Spool.persist_watermark(spool, name)
+        loop(source, next, [])
+
+      {:error, :spool_full} ->
+        stop_on_full_spool(source)
     end
   end
 
@@ -318,28 +329,38 @@ defmodule MedExHandheld.Paired do
         {saved["sequence"], saved["sample"]}
 
       wire ->
-        with {:ok, r} <- Serialization.receipt(wire),
-             true <-
-               r.stream_id == spec.stream_id and r.source_epoch == spec.source_epoch and
-                 r.descriptor_ref == spec.descriptor_ref and
-                 r.accepted_sequence == r.durable_sequence and
-                 r.accepted_sample == r.durable_sample do
-          cond do
-            r.durable_sequence > saved["sequence"] and r.durable_sample >= saved["sample"] ->
-              {r.durable_sequence, r.durable_sample}
+        receipt_cursor(wire, spec, saved)
+    end
+  end
 
-            r.durable_sequence == saved["sequence"] and r.durable_sample == saved["sample"] ->
-              {saved["sequence"], saved["sample"]}
+  defp receipt_cursor(wire, spec, saved) do
+    with {:ok, r} <- Serialization.receipt(wire),
+         true <- comparable_receipt?(r, spec) do
+      recovery_cursor(r, saved)
+    else
+      _ -> raise "invalid persisted receipt"
+    end
+  end
 
-            r.durable_sequence < saved["sequence"] and r.durable_sample <= saved["sample"] ->
-              {saved["sequence"], saved["sample"]}
+  defp comparable_receipt?(r, spec) do
+    r.stream_id == spec.stream_id and r.source_epoch == spec.source_epoch and
+      r.descriptor_ref == spec.descriptor_ref and r.accepted_sequence == r.durable_sequence and
+      r.accepted_sample == r.durable_sample
+  end
 
-            true ->
-              raise "persisted receipt conflicts with source cursor"
-          end
-        else
-          _ -> raise "invalid persisted receipt"
-        end
+  defp recovery_cursor(receipt, %{"sequence" => sequence, "sample" => sample}) do
+    cond do
+      receipt.durable_sequence > sequence and receipt.durable_sample >= sample ->
+        {receipt.durable_sequence, receipt.durable_sample}
+
+      receipt.durable_sequence == sequence and receipt.durable_sample == sample ->
+        {sequence, sample}
+
+      receipt.durable_sequence < sequence and receipt.durable_sample <= sample ->
+        {sequence, sample}
+
+      true ->
+        raise "persisted receipt conflicts with source cursor"
     end
   end
 
@@ -420,107 +441,109 @@ defmodule MedExHandheld.Paired do
       :ok = Spool.activate(spool, n, gen, spec, r)
       :ok = Spool.ack(spool, n, gen, r)
 
-      cond do
-        r["type"] == "stream_finished" ->
-          state = Spool.watermark(spool, n)
-
-          if state["done"] and r["durable_sequence"] == to_string(state["sequence"]) and
-               r["durable_sample"] == to_string(state["sample"]),
-             do: :ok,
-             else: {:interrupted, :premature_terminal}
-
-        r["type"] == "durable" ->
-          durable_seq = String.to_integer(r["durable_sequence"])
-          drain(c, spool, s, n, gen, credit, durable_seq, durable_seq, [])
-      end
+      stream = %{spool: spool, socket: s, name: n, generation: gen, credit: credit}
+      continue_upload(r, stream)
     after
       Transport.close(s)
     end
   end
 
-  defp drain(c, spool, s, n, gen, credit, durable_seq, sent_seq, in_flight) do
-    case drain_replies(spool, s, n, gen, durable_seq, in_flight) do
+  defp continue_upload(%{"type" => "stream_finished"} = receipt, %{spool: spool, name: name}) do
+    state = Spool.watermark(spool, name)
+
+    if state["done"] and receipt["durable_sequence"] == to_string(state["sequence"]) and
+         receipt["durable_sample"] == to_string(state["sample"]),
+       do: :ok,
+       else: {:interrupted, :premature_terminal}
+  end
+
+  defp continue_upload(%{"type" => "durable", "durable_sequence" => sequence}, stream) do
+    durable_seq = String.to_integer(sequence)
+    drain(stream, durable_seq, durable_seq, [])
+  end
+
+  defp drain(stream, durable_seq, sent_seq, in_flight) do
+    %{spool: spool, socket: socket, name: name, generation: generation} = stream
+
+    case drain_replies(spool, socket, name, generation, durable_seq, in_flight) do
       {:interrupted, :premature_terminal} ->
         {:interrupted, :premature_terminal}
 
       {:ok, durable_seq, in_flight} ->
-        state = Spool.watermark(spool, n)
-        step_drain(c, spool, s, n, gen, credit, durable_seq, sent_seq, in_flight, state)
+        watermark = Spool.watermark(spool, name)
+        step_drain(stream, durable_seq, sent_seq, in_flight, watermark)
     end
   end
 
-  defp step_drain(c, spool, s, n, gen, credit, durable_seq, sent_seq, in_flight, state) do
+  defp step_drain(stream, durable_seq, sent_seq, in_flight, watermark) do
     cond do
-      durable_seq > state["sequence"] ->
+      durable_seq > watermark["sequence"] ->
         raise "remote receipt exceeds stored source watermark"
 
-      sent_seq < state["sequence"] and length(in_flight) < credit ->
-        {:ok, raw} = Spool.get(spool, n, sent_seq)
-
-        next_sequence =
-          if String.starts_with?(raw, "MEX1") do
-            :ok = Transport.send_frame(s, {:binary, raw})
-            sent_seq + 1
-          else
-            gap = JSON.decode!(raw)
-            {next, _sample} = gap_endpoint(gap, sent_seq, String.to_integer(gap["first"]))
-            :ok = Transport.send_json(s, "gap", gap)
-            next
-          end
-
-        drain(
-          c,
-          spool,
-          s,
-          n,
-          gen,
-          credit,
-          durable_seq,
-          next_sequence,
-          in_flight ++ [{sent_seq, next_sequence}]
-        )
+      sent_seq < watermark["sequence"] and length(in_flight) < stream.credit ->
+        next_sequence = send_spooled(stream, sent_seq)
+        drain(stream, durable_seq, next_sequence, in_flight ++ [{sent_seq, next_sequence}])
 
       in_flight != [] ->
-        wait_ms = if length(in_flight) >= credit or state["done"], do: 35_000, else: 10
+        wait_for_drain_reply(stream, durable_seq, sent_seq, in_flight, watermark["done"])
 
-        case Transport.recv(s, wait_ms) do
-          {:error, :timeout} when wait_ms < 35_000 ->
-            drain(c, spool, s, n, gen, credit, durable_seq, sent_seq, in_flight)
-
-          reply ->
-            case handle_reply(spool, n, gen, durable_seq, in_flight, reply) do
-              {:interrupted, :premature_terminal} ->
-                {:interrupted, :premature_terminal}
-
-              {:ok, durable_seq, in_flight} ->
-                drain(c, spool, s, n, gen, credit, durable_seq, sent_seq, in_flight)
-            end
-        end
-
-      sent_seq == state["sequence"] and state["done"] ->
+      sent_seq == watermark["sequence"] and watermark["done"] ->
         true = durable_seq == sent_seq
+        finish_upload(stream.socket, durable_seq, watermark)
 
-        {:ok, %{"type" => "stream_finished"}} =
-          Transport.request(
-            s,
-            "finish",
-            %{
-              "sequence" => to_string(durable_seq),
-              "sample" => to_string(state["sample"]),
-              "interruption" => state["interruption"]
-            },
-            35_000
-          )
-
-        :ok
-
-      sent_seq == state["sequence"] ->
+      sent_seq == watermark["sequence"] ->
         Process.sleep(10)
-        drain(c, spool, s, n, gen, credit, durable_seq, sent_seq, in_flight)
+        drain(stream, durable_seq, sent_seq, in_flight)
 
       true ->
         raise "remote receipt exceeds stored source watermark"
     end
+  end
+
+  defp send_spooled(%{spool: spool, socket: socket, name: name}, sequence) do
+    {:ok, raw} = Spool.get(spool, name, sequence)
+
+    if String.starts_with?(raw, "MEX1") do
+      :ok = Transport.send_frame(socket, {:binary, raw})
+      sequence + 1
+    else
+      gap = JSON.decode!(raw)
+      {next, _sample} = gap_endpoint(gap, sequence, String.to_integer(gap["first"]))
+      :ok = Transport.send_json(socket, "gap", gap)
+      next
+    end
+  end
+
+  defp wait_for_drain_reply(stream, durable_seq, sent_seq, in_flight, source_done) do
+    %{spool: spool, socket: socket, name: name, generation: generation, credit: credit} = stream
+    wait_ms = if length(in_flight) >= credit or source_done, do: 35_000, else: 10
+
+    case Transport.recv(socket, wait_ms) do
+      {:error, :timeout} when wait_ms < 35_000 ->
+        drain(stream, durable_seq, sent_seq, in_flight)
+
+      reply ->
+        with {:ok, durable_seq, in_flight} <-
+               handle_reply(spool, name, generation, durable_seq, in_flight, reply) do
+          drain(stream, durable_seq, sent_seq, in_flight)
+        end
+    end
+  end
+
+  defp finish_upload(socket, durable_seq, watermark) do
+    {:ok, %{"type" => "stream_finished"}} =
+      Transport.request(
+        socket,
+        "finish",
+        %{
+          "sequence" => to_string(durable_seq),
+          "sample" => to_string(watermark["sample"]),
+          "interruption" => watermark["interruption"]
+        },
+        35_000
+      )
+
+    :ok
   end
 
   defp drain_replies(spool, s, n, gen, durable_seq, in_flight) do

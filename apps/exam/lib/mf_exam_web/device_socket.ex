@@ -63,28 +63,10 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
         accepted = Map.put(J.to_map(r), "transport_sha256", S.hash(raw))
         next_in_flight = in_flight + 1
 
-        next_state =
-          if next_in_flight >= credit do
-            s = cancel_flush_timer(s)
-            send(self(), :checkpoint)
-            %{s | in_flight: next_in_flight}
-          else
-            arm_flush_timer(%{s | in_flight: next_in_flight})
-          end
-
-        reply("accepted", accepted, next_state)
+        reply("accepted", accepted, update_credit(s, next_in_flight, credit))
 
       {:durable, accepted, durable} ->
-        Barrier.hit("durable_before_ack", s.stream)
-        s = cancel_flush_timer(s)
-        pending = if accepted.accepted_sequence > durable.durable_sequence, do: 1, else: 0
-        s = if pending > 0, do: arm_flush_timer(s), else: s
-        accepted = Map.put(J.to_map(accepted), "transport_sha256", S.hash(raw))
-
-        push_many([{"accepted", accepted}, {"durable", J.to_map(durable)}], %{
-          s
-          | in_flight: pending
-        })
+        reply_durable(s, raw, accepted, durable)
 
       {:capacity, receipt} ->
         stream_finished(receipt, s)
@@ -109,6 +91,27 @@ defmodule MedFabric.ExamWeb.DeviceSocket do
   end
 
   def handle_in(_, s), do: denied(s)
+
+  defp update_credit(s, in_flight, credit) when in_flight >= credit do
+    s = cancel_flush_timer(s)
+    send(self(), :checkpoint)
+    %{s | in_flight: in_flight}
+  end
+
+  defp update_credit(s, in_flight, _credit), do: arm_flush_timer(%{s | in_flight: in_flight})
+
+  defp reply_durable(s, raw, accepted, durable) do
+    Barrier.hit("durable_before_ack", s.stream)
+    s = cancel_flush_timer(s)
+    pending = if accepted.accepted_sequence > durable.durable_sequence, do: 1, else: 0
+    s = if pending > 0, do: arm_flush_timer(s), else: s
+    accepted = Map.put(J.to_map(accepted), "transport_sha256", S.hash(raw))
+
+    push_many([{"accepted", accepted}, {"durable", J.to_map(durable)}], %{
+      s
+      | in_flight: pending
+    })
+  end
 
   defp feed_monitor(tx, session, id, frame, raw) do
     audio = session.descriptors["audio"]

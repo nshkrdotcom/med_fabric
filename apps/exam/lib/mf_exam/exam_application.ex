@@ -3,13 +3,13 @@ defmodule MedFabric.Exam.Application do
   use Application
 
   alias MedFabric.Exam
-  alias MedFabric.Exam.{DeviceManifest, PreviewGateway, Recordings}
+  alias MedFabric.Exam.{ClockObservations, DeviceManifest, PreviewGateway, Recordings}
   alias MedFabric.ExamWeb.Endpoint
   alias MedFabric.Store.{Encounters, Postgres}
 
   @impl true
   def start(_type, _args) do
-    MedFabric.Exam.ClockObservations.initialize_host_generation()
+    ClockObservations.initialize_host_generation()
 
     children = [{Phoenix.PubSub, name: MedFabric.Exam.PubSub}]
     lab = Application.get_env(:mf_exam, :lab)

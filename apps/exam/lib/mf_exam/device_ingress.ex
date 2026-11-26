@@ -86,14 +86,23 @@ defmodule MedFabric.Exam.DeviceIngress do
         execute_scoped(tx, op, s)
       end)
 
-    if started do
-      :telemetry.execute(
-        [:mf_exam, :device_ingress, :checkpoint],
-        %{duration_us: System.monotonic_time(:microsecond) - started},
-        %{stream: s.name, acquisition_id: s.bind.id}
-      )
-    end
+    report_checkpoint(started, s)
+    reply_to_socket(result, s)
+  end
 
+  def handle_call(_, _, s), do: {:reply, {:error, :stale_socket}, s}
+
+  defp report_checkpoint(nil, _), do: :ok
+
+  defp report_checkpoint(started, s) do
+    :telemetry.execute(
+      [:mf_exam, :device_ingress, :checkpoint],
+      %{duration_us: System.monotonic_time(:microsecond) - started},
+      %{stream: s.name, acquisition_id: s.bind.id}
+    )
+  end
+
+  defp reply_to_socket(result, s) do
     case result do
       {:ok, {:sealed, r}} ->
         {:stop, :normal, {:ok, r}, s}
@@ -117,8 +126,6 @@ defmodule MedFabric.Exam.DeviceIngress do
         {:reply, error, s}
     end
   end
-
-  def handle_call(_, _, s), do: {:reply, {:error, :stale_socket}, s}
 
   defp active_socket?(%{bind: %{generation: generation}, socket: previous}, generation, socket),
     do: previous != socket and Process.alive?(previous)
@@ -234,19 +241,21 @@ defmodule MedFabric.Exam.DeviceIngress do
       fault_hook: fn stage -> Barrier.hit(to_string(stage), name) end
     ]
 
-    case S.scoped(bind, fn tx, _ ->
-           with {:ok, writer} <- StreamWriter.start_link(opts ++ previous),
-                {:ok, receipt} <- StreamWriter.receipt(writer) do
-             S.rows(tx, "UPDATE stream_attempts SET receipt=$2 WHERE fence=$1", [
-               fence,
-               Serialization.to_map(receipt)
-             ])
-
-             {:ok, writer, receipt}
-           end
-         end) do
+    case S.scoped(bind, fn tx, _ -> start_writer(tx, opts ++ previous, fence) end) do
       {:ok, result} -> result
       error -> error
+    end
+  end
+
+  defp start_writer(tx, opts, fence) do
+    with {:ok, writer} <- StreamWriter.start_link(opts),
+         {:ok, receipt} <- StreamWriter.receipt(writer) do
+      S.rows(tx, "UPDATE stream_attempts SET receipt=$2 WHERE fence=$1", [
+        fence,
+        Serialization.to_map(receipt)
+      ])
+
+      {:ok, writer, receipt}
     end
   end
 
@@ -571,38 +580,42 @@ defmodule MedFabric.Exam.DeviceIngress do
 
       prior(tx, prev, id, name, spec)
     else
-      opts =
-        [stream: spec, fence: fence] ++
-          if(known, do: [known_receipt: elem(Serialization.receipt(known), 1)], else: [])
+      recover_prior(tx, dir, fence, known, spec)
+    end
+  end
 
-      recovery =
-        case Storage.recover(dir, opts) do
-          {:ok, %{terminal_recorded: true, sealed: false}} ->
-            Storage.reconcile_index(dir, opts)
+  defp recover_prior(tx, dir, fence, known, spec) do
+    opts =
+      [stream: spec, fence: fence] ++
+        if(known, do: [known_receipt: elem(Serialization.receipt(known), 1)], else: [])
 
-          result ->
-            result
-        end
+    recovery =
+      case Storage.recover(dir, opts) do
+        {:ok, %{terminal_recorded: true, sealed: false}} ->
+          Storage.reconcile_index(dir, opts)
 
-      case recovery do
-        {:ok,
-         %{sealed: true, index: %{terminal: terminal, terminal_reason: reason} = i, receipt: r}}
-        when terminal in [:finished, :failed] or
-               (terminal == :interrupted and reason in @capacity_reasons) ->
-          S.rows(
-            tx,
-            "UPDATE stream_attempts SET sealed_index=$2,index_digest=$3,receipt=$4 WHERE fence=$1",
-            [fence, Serialization.to_map(i), Serialization.digest(i), Serialization.to_map(r)]
-          )
-
-          {:sealed, r}
-
-        {:ok, %{receipt: r}} ->
-          [predecessor: %{artifact_dir: dir, receipt: r}]
-
-        _ ->
-          S.abort(tx, :unverified_predecessor)
+        result ->
+          result
       end
+
+    case recovery do
+      {:ok,
+       %{sealed: true, index: %{terminal: terminal, terminal_reason: reason} = i, receipt: r}}
+      when terminal in [:finished, :failed] or
+             (terminal == :interrupted and reason in @capacity_reasons) ->
+        S.rows(
+          tx,
+          "UPDATE stream_attempts SET sealed_index=$2,index_digest=$3,receipt=$4 WHERE fence=$1",
+          [fence, Serialization.to_map(i), Serialization.digest(i), Serialization.to_map(r)]
+        )
+
+        {:sealed, r}
+
+      {:ok, %{receipt: r}} ->
+        [predecessor: %{artifact_dir: dir, receipt: r}]
+
+      _ ->
+        S.abort(tx, :unverified_predecessor)
     end
   end
 end
