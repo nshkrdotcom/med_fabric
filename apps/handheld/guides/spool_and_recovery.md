@@ -10,7 +10,9 @@ and `mf_exam` do not lose committed clinical acquisitions.
    For 50 Hz audio capture, up to 5 frames (100 ms) are held in memory and
    staged together before atomic rename and directory sync (flushing
    immediately on gaps, stop, or completion); uncommitted temp files left by
-   a hard crash are discarded on restart.
+   a hard crash are discarded on restart. After dispatch, the spool owns
+   staged files. A caller timeout leaves the batch outcome uncertain, and
+   restart recovers the exact durable prefix.
 2. The authenticated WSS connection can pipeline up to 15 waveform records
    per stream with Exam 0.1.1. The single-credit mode remains available for
    peers that do not negotiate a larger window.

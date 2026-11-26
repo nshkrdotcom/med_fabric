@@ -95,9 +95,11 @@ defmodule MedExHandheld.Spool do
     put_batch_and_advance(p, root, stream, [{seq, bytes, next_seq, next_sample}])
   end
 
-  def put_batch_and_advance(_p, _root, _stream, []), do: :ok
+  def put_batch_and_advance(p, root, stream, items, timeout \\ 30_000)
 
-  def put_batch_and_advance(p, root, stream, items)
+  def put_batch_and_advance(_p, _root, _stream, [], _timeout), do: :ok
+
+  def put_batch_and_advance(p, root, stream, items, timeout)
       when is_binary(root) and stream in ["audio", "ecg", "events"] and is_list(items) do
     dir = Path.join(root, stream)
     File.mkdir_p!(dir)
@@ -115,11 +117,9 @@ defmodule MedExHandheld.Spool do
           |> Task.await_many(30_000)
       end
 
-    try do
-      GenServer.call(p, {:commit_batch_and_advance, stream, staged}, 30_000)
-    after
-      for %{tmp: tmp} <- staged, do: File.rm(tmp)
-    end
+    # A timed-out call can still commit. Only the spool may unlink the staged
+    # files after transfer. Startup reclaims them if the spool exits first.
+    GenServer.call(p, {:commit_batch_and_advance, stream, staged}, timeout)
   end
 
   defp stage_batch_item!(dir, seq, bytes, next_seq, next_sample) do
@@ -175,6 +175,9 @@ defmodule MedExHandheld.Spool do
       {:ok, next} -> {:reply, :ok, next}
       {:error, reason, next} -> {:reply, {:error, reason}, next}
     end
+  after
+    dir = Path.join(s.root, name)
+    for %{tmp: tmp} <- staged, Path.dirname(tmp) == dir, do: File.rm(tmp)
   end
 
   def handle_call({:watermark, name}, _, s), do: {:reply, current_watermark(s, name), s}

@@ -329,6 +329,32 @@ defmodule MedExHandheld.SpoolReceiptTest do
   end
 
   @tag :tmp_dir
+  test "a queued batch keeps its staging files after the caller times out", %{tmp_dir: dir} do
+    pid = start_spool(dir, :queued_batch)
+    items = for q <- 0..1, do: {q, frame(q, q), q + 1, q + 1}
+    temps = Path.join([dir, "audio", "*.tmp.*"])
+
+    :ok = :sys.suspend(pid)
+
+    try do
+      assert {:timeout, {GenServer, :call, _}} =
+               catch_exit(Spool.put_batch_and_advance(pid, dir, "audio", items, 0))
+
+      assert length(Path.wildcard(temps)) == 2
+    after
+      :ok = :sys.resume(pid)
+    end
+
+    assert %{"sequence" => 2, "sample" => 2, "done" => false} = Spool.watermark(pid, "audio")
+    assert %{bytes: bytes} = Spool.stats(pid)
+    assert bytes == 2 * (byte_size(frame(0, 0)) + 32)
+    assert {:ok, raw} = Spool.get(pid, "audio", 1)
+    assert raw == frame(1, 1)
+    assert :absent = Spool.get(pid, "audio", 2)
+    assert Path.wildcard(temps) == []
+  end
+
+  @tag :tmp_dir
   test "partial batch spool_full preserves committed prefix and cleans up remaining temps", %{
     tmp_dir: dir
   } do

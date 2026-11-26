@@ -52,11 +52,21 @@ defmodule MedExHandheld.Session do
       )
 
     c = load_identity(config, profile, root)
-    {:ok, monitor} = Supervisor.start_child(resources, {Monitor, {root, c["boot"]}})
-    {:ok, hub} = Supervisor.start_child(resources, {Agent, fn -> %{latest: nil, stop: false} end})
-    # Stop producers before closing their monitor and durable spool.
-    {:ok, producers} = Supervisor.start_child(resources, {Task.Supervisor, []})
-    sources = if profile == "paired_exam", do: Paired.sources(c), else: %{}
+
+    {monitor, hub, producers, sources} =
+      if profile == "paired_exam" do
+        {:ok, monitor} = Supervisor.start_child(resources, {Monitor, {root, c["boot"]}})
+
+        {:ok, hub} =
+          Supervisor.start_child(resources, {Agent, fn -> %{latest: nil, stop: false} end})
+
+        # Stop producers before closing their monitor and durable spool.
+        {:ok, producers} = Supervisor.start_child(resources, {Task.Supervisor, []})
+        {monitor, hub, producers, Paired.sources(c)}
+      else
+        {nil, nil, nil, %{}}
+      end
+
     marker = Path.join(root, "source_started.json")
     resuming = File.exists?(marker)
 

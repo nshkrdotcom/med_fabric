@@ -5,6 +5,7 @@
 - Replay multi-sequence gaps and stop production on verified premature terminal receipts.
 - Own live per-stream watermarks in `Spool`, replace per-ACK directory scans with O(k) sequence-range reclamation, recover past reclaimed prefixes from validated persisted receipts, and negotiate up to 15-frame pipelined credit with single-credit fallback.
 - Use `MedEx.ControlInterlock.device_decide/3` for command replay and epoch decisions while bounding the persisted result cache. Check the synthetic PLXS adapter mapping with `MedEx.Serialization.measurement/1`.
+- Keep staged waveform batches available to the spool after a caller timeout. Start capture and monitor workers only for paired exams.
 - Require MedEx 0.2.1.
 
 All notable changes to `mf_handheld` will be documented in this file.

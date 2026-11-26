@@ -56,7 +56,8 @@ defmodule MedExHandheld.SessionCleanupTest do
     tmp_dir: dir
   } do
     root = Path.join(dir, "exam")
-    Spool.write!(Path.join(root, "identity.json"), JSON.encode!(identity()))
+    paired = %{identity() | "profile" => "paired_exam"}
+    Spool.write!(Path.join(root, "identity.json"), JSON.encode!(paired))
     monitor_file = Path.join(root, "monitor.json")
     bytes = JSON.encode!(%{"boot" => "other-boot"})
     Spool.write!(monitor_file, bytes)
@@ -65,7 +66,7 @@ defmodule MedExHandheld.SessionCleanupTest do
 
     error =
       assert_raise MatchError, fn ->
-        Session.run(Map.put(identity(), "spool_root", dir), "plx_spot_check")
+        Session.run(Map.put(paired, "spool_root", dir), "paired_exam")
       end
 
     assert {:error, {{%RuntimeError{message: "monitor boot domain changed"}, _}, _}} = error.term
@@ -76,13 +77,16 @@ defmodule MedExHandheld.SessionCleanupTest do
   end
 
   @tag :tmp_dir
-  test "peer-verified WSS admission refusal closes the connection and releases local owners", %{
+  test "PLX ignores paired monitor state and cleans up a peer-verified WSS refusal", %{
     tmp_dir: dir
   } do
     cert = Path.join(dir, "cert.pem")
     key = Path.join(dir, "key.pem")
     credential = Path.join(dir, "credential")
     Spool.write!(credential, "wrong-fixture-token")
+    monitor = Path.join([dir, "exam", "monitor.json"])
+    monitor_bytes = JSON.encode!(%{"boot" => "other-boot"})
+    Spool.write!(monitor, monitor_bytes)
 
     ca = Path.join(dir, "ca.pem")
     ca_key = Path.join(dir, "ca.key")
@@ -173,6 +177,7 @@ defmodule MedExHandheld.SessionCleanupTest do
     assert caller_links() == links
 
     root = Path.join(dir, "exam")
+    assert File.read!(monitor) == monitor_bytes
     refute File.exists?(Path.join(root, "source_started.json"))
     pid = start_supervised!({Spool, root: root, limit: 1000})
     assert Spool.stats(pid).bytes == 0
