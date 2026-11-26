@@ -6,7 +6,11 @@ guides = [
   {"apps/exam/guides/getting_started.md", "Getting Started"},
   {"apps/exam/guides/browser_to_record.md", "Browser to Record"},
   {"apps/exam/guides/handheld_integration.md", "Handheld Integration"},
-  {"apps/exam/guides/architecture.md", "Architecture"}
+  {"apps/exam/guides/architecture.md", "Architecture"},
+  {"guides/failure_matrix.md", "Failure Matrix"},
+  {"guides/operations_and_telemetry.md", "Operations and Telemetry"},
+  {"guides/security_and_clinical_boundary.md", "Security and Clinical Boundary"},
+  {"guides/core_api_and_compatibility.md", "Core API and Compatibility"}
 ]
 
 guide_paths = Enum.map(guides, &elem(&1, 0))

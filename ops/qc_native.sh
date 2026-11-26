@@ -5,6 +5,7 @@ usage() {
   echo 'Usage: ops/qc_native.sh [--suite all|paired|soak] [--evidence NEW_DIR]'
   echo '       [--volume EXISTING_DIR] [--med-ex-project PROJECT_OR_WELD_RELEASE_DIR] [--seconds N] [--keep-failure]'
   echo 'Soak defaults to 29 minutes. Use --suite soak --seconds 60 for a short diagnostic.'
+  echo 'Default runs use locked Hex packages; candidate projects require --med-ex-project.'
 }
 suite=all
 seconds=
@@ -49,10 +50,6 @@ if [[ "$suite" != all ]]; then
   if [[ -z "$volume" ]]; then
     volume="$PWD/_build"
     mkdir -p -- "$volume"
-  fi
-  staged="$PWD/_build/foundation-release-evidence/weld/med_ex"
-  if [[ -z "$candidate" && -f "$staged/CURRENT" ]]; then
-    candidate="$staged"
   fi
 fi
 [[ -z "$volume" || -d "$volume" ]] || { echo 'Volume must be a directory.' >&2; exit 2; }

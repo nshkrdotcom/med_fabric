@@ -2,6 +2,8 @@
 
 ## 0.2.0 - 2026-11-25
 
+- Reject empty shared credentials and invalid environment-configured listener ports.
+- Correct native build prerequisites and document runtime configuration for host projects.
 - Support file-based deployment configuration (`/etc/med_fabric/preview.json`).
 - Adopt `med_ex_opus ~> 0.2.0` (Port-isolated C11 `libopus` encoder, removing Membrane/Ratio dependency conflicts), `med_ex_rtc ~> 0.2.0`, and `med_ex ~> 0.3.0`.
 

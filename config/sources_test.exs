@@ -10,7 +10,7 @@ defmodule MedFabric.BuildSourcesTest do
   alias MedFabric.BuildSources, as: Sources
 
   @env ~w(MF_MED_EX_PATH MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE
-           CFLAGS CC
+           CFLAGS CC MED_EX_OPUS_TARBALL XDG_CACHE_HOME
            HEX_HOME HEX_MIRROR_URL HEX_TRUSTED_MIRROR_URL MIX_XDG XDG_CONFIG_HOME XDG_DATA_HOME)
   @defaults [
     {:med_ex, "~> 0.2.0", override: true, runtime: true},
@@ -31,6 +31,8 @@ defmodule MedFabric.BuildSourcesTest do
     File.write!(Path.join(project, "mix.lock"), lock)
     previous = Map.new(@env, &{&1, System.get_env(&1)})
     Enum.each(@env, &System.delete_env/1)
+    System.put_env("HEX_HOME", Path.join(root, "hex"))
+    System.put_env("XDG_CONFIG_HOME", Path.join(root, "config"))
 
     on_exit(fn ->
       Enum.each(previous, fn {key, value} ->
@@ -186,6 +188,77 @@ defmodule MedFabric.BuildSourcesTest do
 
     System.put_env("CFLAGS", "-DFABRIC_TEST_ABI=1")
     assert graph != elem(Sources.resolve(@defaults, c.project, c.root), 1)
+  end
+
+  test "frozen native inputs invalidate builds even when absent from a stale inventory", c do
+    sdk = make_project(c.root, "sdk")
+    select(c, %{"med_ex" => %{"path" => "sdk"}})
+    File.write!(Path.join(sdk, "weld.provenance.json"), ~s({"kind":"full","artifact_id":"id"}))
+
+    File.write!(
+      Path.join(sdk, "projection.lock.json"),
+      JSON.encode!(%{"projection" => %{"verification_files" => ["mix.exs"]}})
+    )
+
+    for relative <- ["Makefile", "c_src/encoder.c", "c_src/vendor/SHA256SUMS"] do
+      {_, before} = Sources.resolve(@defaults, c.project, c.root)
+      path = Path.join(sdk, relative)
+      File.mkdir_p!(Path.dirname(path))
+      File.write!(path, "first")
+      {_, added} = Sources.resolve(@defaults, c.project, c.root)
+      refute added == before
+
+      mtime = File.stat!(path).mtime
+      File.write!(path, "other")
+      File.touch!(path, mtime)
+      refute added == elem(Sources.resolve(@defaults, c.project, c.root), 1)
+    end
+  end
+
+  test "explicit Opus tarball bytes and cache selection invalidate native build identity", c do
+    original = Sources.build_identity()
+    tarball = Path.join(c.root, "opus.tar.gz")
+    File.write!(tarball, "first")
+    System.put_env("MED_EX_OPUS_TARBALL", tarball)
+    first = Sources.build_identity()
+    refute first == original
+
+    mtime = File.stat!(tarball).mtime
+    File.write!(tarball, "other")
+    File.touch!(tarball, mtime)
+    refute first == Sources.build_identity()
+
+    System.delete_env("MED_EX_OPUS_TARBALL")
+    System.put_env("XDG_CACHE_HOME", Path.join(c.root, "private-cache"))
+    refute original == Sources.build_identity()
+  end
+
+  test "relative Opus archive overrides cannot seed a cache identity" do
+    System.put_env("MED_EX_OPUS_TARBALL", "../archives/opus.tar.gz")
+
+    assert_raise Mix.Error, ~r/MED_EX_OPUS_TARBALL must be an absolute path/, fn ->
+      Sources.build_identity()
+    end
+  end
+
+  test "absolute Opus archive identities preserve symlink traversal before parent segments", c do
+    provider = Path.join(c.root, "provider")
+    File.mkdir_p!(Path.join(provider, "nested"))
+    File.ln_s!(Path.join(provider, "nested"), Path.join(c.root, "link"))
+    consumed = Path.join(provider, "opus.tar.gz")
+    lexical = Path.join(c.root, "opus.tar.gz")
+    File.write!(consumed, "first")
+    File.write!(lexical, "unrelated")
+    override = Path.join(c.root, "link") <> "/../opus.tar.gz"
+    assert File.read!(override) == "first"
+    System.put_env("MED_EX_OPUS_TARBALL", override)
+    first = Sources.build_identity()
+
+    File.write!(lexical, "unrelated edit")
+    assert first == Sources.build_identity()
+
+    File.write!(consumed, "other")
+    refute first == Sources.build_identity()
   end
 
   test "frozen inventory prevents path escape or mutable symlinks from seeding builds", c do

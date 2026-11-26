@@ -7,9 +7,14 @@ WebRTC.
 ## Prerequisites
 
 - Elixir `~> 1.20` and OTP 29
-- C compiler and native build tools for `med_ex_opus` (`libopus` headers if
-  building from source; precompiled binaries are used on supported Linux and
-  macOS targets)
+- C11 compiler, GNU `make`, `tar`, and `sh` for the pinned-source `libopus`
+  Port encoder; `curl` or an offline archive selected by an absolute
+  `MED_EX_OPUS_TARBALL` path
+- RTC native build prerequisites, including `pkg-config` and OpenSSL
+  development headers (`libssl-dev` on Ubuntu)
+
+Opus does not require system `libopus` headers or use precompiled encoder
+binaries. The native qualification scope is Ubuntu Linux `x86_64`.
 
 ## Installing Exam and Preview in one Mix project
 
@@ -21,9 +26,33 @@ and `mf_preview` resolves cleanly from Hex with no overrides (requires POSIX
 `cc`, `make`, `tar`, `sh`, and `curl` or `MED_EX_OPUS_TARBALL`; natively
 qualified on Ubuntu Linux `x86_64`).
 
+Both applications start in the host's BEAM when included as ordinary runtime
+dependencies. A combined dependency graph does not provide process isolation;
+deploy Preview in a separate host/release for the isolation guarantees below.
+
+## Using Preview as a Hex dependency
+
+Mix loads runtime configuration from the top-level host project. It does not
+automatically load `deps/mf_preview/config/runtime.exs`. After adding
+`{:mf_preview, "~> 0.2.0"}` and fetching dependencies, copy the supplied runtime
+configuration into a new dedicated Preview host:
+
+```bash
+mix deps.get
+mkdir -p config
+cp -n deps/mf_preview/config/runtime.exs config/runtime.exs
+```
+
+If the host already has `config/runtime.exs`, merge the Preview configuration
+from the packaged file into it. Keep the file contents in the host, so Mix can
+copy its runtime configuration into a release without relying on a checkout
+path. This configures both `:mf_preview, :listen` and
+`:med_ex, :rtc_provider`. An explicitly managed host can set those same
+application settings itself.
+
 ## Configuration
 
-In the current source, for a file-based deployment, create `/etc/med_fabric/preview.json`:
+For a file-based deployment, create `/etc/med_fabric/preview.json`:
 
 ```json
 {
@@ -35,6 +64,8 @@ In the current source, for a file-based deployment, create `/etc/med_fabric/prev
 Use the same credential file content for Exam's `preview_credential_file`.
 Preview listens on loopback. The file takes precedence over the environment
 settings below outside Mix tests. Restart Preview after updating it.
+The port must be in `1..65535`. Use a private random credential; empty or
+whitespace-only credential files are rejected in both configuration modes.
 
 `mf_preview` reads two environment variables at startup (`config/runtime.exs`):
 
@@ -58,7 +89,7 @@ From the `med_fabric` repository root, `./ops/dev.sh` creates the shared
 
 ## Running Locally or as a Release
 
-Development:
+From `apps/preview` in the source checkout, or an unpacked Preview package:
 
 ```bash
 mix deps.get
@@ -72,3 +103,6 @@ MIX_ENV=prod mix deps.get
 MIX_ENV=prod mix release
 _build/prod/rel/mf_preview/bin/mf_preview start
 ```
+
+A dedicated host project uses its own application/release name in the final
+path and carries the runtime configuration described above.

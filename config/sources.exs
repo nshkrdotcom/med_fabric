@@ -7,7 +7,8 @@ defmodule MedFabric.BuildSources do
   @scm @git_keys ++ ~w(branch tag path in_umbrella sparse submodules depth hex repo organization)a
   @mix_paths ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE)
   @native_env ~w(CC CXX CPPFLAGS CFLAGS CXXFLAGS LDFLAGS ERL_COMPILER_OPTIONS
-                 MAKEFLAGS MIX_REBAR3 CMAKE_TOOLCHAIN_FILE PKG_CONFIG_PATH)
+                 MAKEFLAGS MIX_REBAR3 CMAKE_TOOLCHAIN_FILE PKG_CONFIG_PATH
+                 MED_EX_OPUS_TARBALL XDG_CACHE_HOME)
   @trust_env ~w(HEX_UNSAFE_HTTPS HEX_UNSAFE_REGISTRY HEX_NO_VERIFY_REPO_ORIGIN
                 HEX_CACERTS_PATH)
 
@@ -176,9 +177,25 @@ defmodule MedFabric.BuildSources do
         optional_digest(otp_file),
         :erlang.system_info(:system_architecture),
         optional_digest("/etc/os-release"),
+        opus_tarball_identity(),
         Enum.map(@native_env, &System.get_env/1)
       })
     )
+  end
+
+  defp opus_tarball_identity do
+    case System.get_env("MED_EX_OPUS_TARBALL") do
+      path when is_binary(path) and path != "" ->
+        unless Path.type(path) == :absolute,
+          do: Mix.raise("MED_EX_OPUS_TARBALL must be an absolute path")
+
+        # Preserve filesystem traversal through symlinks and `..`, exactly as
+        # the provider's Makefile reads this already-absolute override.
+        {path, optional_digest(path)}
+
+      _ ->
+        nil
+    end
   end
 
   @doc false
@@ -427,7 +444,7 @@ defmodule MedFabric.BuildSources do
           # outside the advertised inventory.
           extra =
             Enum.flat_map(
-              ~w(lib src priv components config build_support),
+              ~w(lib src priv components config build_support Makefile c_src),
               &frozen_files(path, &1)
             )
 

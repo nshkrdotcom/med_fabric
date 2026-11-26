@@ -6,15 +6,18 @@ Keeping `core/domain` (`mf_domain`), `core/store` (`mf_store`), and
 `core/interop` (`mf_interop`) decoupled from `apps/exam` preserves the option to
 publish a reusable library once a second application defines its public API:
 
-- **`MfDomain`:** Pure encounter, profile, review-range, and clinical-decision
+- **`MedFabric.Domain` namespace (`:mf_domain`):** Pure encounter, profile, review-range, and clinical-decision
   rules. Zero I/O, zero Phoenix/Ecto dependencies.
-- **`MfStore`:** PostgreSQL persistence, atomic clinical acceptance + FHIR
+- **`MedFabric.Store` namespace (`:mf_store`):** PostgreSQL persistence, atomic clinical acceptance + FHIR
   outbox commits, and migrations.
-- **`MfInterop`:** HL7 FHIR R4 Observation mapping, conditional create, and
+- **`MedFabric.Interop` namespace (`:mf_interop`):** HL7 FHIR R4 Observation mapping, conditional create, and
   strict typed read-back confirmation.
 - **Rule:** `apps/exam` must consume MedEx and core modules through their public
   APIs—no private reach-ins to `MedEx.PreviewSession` or removed `Membrane`
   modules.
+
+These are existing internal package boundaries, not a published second-host
+API contract. A reviewed function-by-function reusable API remains future work.
 
 ## 2. Package Compatibility Matrix
 
@@ -26,10 +29,23 @@ publish a reusable library once a second application defines its public API:
 ## 3. Unified Qualification Pipeline
 
 1. **Sources & boundaries:** `elixir config/sources_test.exs`,
-   `elixir ops/check_hardening.exs` (also verifies every path cited in `guides/failure_matrix.md` exists), and `./ops/qc_sources.sh`.
+   `elixir config/runtime_test.exs`, `elixir ops/check_hardening_test.exs`,
+   `elixir ops/check_hardening.exs` (checks the file/suite paths cited in
+   `guides/failure_matrix.md`), and `./ops/qc_sources.sh` with an explicit
+   `MED_EX_SOURCE` selection. Run `node --test ops/docs_hook_test.mjs` for the
+   workspace ExDoc navigation/theme hook.
 2. **Native services & acceptance:** `./ops/qc_services.sh`,
    `./ops/qc_native.sh`, and `ops/handheld_acceptance.exs` against native
    PostgreSQL and HAPI FHIR R4.
 3. **Browser & media:** `./ops/verify_browser.sh` (Chromium).
 4. **Detached release:** `./ops/qc_detached_release.sh` verifying no native
    media deps leak into `exam` or `handheld`.
+
+The root Blitz `mix test`/`mix quality` workflows intentionally omit Preview.
+Run Preview's tests, format, compile, Credo, Dialyzer, and docs in `apps/preview`
+as a separate native-provider lane. The existing Preview and Handheld `quality`
+aliases include only format and compile; they do not run Credo or Dialyzer.
+Use the command arguments required by each native runner (including report
+paths), refresh the old Hex locks after the upstream packages are published,
+and retain the resulting evidence. This list does not attest that the pending
+0.3.0 release has passed those gates.

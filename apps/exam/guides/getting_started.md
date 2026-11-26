@@ -20,6 +20,11 @@ and `mf_preview` resolves cleanly from Hex with no overrides (requires POSIX
 `cc`, `make`, `tar`, `sh`, and `curl` or `MED_EX_OPUS_TARBALL`; natively
 qualified on Ubuntu Linux `x86_64`).
 
+Ordinary runtime dependencies start in the same BEAM. For fault isolation,
+build and run Preview as a separate host/release. A Preview dependency also
+needs the host-owned runtime configuration described in its Getting Started
+guide; a dependency's `config/runtime.exs` is not loaded automatically by Mix.
+
 ## Configuration
 
 ### File-based deployment (current source)
@@ -47,6 +52,8 @@ file uses the existing encounter JSON format. Optional settings are
 `preview_url` with `preview_credential_file` for loopback Preview,
 and comma-separated `turn_urls` with `turn_secret_file` and optional
 boolean `relay_only`. Restart Exam after updating these files.
+The Preview credential must contain a nonempty value after trimming
+whitespace; use the same private random credential for both services.
 
 ### Environment-based launchers
 

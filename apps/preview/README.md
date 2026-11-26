@@ -29,9 +29,13 @@ def deps do
 end
 ```
 
-Requires Elixir `~> 1.20` (OTP 29), MedEx `~> 0.3.0`, and POSIX build tools (`cc`, `make`, `tar`, `sh`, `pkg-config`, `libssl-dev`; natively qualified on Ubuntu Linux `x86_64`) /
-`libopus` support for `med_ex_opus`. The Opus and RTC providers remain at
-`~> 0.1.0`.
+Requires Elixir `~> 1.20` (OTP 29), MedEx `~> 0.3.0`, and the Opus and RTC
+providers at `~> 0.2.0`. Opus builds its pinned `libopus` source with a C11
+compiler, GNU `make`, `tar`, `sh`, and `curl` or `MED_EX_OPUS_TARBALL`; it does
+not require system `libopus` headers or ship precompiled encoders. RTC also
+requires its native dependencies' build tools, including `pkg-config` and
+OpenSSL development headers. Native qualification has been on Ubuntu Linux
+`x86_64`; other platforms require separate qualification.
 
 ## How It Works
 
@@ -49,13 +53,20 @@ Requires Elixir `~> 1.20` (OTP 29), MedEx `~> 0.3.0`, and POSIX build tools (`cc
 
 ## Configuration
 
-Set the listener port and shared secret file before starting:
+For a source checkout or unpacked Preview package, set the listener port and
+shared secret file before starting:
 
 ```bash
 export MF_PREVIEW_PORT=4090
 export MF_PREVIEW_CREDENTIAL_FILE=/etc/med_fabric/preview.secret
 mix run --no-halt
 ```
+
+When Preview is a Hex dependency of a host project, the host must provide its
+own runtime configuration: Mix does not execute a dependency's
+`config/runtime.exs`. See the [Getting Started guide](guides/getting_started.md)
+for the host setup and file-based deployment. Use a private random credential;
+an empty or whitespace-only credential is rejected at startup.
 
 ## Guides
 

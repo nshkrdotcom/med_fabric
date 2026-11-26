@@ -2,6 +2,17 @@
 
 ## 0.3.0 — 2026-11-25
 
+- Reject empty Preview credentials and out-of-range environment listener ports;
+  document host-owned runtime configuration for Preview Hex consumers.
+- Include frozen C sources, Makefiles, explicit Opus archive bytes, and native
+  cache selection in source build identity so stale native artifacts are not reused.
+  Require an absolute `MED_EX_OPUS_TARBALL` path so consumer and provider builds
+  identify the same offline archive, preserving symlink traversal in that path.
+- Keep native qualification on locked Hex packages unless `--med-ex-project`
+  explicitly selects a candidate; ignore stale staging pointers by default.
+- Repair the failure-matrix citation guard and add direct regression cases.
+  Register the hardening guides in workspace and projected Exam docs, correct
+  their proof scope, and render Mermaid on each ExDoc page load with the current theme.
 - Support file-based deployment configuration (`/etc/med_fabric/{exam,preview}.json`) across Exam and Preview.
 - Consolidate media dependencies on `med_ex_opus ~> 0.2.0` (Port-isolated C11 `libopus` encoder) and remove the legacy Membrane `:ratio` Git override from Exam and combined Mix consumer guides.
 - Add failure-matrix, operations/telemetry, security/clinical-boundary, and core-API/compatibility guides plus `ops/check_hardening.exs`.
@@ -9,7 +20,7 @@
 
 ## 0.2.0 — 2026-11-25
 
-- Add a Weld 0.18.0 maintainer project and a release manifest for the standalone
+- Add a Weld maintainer project and a release manifest for the standalone
   Exam package, including its internal applications, static files, and SQL migrations.
 
 - Centralize transport membership checks and pass explicit workflow resources

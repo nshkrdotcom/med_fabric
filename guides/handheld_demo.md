@@ -162,13 +162,15 @@ the same paired workload, native PostgreSQL, and performance checks as the
 capture drains and seals, both check for defects, compare stored samples
 against independent byte hashes, and submit a synthetic review through Exam.
 
-The focused commands create a lab under the checkout's `_build` directory.
-If `_build/foundation-release-evidence/weld/med_ex/CURRENT` exists, they use
-that staged SDK. Otherwise they use the locked Hex packages. The full
-release gate always uses the locked Hex packages. Override the storage
-location with `--volume EXISTING_DIR`, or select another prepared SDK
-with `--med-ex-project PROJECT_OR_WELD_RELEASE_DIR`. These overrides
-leave committed locks and source-selection files intact.
+The focused commands create a lab under the checkout's `_build` directory
+and use the locked Hex packages by default, even when an old candidate's
+`CURRENT` pointer remains in the checkout. The full release gate also requires
+locked Hex packages. Override the storage location with `--volume EXISTING_DIR`.
+For a focused candidate check, explicitly select a prepared SDK with
+`--med-ex-project PROJECT_OR_WELD_RELEASE_DIR`. These overrides leave committed
+locks and source-selection files intact. The runner records any selected
+candidate path; do not report that run as qualification of the default Hex
+packages.
 
 The soak prints interval throughput, lag, and backlog for each stream every
 five seconds. The expected rates are 48,000 audio and 250 ECG samples per

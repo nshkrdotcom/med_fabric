@@ -8,10 +8,19 @@ Statements below were checked against the source on 2026-11-26. Items marked
 - `apps/exam/config/runtime.exs` reads required settings with
   `System.fetch_env!/1` (or a packaged settings map via `Map.fetch!/2`), so a
   missing required value fails at boot with a clear `KeyError`/env error.
-- `apps/preview/config/runtime.exs` requires `MF_PREVIEW_PORT` and reads the
-  shared credential from `MF_PREVIEW_CREDENTIAL_FILE`.
+- `apps/preview/config/runtime.exs` reads `/etc/med_fabric/preview.json` when
+  present outside tests; otherwise `MF_PREVIEW_CREDENTIAL_FILE` enables the
+  environment branch and requires `MF_PREVIEW_PORT`. Both branches validate
+  ports in `1..65535` and reject empty credentials. Exam also rejects an empty
+  Preview credential before enabling the sidecar.
+- A Preview Hex consumer must carry this configuration in the host project's
+  `config/runtime.exs`, or set `:mf_preview, :listen` and
+  `:med_ex, :rtc_provider` itself. Dependency runtime files are not loaded by Mix.
+- `elixir config/runtime_test.exs` covers environment port bounds, credential
+  trimming, and empty credential rejection without external services.
 - **Gap:** no single documented list of required settings and no test that boots
-  each app with each required value removed.
+  each app with each required value removed, or boots the `/etc` file-based
+  deployments in an isolated release environment. Those remain qualification gates.
 
 ## 2. Bounds and Backpressure
 

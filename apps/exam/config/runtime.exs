@@ -135,12 +135,13 @@ if settings != nil or System.get_env("MF_LAB") == "1" do
     unless uri.scheme == "http" and uri.host in ["127.0.0.1", "localhost"],
       do: raise("Preview feed must use a same-host listener")
 
-    config :mf_exam, :sidecar, %{
-      url: sidecar,
-      secret:
-        File.read!(required.("preview_credential_file", "MF_PREVIEW_CREDENTIAL_FILE"))
-        |> String.trim()
-    }
+    preview_secret =
+      required.("preview_credential_file", "MF_PREVIEW_CREDENTIAL_FILE")
+      |> File.read!()
+      |> String.trim()
+
+    if preview_secret == "", do: raise("Empty Preview credential")
+    config :mf_exam, :sidecar, %{url: sidecar, secret: preview_secret}
   end
 
   config :mf_exam, :lab, %{

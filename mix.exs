@@ -47,7 +47,7 @@ defmodule MedFabric.Workspace.MixProject do
 
   defp docs do
     guides =
-      ~w(guides/browser_to_record.md guides/media_verification.md guides/architecture_and_roadmap.md guides/handheld_demo.md guides/preview_isolation.md guides/releasing_exam.md)
+      ~w(guides/browser_to_record.md guides/media_verification.md guides/architecture_and_roadmap.md guides/handheld_demo.md guides/preview_isolation.md guides/releasing_exam.md guides/failure_matrix.md guides/operations_and_telemetry.md guides/security_and_clinical_boundary.md guides/core_api_and_compatibility.md)
 
     projects = [
       {"core/domain/README.md", filename: "domain", title: "Domain"},
@@ -112,10 +112,14 @@ defmodule MedFabric.Workspace.MixProject do
     """
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js"></script>
     <script>
-      document.addEventListener("DOMContentLoaded", () => {
+      window.addEventListener("exdoc:loaded", () => {
         const codeBlocks = document.querySelectorAll("pre code.mermaid");
         if (!codeBlocks.length || !window.mermaid) return;
-        mermaid.initialize({startOnLoad: false, securityLevel: "strict"});
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          theme: document.body.classList.contains("dark") ? "dark" : "default"
+        });
         const nodes = Array.from(codeBlocks, code => {
           const diagram = document.createElement("div");
           diagram.className = "mermaid";
