@@ -9,6 +9,8 @@ defmodule MedExHandheld.Spool do
     root = opts[:root]
     File.mkdir_p!(root)
     owner = lock!(root)
+    # Remove any uncommitted temp files left behind by a prior hard crash.
+    for tmp <- Path.wildcard(Path.join(root, "*/*.tmp.*")), do: File.rm(tmp)
     # Files carry their own checksum, including retained control/event identity.
     names = Path.wildcard(Path.join(root, "*/*.rec"))
     size = Enum.reduce(names, 0, fn f, n -> n + File.stat!(f).size end)
@@ -90,19 +92,49 @@ defmodule MedExHandheld.Spool do
   def put_and_advance(p, root, stream, seq, bytes, next_seq, next_sample)
       when is_binary(root) and stream in ["audio", "ecg", "events"] and is_integer(seq) and
              seq >= 0 do
-    path = Path.join([root, stream, to_string(seq) <> ".rec"])
-    framed = :crypto.hash(:sha256, bytes) <> bytes
-    tmp = stage_tmp!(Path.dirname(path), path, framed)
+    put_batch_and_advance(p, root, stream, [{seq, bytes, next_seq, next_sample}])
+  end
+
+  def put_batch_and_advance(_p, _root, _stream, []), do: :ok
+
+  def put_batch_and_advance(p, root, stream, items)
+      when is_binary(root) and stream in ["audio", "ecg", "events"] and is_list(items) do
+    dir = Path.join(root, stream)
+    File.mkdir_p!(dir)
+
+    staged =
+      case items do
+        [{seq, bytes, next_seq, next_sample}] ->
+          [stage_batch_item!(dir, seq, bytes, next_seq, next_sample)]
+
+        many ->
+          many
+          |> Enum.map(fn {seq, bytes, next_seq, next_sample} ->
+            Task.async(fn -> stage_batch_item!(dir, seq, bytes, next_seq, next_sample) end)
+          end)
+          |> Task.await_many(30_000)
+      end
 
     try do
-      GenServer.call(
-        p,
-        {:commit_and_advance, stream, seq, bytes, tmp, byte_size(framed), next_seq, next_sample},
-        30_000
-      )
+      GenServer.call(p, {:commit_batch_and_advance, stream, staged}, 30_000)
     after
-      File.rm(tmp)
+      for %{tmp: tmp} <- staged, do: File.rm(tmp)
     end
+  end
+
+  defp stage_batch_item!(dir, seq, bytes, next_seq, next_sample) do
+    path = Path.join(dir, to_string(seq) <> ".rec")
+    framed = :crypto.hash(:sha256, bytes) <> bytes
+    tmp = stage_tmp!(dir, path, framed)
+
+    %{
+      seq: seq,
+      bytes: bytes,
+      tmp: tmp,
+      framed_size: byte_size(framed),
+      next_seq: next_seq,
+      next_sample: next_sample
+    }
   end
 
   def watermark(p, stream), do: GenServer.call(p, {:watermark, stream})
@@ -138,18 +170,10 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  def handle_call(
-        {:commit_and_advance, name, seq, bytes, tmp, framed_size, next_seq, next_sample},
-        _,
-        s
-      ) do
-    case commit_staged_record(s, name, seq, bytes, tmp, framed_size) do
-      {:ok, next} ->
-        mark = %{"sequence" => next_seq, "sample" => next_sample, "done" => false}
-        {:reply, :ok, %{next | watermarks: Map.put(next.watermarks, name, mark)}}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, s}
+  def handle_call({:commit_batch_and_advance, name, staged}, _, s) do
+    case commit_staged_batch(s, name, staged) do
+      {:ok, next} -> {:reply, :ok, next}
+      {:error, reason, next} -> {:reply, {:error, reason}, next}
     end
   end
 
@@ -292,25 +316,49 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  defp commit_staged_record(s, name, seq, bytes, tmp, framed_size) do
-    f = record(s, name, seq)
-    dir = Path.dirname(f)
-    total = s.bytes + framed_size
+  defp commit_staged_batch(s, name, staged) do
+    dir = Path.join(s.root, name)
 
-    cond do
-      Path.dirname(tmp) != dir ->
-        {:error, :invalid_stage_path}
+    {status, state, synced?} =
+      Enum.reduce_while(staged, {:ok, s, false}, fn item, {:ok, acc, renamed?} ->
+        f = record(acc, name, item.seq)
+        total = acc.bytes + item.framed_size
 
-      File.exists?(f) ->
-        if read_record!(f) == bytes, do: {:ok, s}, else: {:error, :spool_conflict}
+        cond do
+          Path.dirname(item.tmp) != dir ->
+            {:halt, {{:error, :invalid_stage_path}, acc, renamed?}}
 
-      total > s.limit ->
-        {:error, :spool_full}
+          File.exists?(f) ->
+            if read_record!(f) == item.bytes do
+              mark = %{"sequence" => item.next_seq, "sample" => item.next_sample, "done" => false}
+              {:cont, {:ok, %{acc | watermarks: Map.put(acc.watermarks, name, mark)}, renamed?}}
+            else
+              {:halt, {{:error, :spool_conflict}, acc, renamed?}}
+            end
 
-      true ->
-        File.rename!(tmp, f)
-        sync_dir!(dir)
-        {:ok, %{s | bytes: total, maximum: max(s.maximum, total)}}
+          total > acc.limit ->
+            {:halt, {{:error, :spool_full}, acc, renamed?}}
+
+          true ->
+            File.rename!(item.tmp, f)
+            mark = %{"sequence" => item.next_seq, "sample" => item.next_sample, "done" => false}
+
+            next = %{
+              acc
+              | bytes: total,
+                maximum: max(acc.maximum, total),
+                watermarks: Map.put(acc.watermarks, name, mark)
+            }
+
+            {:cont, {:ok, next, true}}
+        end
+      end)
+
+    if synced?, do: sync_dir!(dir)
+
+    case status do
+      :ok -> {:ok, state}
+      {:error, reason} -> {:error, reason, state}
     end
   end
 

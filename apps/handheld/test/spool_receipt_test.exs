@@ -305,6 +305,29 @@ defmodule MedExHandheld.SpoolReceiptTest do
     assert Path.wildcard(Path.join([dir, "audio", "*.tmp.*"])) == []
   end
 
+  @tag :tmp_dir
+  test "batch staging commits multiple frames atomically and startup sweeps crash-leftover temps",
+       %{tmp_dir: dir} do
+    audio_dir = Path.join(dir, "audio")
+    File.mkdir_p!(audio_dir)
+    orphan = Path.join(audio_dir, "99.rec.tmp.crashed")
+    File.write!(orphan, "partial-uncommitted-bytes")
+
+    pid = start_spool(dir, :batch_restart)
+    refute File.exists?(orphan)
+    assert %{bytes: 0} = Spool.stats(pid)
+
+    items = for q <- 0..4, do: {q, frame(q, q), q + 1, q + 1}
+    assert :ok = Spool.put_batch_and_advance(pid, dir, "audio", items)
+    assert %{"sequence" => 5, "sample" => 5, "done" => false} = Spool.watermark(pid, "audio")
+    assert Path.wildcard(Path.join([dir, "audio", "*.tmp.*"])) == []
+
+    for q <- 0..4 do
+      assert {:ok, bytes} = Spool.get(pid, "audio", q)
+      assert bytes == frame(q, q)
+    end
+  end
+
   defp start_spool(dir, id) do
     start_supervised!(
       Supervisor.child_spec({Spool, root: dir, limit: 4096}, id: id, restart: :temporary)

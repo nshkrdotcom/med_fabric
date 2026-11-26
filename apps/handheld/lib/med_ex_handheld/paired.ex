@@ -71,11 +71,11 @@ defmodule MedExHandheld.Paired do
         })
 
       p = %{p | first: cursor["sample"], seq: cursor["sequence"]}
-      loop(c, spool, monitor, hub, n, p, spec)
+      loop(c, spool, monitor, hub, n, p, spec, [])
     end
   end
 
-  defp loop(c, spool, monitor, hub, n, p, spec) do
+  defp loop(c, spool, monitor, hub, n, p, spec, pending) do
     {rn, rd} = spec.sample_rate
     target = div((c["seconds"] || 60) * rn, rd)
     stop = Agent.get(hub, & &1.stop)
@@ -83,18 +83,26 @@ defmodule MedExHandheld.Paired do
     reset = source_reset?(c, n, p)
 
     if p.first >= target or stop or reset do
-      {_, res, []} = ReferencePeripheral.transact(p, "stop")
+      case flush_pending(c, spool, n, pending) do
+        :ok ->
+          {_, res, []} = ReferencePeripheral.transact(p, "stop")
 
-      :ok =
-        Spool.finish_source(
-          spool,
-          n,
-          String.to_integer(res["sequence"]),
-          String.to_integer(res["sample"]),
-          if(reset, do: "source_reset", else: nil)
-        )
+          :ok =
+            Spool.finish_source(
+              spool,
+              n,
+              String.to_integer(res["sequence"]),
+              String.to_integer(res["sample"]),
+              if(reset, do: "source_reset", else: nil)
+            )
+
+        {:error, :spool_full} ->
+          mark = Spool.watermark(spool, n)
+          Agent.update(hub, &Map.put(&1, :stop, true))
+          :ok = Spool.finish_source(spool, n, mark["sequence"], mark["sample"], "spool_full")
+      end
     else
-      capture_frame(c, spool, monitor, hub, n, p, spec, target)
+      capture_frame(c, spool, monitor, hub, n, p, spec, target, pending)
     end
   end
 
@@ -108,7 +116,7 @@ defmodule MedExHandheld.Paired do
     end
   end
 
-  defp capture_frame(c, spool, monitor, hub, n, p, spec, target) do
+  defp capture_frame(c, spool, monitor, hub, n, p, spec, target, pending) do
     {rn, rd} = spec.sample_rate
     wait_for_sample(c, n, p.first, spec.sample_rate)
     step = frame_step(c, n)
@@ -122,24 +130,41 @@ defmodule MedExHandheld.Paired do
     {next, record} =
       if gap, do: lost_frame(c, p, next, step, target, spec.sample_rate), else: {next, raw}
 
-    case Spool.put_and_advance(spool, c["spool"], n, p.seq, record, next.seq, next.first) do
-      :ok ->
-        if not gap and {n, spec.encoding} == {"audio", :s16le} do
-          publish_monitor_frame(c, monitor, hub, frame)
-        end
-
-        persist_stride = if n == "audio", do: 50, else: 10
-
-        if rem(next.seq, persist_stride) == 0 do
-          :ok = Spool.persist_watermark(spool, n)
-        end
-
-        loop(c, spool, monitor, hub, n, next, spec)
-
-      {:error, :spool_full} ->
-        Agent.update(hub, &Map.put(&1, :stop, true))
-        :ok = Spool.finish_source(spool, n, p.seq, p.first, "spool_full")
+    if not gap and {n, spec.encoding} == {"audio", :s16le} do
+      publish_monitor_frame(c, monitor, hub, frame)
     end
+
+    pending = [{p.seq, record, next.seq, next.first} | pending]
+    batch_size = if n == "audio" and not c["variant"], do: 5, else: 1
+    persist_stride = if n == "audio", do: 50, else: 10
+
+    flush? =
+      gap or next.first >= target or length(pending) >= batch_size or
+        rem(next.seq, persist_stride) == 0
+
+    if flush? do
+      case flush_pending(c, spool, n, pending) do
+        :ok ->
+          if rem(next.seq, persist_stride) == 0 do
+            :ok = Spool.persist_watermark(spool, n)
+          end
+
+          loop(c, spool, monitor, hub, n, next, spec, [])
+
+        {:error, :spool_full} ->
+          mark = Spool.watermark(spool, n)
+          Agent.update(hub, &Map.put(&1, :stop, true))
+          :ok = Spool.finish_source(spool, n, mark["sequence"], mark["sample"], "spool_full")
+      end
+    else
+      loop(c, spool, monitor, hub, n, next, spec, pending)
+    end
+  end
+
+  defp flush_pending(_c, _spool, _n, []), do: :ok
+
+  defp flush_pending(c, spool, n, pending) do
+    Spool.put_batch_and_advance(spool, c["spool"], n, Enum.reverse(pending))
   end
 
   defp wait_for_sample(c, n, first, {rn, rd}) do
