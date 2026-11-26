@@ -205,6 +205,6 @@ defmodule MedFabric.Preview.Peer do
   def terminate(_, s) do
     if s.peer, do: Preview.close(s.peer)
     :ets.delete(:mf_preview_feed, s.id)
-    :ok
+    Registry.unregister(MedFabric.Preview.Registry, s.id)
   end
 end
