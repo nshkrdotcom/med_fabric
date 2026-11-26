@@ -10,15 +10,18 @@ defmodule MedFabric.Exam.PreviewGateway do
   end
 
   def feed(id, raw) do
-    if (table = :ets.whereis(__MODULE__)) != :undefined do
-      try do
-        :ets.insert(table, {id, System.monotonic_time(:millisecond), raw})
-      rescue
-        ArgumentError -> :ok
-      end
+    case :ets.whereis(__MODULE__) do
+      :undefined -> :ok
+      table -> insert_latest(table, id, raw)
     end
 
     :ok
+  end
+
+  defp insert_latest(table, id, raw) do
+    :ets.insert(table, {id, System.monotonic_time(:millisecond), raw})
+  rescue
+    ArgumentError -> :ok
   end
 
   def handle_info(:drain, sidecar) do

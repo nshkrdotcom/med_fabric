@@ -4,7 +4,7 @@ defmodule MfExam.MixProject do
   def project do
     [
       app: :mf_exam,
-      version: "0.1.1",
+      version: "0.2.0",
       build_path: "_build",
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
@@ -32,7 +32,7 @@ defmodule MfExam.MixProject do
       {:db_connection, "~> 2.10.3"},
       {:decimal, "~> 3.2"},
       {:jason, "~> 1.4"},
-      {:med_ex, "~> 0.2.1", [hex: "med_ex", repo: "hexpm"]},
+      {:med_ex, "~> 0.3.0", [hex: "med_ex", repo: "hexpm"]},
       {:phoenix, "~> 1.8"},
       {:phoenix_html, "~> 4.2"},
       {:phoenix_live_view, "~> 1.0"},
@@ -61,6 +61,7 @@ defmodule MfExam.MixProject do
         "apps/exam/guides/getting_started.md",
         "apps/exam/guides/handheld_integration.md",
         "config",
+        "guides",
         "lib",
         "mix.exs",
         "priv"
@@ -78,12 +79,16 @@ defmodule MfExam.MixProject do
              "apps/exam/guides/getting_started.md",
              "apps/exam/guides/browser_to_record.md",
              "apps/exam/guides/handheld_integration.md",
-             "apps/exam/guides/architecture.md"
+             "apps/exam/guides/architecture.md",
+             "guides/failure_matrix.md",
+             "guides/operations_and_telemetry.md",
+             "guides/security_and_clinical_boundary.md",
+             "guides/core_api_and_compatibility.md"
            ]},
           {"Release", ["apps/exam/CHANGELOG.md", "apps/exam/LICENSE"]}
         ],
         assets: %{"apps/exam/assets" => "assets"},
-        source_ref: "mf_exam-v0.1.1",
+        source_ref: "mf_exam-v0.2.0",
         source_url: "https://github.com/nshkrdotcom/med_fabric",
         logo: "apps/exam/assets/exam.svg",
         main: "readme",
@@ -94,13 +99,17 @@ defmodule MfExam.MixProject do
           {"apps/exam/guides/architecture.md", [title: "Architecture"]},
           {"apps/exam/guides/browser_to_record.md", [title: "Browser to Record"]},
           {"apps/exam/guides/getting_started.md", [title: "Getting Started"]},
-          {"apps/exam/guides/handheld_integration.md", [title: "Handheld Integration"]}
+          {"apps/exam/guides/handheld_integration.md", [title: "Handheld Integration"]},
+          {"guides/core_api_and_compatibility.md", [title: "Core API and Compatibility"]},
+          {"guides/failure_matrix.md", [title: "Failure Matrix"]},
+          {"guides/operations_and_telemetry.md", [title: "Operations and Telemetry"]},
+          {"guides/security_and_clinical_boundary.md", [title: "Security and Clinical Boundary"]}
         ]
       ],
       :before_closing_body_tag,
       fn
         :html ->
-          "<script src=\"https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js\"></script>\n<script>\ndocument.addEventListener(\"DOMContentLoaded\", () => {\n  const diagrams = document.querySelectorAll(\"pre code.mermaid\");\n  if (!diagrams.length || !window.mermaid) return;\n  mermaid.initialize({startOnLoad: false, securityLevel: \"strict\"});\n  for (const code of diagrams) {\n    const diagram = document.createElement(\"div\");\n    diagram.className = \"mermaid\";\n    diagram.textContent = code.textContent;\n    code.parentElement.replaceWith(diagram);\n  }\n  mermaid.run();\n});\n</script>\n"
+          "<script src=\"https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js\"></script>\n<script>\nwindow.addEventListener(\"exdoc:loaded\", () => {\nconst codeBlocks = document.querySelectorAll(\"pre code.mermaid\");\nif (!codeBlocks.length || !window.mermaid) return;\nmermaid.initialize({\nstartOnLoad: false,\nsecurityLevel: \"strict\",\ntheme: document.body.classList.contains(\"dark\") ? \"dark\" : \"default\"\n});\nconst nodes = Array.from(codeBlocks, code => {\nconst diagram = document.createElement(\"div\");\ndiagram.className = \"mermaid\";\ndiagram.textContent = code.textContent;\ncode.parentElement.replaceWith(diagram);\nreturn diagram;\n});\nmermaid.run({nodes});\n});\n</script>\n"
 
         _ ->
           ""

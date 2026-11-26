@@ -4,7 +4,7 @@
     "package": {
       "name": "mf_exam",
       "otp_app": "mf_exam",
-      "version": "0.1.1"
+      "version": "0.2.0"
     }
   },
   "graph": {
@@ -14,7 +14,7 @@
       "core/interop",
       "core/store"
     ],
-    "digest": "5fa44bfa26632f319783f1bc58b781d583ce52c4d4197c90776e2dfc28031138",
+    "digest": "598919f9cafce780c5bb451e1ad7d28ebeaa9bb97469f6e1737b19c7858aff7a",
     "edges": [
       {
         "app": "mf_domain",
@@ -70,11 +70,11 @@
     "violations": []
   },
   "manifest": {
-    "digest": "3ea85815df814a8929734b608cd7d5324ef82df21fc5e386a7d94023526ae451",
+    "digest": "0ba8b0f2af95befaebeb9198415af2000ea6440325a6245733c063fd4b6d1ab1",
     "path": "build_support/weld.exs"
   },
   "projection": {
-    "artifact_id": "cffedebb491b3c3b412cca2e59078efaa85b8fad80a70f77106c47201c881799",
+    "artifact_id": "b38b9af16a0f121cfa09c2afc3d98b6051d01792174586ef30b0ce07cfa486c1",
     "build_path": ".weld/full/mf_exam/project",
     "config_warnings": [
       {
@@ -106,6 +106,10 @@
       "config/sources/apps_exam/runtime.exs",
       "config/sources/apps_exam/test.exs",
       "config/test.exs",
+      "guides/core_api_and_compatibility.md",
+      "guides/failure_matrix.md",
+      "guides/operations_and_telemetry.md",
+      "guides/security_and_clinical_boundary.md",
       "lib/mf_domain.ex",
       "lib/mf_domain/device_measurement.ex",
       "lib/mf_domain/evidence.ex",
@@ -160,6 +164,9 @@
       "priv/sql/006_concurrent_device_profiles.sql",
       "priv/sql/007_one_recording_per_encounter_profile.sql",
       "priv/static/exam.js",
+      "priv/weld/config/runtime_sources/apps_exam/config.exs",
+      "priv/weld/config/runtime_sources/apps_exam/runtime.exs",
+      "priv/weld/config/runtime_sources/apps_exam/test.exs",
       "test/apps_exam/artifact_test.exs",
       "test/apps_exam/clock_observations_test.exs",
       "test/apps_exam/endpoint_test.exs",
@@ -176,7 +183,7 @@
       "test/test_helper.exs"
     ],
     "file_remaps": [],
-    "git_revision": "97d3ac6536f3401a04ed7394c0782db53755dcb3",
+    "git_revision": "3576ef1502f20350347dfbcb67e43c357a4928cf",
     "helper_transformations": [
       {
         "exunit_options": [],
@@ -222,6 +229,7 @@
       "apps/exam/guides/getting_started.md",
       "apps/exam/guides/handheld_integration.md",
       "config",
+      "guides",
       "lib",
       "mix.exs",
       "priv"
@@ -410,7 +418,7 @@
       }
     ],
     "test_support_projects": [],
-    "tree_digest": "02a2b1d03a9ccbcfb3bddefdfd826f76c72dcb4c605519bf3c68f7f5d6a9b565",
+    "tree_digest": "dc59a081fce814c4a38b1e061df42b7848b073f9501da4bc65a4a59d907dd7c6",
     "verification_files": [
       ".formatter.exs",
       "README.md",
@@ -432,6 +440,10 @@
       "config/sources/apps_exam/runtime.exs",
       "config/sources/apps_exam/test.exs",
       "config/test.exs",
+      "guides/core_api_and_compatibility.md",
+      "guides/failure_matrix.md",
+      "guides/operations_and_telemetry.md",
+      "guides/security_and_clinical_boundary.md",
       "lib/mf_domain.ex",
       "lib/mf_domain/device_measurement.ex",
       "lib/mf_domain/evidence.ex",
@@ -486,6 +498,9 @@
       "priv/sql/006_concurrent_device_profiles.sql",
       "priv/sql/007_one_recording_per_encounter_profile.sql",
       "priv/static/exam.js",
+      "priv/weld/config/runtime_sources/apps_exam/config.exs",
+      "priv/weld/config/runtime_sources/apps_exam/runtime.exs",
+      "priv/weld/config/runtime_sources/apps_exam/test.exs",
       "test/apps_exam/artifact_test.exs",
       "test/apps_exam/clock_observations_test.exs",
       "test/apps_exam/endpoint_test.exs",
@@ -501,7 +516,7 @@
       "test/support/weld_helpers/core_store_test_helper.exs",
       "test/test_helper.exs"
     ],
-    "verification_input_identity": "19d6b2a2145f8948793b0e97699220805de86cf2b809041399eedb5003ac84ee"
+    "verification_input_identity": "9024b5fe16fca26745cd2c0dfa5e42048e32582670cd7d758bd37481c81fcc28"
   },
   "source": {
     "inventory": [
@@ -774,6 +789,42 @@
         "publish": true,
         "source": "apps/exam/config/test.exs",
         "target": "config/test.exs"
+      },
+      {
+        "directory": false,
+        "kind": "docs",
+        "operation": "link_or_copy",
+        "owner": ".",
+        "publish": true,
+        "source": "guides/core_api_and_compatibility.md",
+        "target": "guides/core_api_and_compatibility.md"
+      },
+      {
+        "directory": false,
+        "kind": "docs",
+        "operation": "link_or_copy",
+        "owner": ".",
+        "publish": true,
+        "source": "guides/failure_matrix.md",
+        "target": "guides/failure_matrix.md"
+      },
+      {
+        "directory": false,
+        "kind": "docs",
+        "operation": "link_or_copy",
+        "owner": ".",
+        "publish": true,
+        "source": "guides/operations_and_telemetry.md",
+        "target": "guides/operations_and_telemetry.md"
+      },
+      {
+        "directory": false,
+        "kind": "docs",
+        "operation": "link_or_copy",
+        "owner": ".",
+        "publish": true,
+        "source": "guides/security_and_clinical_boundary.md",
+        "target": "guides/security_and_clinical_boundary.md"
       },
       {
         "directory": false,
@@ -1515,6 +1566,33 @@
       },
       {
         "directory": false,
+        "kind": "runtime",
+        "operation": "copy",
+        "owner": "apps/exam",
+        "publish": true,
+        "source": "apps/exam/config/config.exs",
+        "target": "priv/weld/config/runtime_sources/apps_exam/config.exs"
+      },
+      {
+        "directory": false,
+        "kind": "runtime",
+        "operation": "copy",
+        "owner": "apps/exam",
+        "publish": true,
+        "source": "apps/exam/config/runtime.exs",
+        "target": "priv/weld/config/runtime_sources/apps_exam/runtime.exs"
+      },
+      {
+        "directory": false,
+        "kind": "runtime",
+        "operation": "copy",
+        "owner": "apps/exam",
+        "publish": true,
+        "source": "apps/exam/config/test.exs",
+        "target": "priv/weld/config/runtime_sources/apps_exam/test.exs"
+      },
+      {
+        "directory": false,
         "kind": "test",
         "operation": "link_or_copy",
         "owner": "apps/exam",
@@ -1922,7 +2000,7 @@
         "target": "config/sources/apps_exam/config.exs"
       },
       {
-        "generated_digest": "eeddd02a6373a849c9705300c09c22fe2280a7b690dd0db440d6590c05af1815",
+        "generated_digest": "18b778a8b0eb7ea1bf572f41b5e0d3924c8569aa7d494619931eee06f63da8b6",
         "inputs": [
           {
             "owner": "apps/exam",
@@ -1967,6 +2045,58 @@
         "operation": "generate",
         "publish": true,
         "target": "config/test.exs"
+      },
+      {
+        "generated_digest": null,
+        "inputs": [
+          {
+            "owner": ".",
+            "source": "guides/core_api_and_compatibility.md"
+          }
+        ],
+        "kind": "docs",
+        "operation": "link_or_copy",
+        "publish": true,
+        "target": "guides/core_api_and_compatibility.md"
+      },
+      {
+        "generated_digest": null,
+        "inputs": [
+          {
+            "owner": ".",
+            "source": "guides/failure_matrix.md"
+          }
+        ],
+        "kind": "docs",
+        "operation": "link_or_copy",
+        "publish": true,
+        "target": "guides/failure_matrix.md"
+      },
+      {
+        "generated_digest": null,
+        "inputs": [
+          {
+            "owner": ".",
+            "source": "guides/operations_and_telemetry.md"
+          }
+        ],
+        "kind": "docs",
+        "operation": "link_or_copy",
+        "publish": true,
+        "target": "guides/operations_and_telemetry.md"
+      },
+      {
+        "generated_digest": null,
+        "inputs": [
+          {
+            "owner": ".",
+            "source": "guides/security_and_clinical_boundary.md"
+          }
+        ],
+        "kind": "docs",
+        "operation": "link_or_copy",
+        "publish": true,
+        "target": "guides/security_and_clinical_boundary.md"
       },
       {
         "generated_digest": null,
@@ -2021,7 +2151,7 @@
         "target": "lib/mf_exam.ex"
       },
       {
-        "generated_digest": "f547ffb52e5df99069a17a97c52b823e1bb548d16152e900f35f7c69cff98e43",
+        "generated_digest": "f0ca9d712db1d9fd753bb8f3fdf4fa93b9618524f9784298633caa4252722bc2",
         "inputs": [
           {
             "owner": "apps/exam",
@@ -2623,7 +2753,7 @@
         "target": "lib/mf_store/records.ex"
       },
       {
-        "generated_digest": "16cd13a137706bb0a61f61fd5e00fce792c96bf6e09ec51002990faa1e5c485a",
+        "generated_digest": "bc33608e6a475442c9969c79fba6d24285cb4321270c51c9345226f2b68b128e",
         "inputs": [
           {
             "owner": "apps/exam",
@@ -2781,6 +2911,45 @@
         "operation": "link_or_copy",
         "publish": true,
         "target": "priv/static/exam.js"
+      },
+      {
+        "generated_digest": null,
+        "inputs": [
+          {
+            "owner": "apps/exam",
+            "source": "apps/exam/config/config.exs"
+          }
+        ],
+        "kind": "runtime",
+        "operation": "copy",
+        "publish": true,
+        "target": "priv/weld/config/runtime_sources/apps_exam/config.exs"
+      },
+      {
+        "generated_digest": null,
+        "inputs": [
+          {
+            "owner": "apps/exam",
+            "source": "apps/exam/config/runtime.exs"
+          }
+        ],
+        "kind": "runtime",
+        "operation": "copy",
+        "publish": true,
+        "target": "priv/weld/config/runtime_sources/apps_exam/runtime.exs"
+      },
+      {
+        "generated_digest": null,
+        "inputs": [
+          {
+            "owner": "apps/exam",
+            "source": "apps/exam/config/test.exs"
+          }
+        ],
+        "kind": "runtime",
+        "operation": "copy",
+        "publish": true,
+        "target": "priv/weld/config/runtime_sources/apps_exam/test.exs"
       },
       {
         "generated_digest": null,
@@ -3046,7 +3215,7 @@
     {
       "env": "dev",
       "status": "ok",
-      "task": "docs --warnings-as-errors"
+      "task": "docs --warnings-as-errors --output doc"
     },
     {
       "env": "dev",

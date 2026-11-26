@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0 - 2026-11-25
+
+- Reject empty Preview signing credentials and include the hardening guides in projected package docs.
+- Support file-based deployment configuration (`/etc/med_fabric/exam.json`).
+- Remove the legacy Membrane `:ratio` Git override now that `med_ex_opus ~> 0.2.0` uses a standalone C `libopus` Port encoder, allowing combined Mix projects to resolve cleanly from Hex.
+- Require `med_ex ~> 0.3.0` (and `med_ex_opus ~> 0.2.0`, `med_ex_rtc ~> 0.2.0` when legacy media is enabled).
+
 ## 0.1.1 - 2026-11-25
 
 - Verify segment occurrence, contiguous review coverage, and fenced capacity completion.

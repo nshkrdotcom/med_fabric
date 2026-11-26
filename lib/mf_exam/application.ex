@@ -73,6 +73,6 @@ defmodule MfExam.Application do
   end
 
   defp artifact_path(relative_path) do
-    Path.expand(Path.join(["..", "..", relative_path]), __DIR__)
+    Application.app_dir(:mf_exam, Path.join(["priv", "weld", relative_path]))
   end
 end

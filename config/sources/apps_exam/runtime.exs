@@ -1,7 +1,53 @@
 import Config
+path = "/etc/med_fabric/exam.json"
 
-if System.get_env("MF_LAB") == "1" do
-  encounters = System.fetch_env!("MF_ENCOUNTERS_FILE") |> File.read!() |> Jason.decode!()
+settings =
+  if config_env() != :test and File.regular?(path) do
+    case path |> File.read!() |> Elixir.JSON.decode!() do
+      %{} = settings -> settings
+      _ -> raise "Exam deployment configuration must be a JSON object"
+    end
+  end
+
+if settings != nil or System.get_env("MF_LAB") == "1" do
+  get = fn key, env, default ->
+    if settings do
+      Map.get(settings, key, default)
+    else
+      System.get_env(env, default)
+    end
+  end
+
+  required = fn key, env ->
+    if settings do
+      Map.fetch!(settings, key)
+    else
+      System.fetch_env!(env)
+    end
+  end
+
+  secret = fn key, env ->
+    if settings do
+      case settings[key <> "_file"] do
+        nil ->
+          nil
+
+        file ->
+          value = file |> File.read!() |> String.trim()
+
+          if value == "" do
+            raise "Empty #{key} credential"
+          end
+
+          value
+      end
+    else
+      System.get_env(env)
+    end
+  end
+
+  encounters =
+    required.("encounters_file", "MF_ENCOUNTERS_FILE") |> File.read!() |> Elixir.JSON.decode!()
 
   entries =
     for entry <- encounters, into: %{} do
@@ -26,20 +72,25 @@ if System.get_env("MF_LAB") == "1" do
     end
 
   unless is_list(encounters) and encounters != [] and map_size(entries) == length(encounters) do
-    raise "MF_ENCOUNTERS_FILE must contain a nonempty array with unique exam IDs"
+    raise "encounters file must contain a nonempty array with unique exam IDs"
   end
 
-  port = String.to_integer(System.get_env("MF_HTTP_PORT", "4000"))
-  origin = System.get_env("MF_PUBLIC_ORIGIN", "http://localhost:#{port}")
+  port = to_string(get.("http_port", "MF_HTTP_PORT", "4000")) |> String.to_integer()
+
+  unless port in 1..65535 do
+    raise "Invalid Exam HTTP port"
+  end
+
+  origin = get.("public_origin", "MF_PUBLIC_ORIGIN", "http://localhost:#{port}")
   uri = URI.new!(origin)
   local? = uri.scheme == "http" and uri.host in ["localhost", "127.0.0.1"] and uri.port == port
 
   unless (uri.host && (local? or uri.scheme == "https")) and uri.path in [nil, "", "/"] and
            is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment) do
-    raise "MF_PUBLIC_ORIGIN must be a localhost HTTP origin or a public HTTPS origin"
+    raise "public origin must be a localhost HTTP origin or a public HTTPS origin"
   end
 
-  proxy_secret = System.get_env("MF_PROXY_SECRET")
+  proxy_secret = secret.("proxy_secret", "MF_PROXY_SECRET")
 
   if local? do
     keys = Enum.flat_map(encounters, &[&1["patient_key"], &1["clinician_key"]])
@@ -50,12 +101,12 @@ if System.get_env("MF_LAB") == "1" do
     end
   else
     unless is_binary(proxy_secret) and byte_size(proxy_secret) >= 32 do
-      raise "HTTPS operation requires MF_PROXY_SECRET and an authenticating loopback reverse proxy"
+      raise "HTTPS operation requires a proxy secret and an authenticating loopback reverse proxy"
     end
   end
 
   urls =
-    System.get_env("MF_TURN_URLS", "")
+    get.("turn_urls", "MF_TURN_URLS", "")
     |> String.split(",", trim: true)
     |> Enum.map(&String.trim/1)
 
@@ -63,16 +114,16 @@ if System.get_env("MF_LAB") == "1" do
     raise "MF_TURN_URLS must contain turn: or turns: URLs"
   end
 
-  turn_secret = System.get_env("MF_TURN_SECRET")
-  relay? = System.get_env("MF_RELAY_ONLY") == "1"
+  turn_secret = secret.("turn_secret", "MF_TURN_SECRET")
+  relay? = get.("relay_only", "MF_RELAY_ONLY", nil) in [true, "1"]
 
   if (relay? or urls != []) and
        (urls == [] or !is_binary(turn_secret) or byte_size(turn_secret) < 32) do
-    raise "TURN requires MF_TURN_URLS and a 32-byte or longer MF_TURN_SECRET"
+    raise "TURN requires URLs and a secret of at least 32 bytes"
   end
 
-  cert = System.get_env("MF_DEVICE_TLS_CERTFILE")
-  key = System.get_env("MF_DEVICE_TLS_KEYFILE")
+  cert = get.("device_tls_certfile", "MF_DEVICE_TLS_CERTFILE", nil)
+  key = get.("device_tls_keyfile", "MF_DEVICE_TLS_KEYFILE", nil)
 
   if is_nil(cert) != is_nil(key) do
     raise "Configure both device TLS certificate and key"
@@ -80,28 +131,38 @@ if System.get_env("MF_LAB") == "1" do
 
   if cert do
     {:ok, bind_ip} =
-      :inet.parse_address(String.to_charlist(System.get_env("MF_DEVICE_BIND_IP", "127.0.0.1")))
+      :inet.parse_address(
+        String.to_charlist(get.("device_bind_ip", "MF_DEVICE_BIND_IP", "127.0.0.1"))
+      )
+
+    tls_port =
+      to_string(get.("device_tls_port", "MF_DEVICE_TLS_PORT", "4443")) |> String.to_integer()
+
+    unless tls_port in 1..65535 do
+      raise "Invalid Exam device TLS port"
+    end
 
     config :mf_exam, MedFabric.ExamWeb.Endpoint,
-      https: [
-        ip: bind_ip,
-        port: String.to_integer(System.get_env("MF_DEVICE_TLS_PORT", "4443")),
-        certfile: cert,
-        keyfile: key
-      ]
+      https: [ip: bind_ip, port: tls_port, certfile: cert, keyfile: key]
   end
 
-  if sidecar = System.get_env("MF_PREVIEW_URL") do
+  if sidecar = get.("preview_url", "MF_PREVIEW_URL", nil) do
     uri = URI.new!(sidecar)
 
     unless uri.scheme == "http" and uri.host in ["127.0.0.1", "localhost"] do
       raise "Preview feed must use a same-host listener"
     end
 
-    config :mf_exam, :sidecar, %{
-      url: sidecar,
-      secret: File.read!(System.fetch_env!("MF_PREVIEW_CREDENTIAL_FILE")) |> String.trim()
-    }
+    preview_secret =
+      required.("preview_credential_file", "MF_PREVIEW_CREDENTIAL_FILE")
+      |> File.read!()
+      |> String.trim()
+
+    if preview_secret == "" do
+      raise "Empty Preview credential"
+    end
+
+    config :mf_exam, :sidecar, %{url: sidecar, secret: preview_secret}
   end
 
   config :mf_exam, :lab, %{
@@ -115,8 +176,9 @@ if System.get_env("MF_LAB") == "1" do
         proxy_secret
       end,
     turn: %{urls: urls, secret: turn_secret, relay?: relay?},
-    database_url: System.fetch_env!("DATABASE_URL"),
-    artifact_dir: Path.expand(System.fetch_env!("MF_ARTIFACT_DIR"))
+    database_url:
+      secret.("database_url", "DATABASE_URL") || raise("Missing database_url credential"),
+    artifact_dir: Path.expand(required.("artifact_dir", "MF_ARTIFACT_DIR"))
   }
 
   config :mf_exam, MedFabric.ExamWeb.Endpoint,
@@ -133,10 +195,12 @@ if System.get_env("MF_LAB") == "1" do
        end),
     url: [scheme: uri.scheme, host: uri.host, port: uri.port],
     http: [ip: {127, 0, 0, 1}, port: port],
-    secret_key_base: System.fetch_env!("MF_SECRET_KEY_BASE")
+    secret_key_base:
+      secret.("secret_key_base", "MF_SECRET_KEY_BASE") ||
+        raise("Missing secret_key_base credential")
 end
 
-if System.get_env("MF_EXAM_LEGACY_MEDIA") == "1" do
+if is_nil(settings) and System.get_env("MF_EXAM_LEGACY_MEDIA") == "1" do
   config :med_ex, :rtc_provider, MedEx.RTC.Provider
   config :med_ex, :preview_provider, MedEx.Opus.Provider
 end
