@@ -438,6 +438,10 @@ defmodule MedExHandheld.Spool do
     end
   end
 
+  defp verify_progress(%{fence: fence} = last, %{fence: fence} = receipt),
+    do: MedEx.Serialization.receipt_progress(last, receipt)
+
+  # The active generation pins the successor journal and fence before this comparison.
   defp verify_progress(%{fence: _} = last, receipt),
     do: MedEx.Serialization.receipt_progress(last, receipt, :verified_handoff)
 

@@ -2,8 +2,8 @@
 
 ## 0.3.1 — 2026-11-26
 
+- Preserve fresh monitor audio across gap-only batches and distinguish ineligible clinical measurements in Exam.
 - Use MedEx receipt progression in Exam and Handheld, retire ingress after a failed database transaction, and report FHIR mapping failures separately from clinical eligibility.
-
 - Isolate local monitor processing from authoritative paired capture. Durable spool batches, upload and operator stop continue through a stalled or failed monitor.
 
 ## 0.3.0 — 2026-11-25

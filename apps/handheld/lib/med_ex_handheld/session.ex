@@ -361,6 +361,8 @@ defmodule MedExHandheld.Session do
     # Avoid accumulating calls behind an unavailable device monitor.
     with {:message_queue_len, n} when n <= 1 <- Process.info(pid, :message_queue_len) do
       GenServer.call(pid, request, 75)
+    else
+      _ -> nil
     end
   catch
     :exit, _ -> nil
@@ -379,9 +381,9 @@ defmodule MedExHandheld.Session do
 
   defp send_latest(s, hub, last) do
     case :ets.lookup(hub, :latest) do
-      [{:latest, at, frames}] when at != last ->
+      [{:latest, batch_id, at, frames}] when batch_id != last ->
         send_batch(s, at, frames)
-        send_latest(s, hub, at)
+        send_latest(s, hub, batch_id)
 
       _ ->
         Process.sleep(10)

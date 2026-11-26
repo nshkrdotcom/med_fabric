@@ -1,6 +1,7 @@
 defmodule MedExHandheld.Monitor do
   @moduledoc "Persistent per-boot absolute monitor setting, applied at an observed audio-frame boundary."
   use GenServer, restart: :temporary
+  require Logger
   alias MedEx.Serialization
   alias MedEx.Wire.FrameV1
   alias MedExHandheld.Spool
@@ -26,6 +27,10 @@ defmodule MedExHandheld.Monitor do
 
     if state["boot"] != boot, do: raise("monitor boot domain changed")
     {:noreply, %{file: file, state: state, pending: nil, config: config}}
+  rescue
+    error in [JSON.DecodeError, File.Error, RuntimeError] ->
+      Logger.warning("Handheld monitor unavailable at startup (#{inspect(error.__struct__)})")
+      {:stop, :normal, nil}
   end
 
   def handle_call({:command, %{"id" => id} = c}, _, %{pending: %{"id" => id} = pending} = s) do
@@ -109,7 +114,11 @@ defmodule MedExHandheld.Monitor do
           {nil, s}
       end)
 
-    :ets.insert(table, {:latest, captured_at, Enum.reject(frames, &is_nil/1)})
+    case Enum.reject(frames, &is_nil/1) do
+      [] -> :ok
+      audio -> :ets.insert(table, {:latest, make_ref(), captured_at, audio})
+    end
+
     {:noreply, next}
   end
 

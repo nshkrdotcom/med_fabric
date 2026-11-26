@@ -15,7 +15,7 @@ def exact_coverage:
 .scenarios.baseline.coverage.audio.samples == 2880000 and
 .scenarios.baseline.coverage.ecg.samples == 15000 and
 ([.scenarios.baseline.clock_holdouts[] | .tested > 0 and .violations == 0] | all) and
-(.scenarios as $s | ["local-monitor-stall", "local-monitor-kill"] |
+(.scenarios as $s | ["local-monitor-stall", "local-monitor-kill", "local-monitor-startup"] |
   all(.[]; $s[.].coverage.audio.samples == 288000 and $s[.].coverage.ecg.samples == 1500)) and
 .scenarios.baseline.browser_review_verified and
 .scenarios["source-gap"].browser_review_verified and
@@ -29,7 +29,7 @@ def exact_coverage:
 .scenarios["spool-capacity"].coverage != null and
 (.configured_limits as $limit | [.measured_maxima | to_entries[] | .value <= $limit[.key]] | all) and
 (.scenarios as $cases |
-  ["baseline", "local-monitor-stall", "local-monitor-kill", "local-monitor-stop", "source-gap", "multi-sequence-gap", "concurrent-encounter", "rational-s24", "accepted_before_durable", "durable_before_ack",
+  ["baseline", "local-monitor-startup", "local-monitor-stall", "local-monitor-kill", "local-monitor-stop", "source-gap", "multi-sequence-gap", "concurrent-encounter", "rational-s24", "accepted_before_durable", "durable_before_ack",
    "journal_sync", "after_object_install", "manifest_install", "db_completion", "spool-capacity",
    "source-reset", "handheld-restart"] |
   map($cases[.] | .raw_payload_digests == .oracle_payload_digests and

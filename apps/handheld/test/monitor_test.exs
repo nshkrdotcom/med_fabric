@@ -42,6 +42,40 @@ defmodule MedExHandheld.MonitorTest do
     assert {:result, %{"status" => "applied"}} = GenServer.call(monitor, {:command, command})
   end
 
+  @tag :tmp_dir
+  test "same-tick audio batches are distinct and a gap preserves the latest audio", %{
+    tmp_dir: dir
+  } do
+    monitor = start_supervised!({Monitor, {dir, "boot"}})
+    table = :ets.new(:monitor_batches, [:public])
+
+    publish = fn bytes ->
+      :ets.insert(table, {:batch, 123, [{0, bytes, nil, nil}]})
+      send(monitor, {:batch, table})
+      :sys.get_state(monitor)
+      :ets.lookup_element(table, :latest, 2)
+    end
+
+    frame = %MedEx.Wire.FrameV1{
+      stream_number: 1,
+      source_epoch: 0,
+      config_epoch: 0,
+      sequence: 0,
+      first_sample: 0,
+      sample_count: 1,
+      payload: <<1, 0>>
+    }
+
+    {:ok, one} = MedEx.Wire.FrameV1.encode(frame)
+    {:ok, two} = MedEx.Wire.FrameV1.encode(%{frame | sequence: 1, first_sample: 1})
+    first = publish.(one)
+    second = publish.(two)
+    refute first == second
+    assert ^second = publish.("gap")
+    assert [{:latest, ^second, 123, [latest]}] = :ets.lookup(table, :latest)
+    assert {:ok, %{sequence: 1, stream_number: 3}} = MedEx.Wire.FrameV1.decode(latest)
+  end
+
   defp command(id, epoch) do
     %{
       "id" => id,

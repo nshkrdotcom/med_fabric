@@ -2,8 +2,8 @@
 
 ## 0.2.1 — 2026-11-26
 
+- Keep distinct monitor batches captured in the same millisecond and preserve unread audio across gap-only batches.
 - Use MedEx receipt progression before verifying local spool coverage and reclaiming records.
-
 - Isolate local monitor processing from authoritative paired capture. Durable spool batches, upload and operator stop continue through a stalled or failed monitor.
 
 ## 0.2.0 - 2026-11-25

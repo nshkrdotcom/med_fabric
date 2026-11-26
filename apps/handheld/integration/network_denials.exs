@@ -100,6 +100,8 @@ Transport.close(stream)
 :ok = Transport.send_frame(stream, {:binary, changed})
 denied.(Transport.recv(stream))
 Transport.close(stream)
+{{:ok, %{"type" => "stream_finished", "durable_sample" => "1"}}, sealed} = open.(binding.(new))
+Transport.close(sealed)
 Transport.close(newctl)
 
 File.write!(

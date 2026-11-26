@@ -20,6 +20,9 @@ defmodule MedFabric.ExamWeb.DeviceAction do
         v when v in [:ok, {:ok, :ok}] ->
           send_resp(c, 200, "saved")
 
+        {:error, :ineligible_metric} ->
+          send_resp(c, 409, "Selected measurement is ineligible for clinical acceptance")
+
         {:error, :metric_not_exportable} ->
           send_resp(c, 409, "Metric could not be represented for FHIR export")
 

@@ -75,6 +75,10 @@ defmodule MedExHandheld.SpoolReceiptTest do
     pid = start_supervised!({Spool, root: dir, limit: 4096})
     first = receipt(0, 1)
     assert :ok = Spool.activate(pid, "audio", 5, spec(), first)
+    watermark(dir, 0)
+    assert :ok = Spool.ack(pid, "audio", 5, first)
+    stop_supervised!(Spool)
+    pid = start_supervised!({Spool, root: dir, limit: 4096})
     changed = %{first | "fence" => "successor", "journal_id" => "successor-journal"}
     assert {:error, :stale_generation} = Spool.activate(pid, "audio", 4, spec(), first)
     assert {:error, :stale_generation} = Spool.activate(pid, "audio", 5, spec(), changed)

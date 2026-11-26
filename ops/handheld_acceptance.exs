@@ -40,9 +40,9 @@ defmodule MedFabric.HandheldAcceptance do
 
     check!(
       rest in [[], ["acceptance"]] and errors == [] and
-        suite in (@suites ++ ["all", "soak", @checkpoint_suite]) and
+        suite in (@suites ++ ["all", "soak", "paired-faults", @checkpoint_suite]) and
         preview in ["off", "isolated"],
-      "Usage: elixir ops/handheld_acceptance.exs --suite paired|spot-check|legacy-browser|checkpoint-recovery|all|soak --preview off|isolated [--fhir hapi] [--run-dir DIR] [--report FILE] [--seconds 3..1740]"
+      "Usage: elixir ops/handheld_acceptance.exs --suite paired|spot-check|legacy-browser|paired-faults|checkpoint-recovery|all|soak --preview off|isolated [--fhir hapi] [--run-dir DIR] [--report FILE] [--seconds 3..1740]"
     )
 
     check!(
@@ -88,6 +88,7 @@ defmodule MedFabric.HandheldAcceptance do
       directory,
       %{
         "paired" => 900_000,
+        "paired-faults" => 180_000,
         @checkpoint_suite => 120_000,
         "spot-check" => 300_000,
         "legacy-browser" => 300_000,
@@ -128,6 +129,11 @@ defmodule MedFabric.HandheldAcceptance do
           case name do
             "paired" ->
               paired!(lab)
+
+            "paired-faults" ->
+              lab = monitor_faults!(lab)
+              network_denials!(lab)
+              lab
 
             @checkpoint_suite ->
               {lab, _} =
@@ -929,6 +935,16 @@ defmodule MedFabric.HandheldAcceptance do
         "stalled monitor command remains unknown"
       )
 
+      dir = Path.dirname(marker)
+      File.write!(Path.join(dir, "check-monitor-queue"), "")
+
+      ProcessLab.wait!(
+        fn -> File.exists?(Path.join(dir, "monitor-queue-checked")) end,
+        5_000,
+        child,
+        "bounded monitor backlog after command reconciliation"
+      )
+
       action!(lab, cfg["acquisition"], "stop")
     end
 
@@ -1336,17 +1352,20 @@ defmodule MedFabric.HandheldAcceptance do
     lab
   end
 
-  defp paired!(lab) do
-    lab =
-      Enum.reduce(["stall", "kill", "stop"], lab, fn fault, current ->
-        {next, _} =
-          paired_case!(current, "local-monitor-" <> fault, %{
-            "seconds" => if(fault == "stop", do: 30, else: 6),
-            "local_monitor_fault" => fault
-          })
+  defp monitor_faults!(lab) do
+    Enum.reduce(["stall", "kill", "startup", "stop"], lab, fn fault, current ->
+      {next, _} =
+        paired_case!(current, "local-monitor-" <> fault, %{
+          "seconds" => if(fault == "stop", do: 30, else: 6),
+          "local_monitor_fault" => fault
+        })
 
-        next
-      end)
+      next
+    end)
+  end
+
+  defp paired!(lab) do
+    lab = monitor_faults!(lab)
 
     {lab, _} =
       paired_case!(lab, "baseline", %{

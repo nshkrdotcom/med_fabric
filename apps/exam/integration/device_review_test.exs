@@ -134,10 +134,108 @@ defmodule MedFabric.Exam.DeviceReviewTest do
              ])
   end
 
+  @tag :tmp_dir
+  test "disconnect after preparing both metrics rolls back and an identical retry commits once",
+       c do
+    {digest, choice} = seal_fixture(c, 72)
+    key = Path.join(c.tmp_dir, "review_before_commit.all")
+    previous = Application.get_env(:mf_exam, :barriers)
+    Application.put_env(:mf_exam, :barriers, c.tmp_dir)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:mf_exam, :barriers, previous),
+        else: Application.delete_env(:mf_exam, :barriers)
+    end)
+
+    File.write!(key <> ".armed", "")
+    submit = fn -> DeviceReviews.review_verified(c.enc, c.bind.id, c.actor, digest, choice) end
+
+    pending =
+      Task.async(fn ->
+        try do
+          submit.()
+        rescue
+          _error in [DBConnection.ConnectionError, Postgrex.Error] -> :disconnected
+        end
+      end)
+
+    try do
+      pid =
+        Enum.find_value(1..300, fn _ ->
+          case File.read(key <> ".reached") do
+            {:ok, text} ->
+              String.to_integer(text)
+
+            {:error, :enoent} ->
+              Process.sleep(10)
+              nil
+          end
+        end)
+
+      assert is_integer(pid)
+      assert [[true]] = S.rows(c.db, "SELECT pg_terminate_backend($1, 3000)", [pid])
+    after
+      File.rm(key <> ".reached")
+    end
+
+    outcome = Task.await(pending)
+    assert outcome == :disconnected or match?({:error, _}, outcome)
+
+    assert [[0]] =
+             S.rows(c.db, "SELECT count(*) FROM device_reviews WHERE acquisition_id=$1", [
+               c.bind.id
+             ])
+
+    assert [[0]] = derived_count(c)
+    assert [[0]] = outbox_count(c)
+    assert {:ok, :ok} = submit.()
+    assert {:ok, :ok} = submit.()
+    assert [[2]] = derived_count(c)
+    assert [[2]] = outbox_count(c)
+  end
+
+  test "representation failure on the second metric rolls back acceptance", c do
+    {digest, choice} = seal_fixture(c, 0x0FFF)
+    assert {409, "Metric could not be represented for FHIR export"} = submit(c, digest, choice)
+    assert [[0]] = derived_count(c)
+    assert [[0]] = outbox_count(c)
+
+    assert [[0]] =
+             S.rows(c.db, "SELECT count(*) FROM device_reviews WHERE acquisition_id=$1", [
+               c.bind.id
+             ])
+
+    assert [[0]] =
+             S.rows(c.db, "SELECT count(*) FROM observations WHERE encounter_id=$1", [c.enc])
+
+    assert {200, "saved"} = submit(c, digest, %{choice | "metrics" => ["spo2"]})
+    assert {409, "Review or acquisition state changed"} = submit(c, digest, choice)
+  end
+
+  defp submit(c, digest, choice) do
+    body = %{"action" => "review", "digest" => digest, "choice" => choice}
+
+    conn =
+      Plug.Test.conn(:post, "/", body)
+      |> Plug.Test.init_test_session(%{exam_actor: c.actor, exam_role: "clinician"})
+
+    response =
+      MedFabric.ExamWeb.DeviceAction.call(
+        %{conn | path_params: %{"encounter_id" => c.enc, "id" => c.bind.id}},
+        []
+      )
+
+    {response.status, response.resp_body}
+  end
+
   test "failure of the second selected metric rolls back the first, review, acceptance and outbox",
        c do
     # PLXS SFLOAT NaN is source evidence, never a numeric pulse value.
     {digest, choice} = seal_fixture(c, 0x07FF)
+
+    assert {409, "Selected measurement is ineligible for clinical acceptance"} =
+             submit(c, digest, choice)
 
     assert {:error, :ineligible_metric} =
              DeviceReviews.review_verified(c.enc, c.bind.id, c.actor, digest, choice)
@@ -478,9 +576,11 @@ defmodule MedFabric.Exam.DeviceReviewTest do
         1280::little-16, 0::little-24>>
 
     pulse =
-      if pulse_word == 0x07FF,
-        do: %{"missing" => "nan"},
-        else: %{"mantissa" => to_string(pulse_word), "exponent" => "0"}
+      case pulse_word do
+        0x07FF -> %{"missing" => "nan"}
+        0x0FFF -> %{"mantissa" => "-1", "exponent" => "0"}
+        value -> %{"mantissa" => to_string(value), "exponent" => "0"}
+      end
 
     event = %{
       "raw" => Base.encode64(raw),

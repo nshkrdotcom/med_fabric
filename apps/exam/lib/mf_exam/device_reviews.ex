@@ -59,6 +59,11 @@ defmodule MedFabric.Exam.DeviceReviews do
           insert_metric(tx, id, actor, source, event, code, at)
         end)
 
+        MedFabric.Exam.Barrier.hit("review_before_commit", "all", fn ->
+          [[pid]] = S.rows(tx, "SELECT pg_backend_pid()", [])
+          Integer.to_string(pid)
+        end)
+
         :ok
 
       _ ->
