@@ -90,10 +90,11 @@ directory, and configured encounter IDs. Production defaults resolve at service
 entry; integration tests supply isolated resources without replacing application
 configuration. The context excludes ingress credentials and TURN secrets.
 
-Admission, finish, recovery, and status reconciliation retain the per-encounter
-`:global.trans` lock on the local node. The database reservation constraint
-continues to enforce one recording per encounter. Acceptance still rechecks
-clinical authorization and evidence inside its transaction.
+Browser admission, finish, recovery, and status reconciliation retain the
+per-encounter `:global.trans` lock on the local node. The database enforces one
+active recording per encounter and capture profile. A paired device exam can
+overlap a spot check, and each keeps its slot until finalization completes.
+Acceptance rechecks clinical authorization and evidence inside its transaction.
 
 ## PostgreSQL schema and invariants
 
@@ -102,7 +103,7 @@ The store applies the scripts under `core/store/priv/sql/` in filename order und
 | Table | Purpose & key invariants |
 | --- | --- |
 | `encounters` | Encounter ID (`PK`), `patient_actor`, `clinician_actor`, and nullable `closed_at`. |
-| `acquisitions` | `(encounter_id, id)` `PK`, `evidence` (`jsonb`), and `conflict` flag. Recording reservations also store producer, first accepted frame receipt time and source settings until finalization. A partial unique index allows one recording in progress per encounter. Ready evidence constraints enforce required `kind` and `provenance` object, requiring `artifact_key` + `file_sha256` for `audio_pcm16_wav` and forbidding artifact fields while requiring numeric `value` for `pulse_rate`. |
+| `acquisitions` | `(encounter_id, id)` `PK`, `evidence` (`jsonb`), and `conflict` flag. Recording reservations also store producer, first accepted frame receipt time and source settings until finalization. A partial unique index allows one recording in progress per encounter and capture profile. Ready evidence constraints enforce required `kind` and `provenance` object, requiring `artifact_key` + `file_sha256` for `audio_pcm16_wav` and forbidding artifact fields while requiring numeric `value` for `pulse_rate`. |
 | `encounter_exports` | The immutable FHIR destination and subject/encounter references for one encounter. |
 | `observations` | `(encounter_id, acquisition_id)` `PK` referencing `acquisitions`, `actor`, and `accepted_at`. Guarantees at most one accepted observation per acquisition; late conflicts cannot overwrite accepted records. |
 | `outbox_deliveries` | `(encounter_id, acquisition_id)` `PK` referencing `observations`, `destination`, `external_id`, `resource` (`jsonb`), `remote_ref`, and `last_error`. Enforces `UNIQUE (destination, external_id)` for idempotent FHIR retries. |

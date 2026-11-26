@@ -22,13 +22,13 @@ Add `mf_handheld` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:mf_handheld, "~> 0.1.0"}
+    {:mf_handheld, "~> 0.1.1"}
   ]
 end
 ```
 
 Requires Elixir `~> 1.20` (OTP 29), Linux with `util-linux` `flock`, a local
-filesystem supporting directory `fsync`, and OTP TLS.
+filesystem supporting directory `fsync`, OTP TLS, and MedEx `~> 0.2.1`.
 
 ## Key Capabilities
 
@@ -37,7 +37,7 @@ filesystem supporting directory `fsync`, and OTP TLS.
   and calibration metadata.
 - **Offline-first bounded spool:** Persists frames and measurement events into a
   local directory-locked spool (`MedExHandheld.Spool`) before uplink delivery;
-  the measurement durability guarantee begins after handheld journal sync.
+  local durability begins after the record and its directory have been synced.
 - **Resumable TLS/WSS transport:** Connects to `mf_exam` using device-scoped
   credentials and a pinned CA (`MedExHandheld.Transport`), replaying queued
   records after network interruption without duplicating accepted evidence.
@@ -56,11 +56,11 @@ bin/mf_handheld eval \
 
 ## Guides
 
-- [Getting Started](https://mf-handheld.hexdocs.pm/0.1.0/getting_started.html) — Fixture configuration, TLS
+- [Getting Started](https://mf-handheld.hexdocs.pm/0.1.1/getting_started.html) — Fixture configuration, TLS
   credentials, and CLI scenarios.
-- [Spool & Recovery](https://mf-handheld.hexdocs.pm/0.1.0/spool_and_recovery.html) — Disk spool layout, journal
+- [Spool & Recovery](https://mf-handheld.hexdocs.pm/0.1.1/spool_and_recovery.html) — Disk spool layout, journal
   sync guarantees, and reconnect replay.
-- [Deployment](https://mf-handheld.hexdocs.pm/0.1.0/deployment.html) — Building and shipping a standalone Mix
+- [Deployment](https://mf-handheld.hexdocs.pm/0.1.1/deployment.html) — Building and shipping a standalone Mix
   release without a server checkout.
 
 ## License

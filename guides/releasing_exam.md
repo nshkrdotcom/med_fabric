@@ -6,7 +6,9 @@ Mix application with Exam's static files and Store's migrations under `priv/`.
 It reads the package version from `apps/exam/VERSION`. The ordinary workspace
 and the separate Handheld and Preview projects keep their own Mix workflows.
 
-From the repository root:
+From the repository root, use a Hex environment that resolves the
+exact MedEx 0.2.1 archive recorded by the candidate lock. Use the private
+signed registry for local verification before the base is public.
 
 ```sh
 cd tools/maintainer
@@ -31,7 +33,9 @@ mix release.archive --artifact mf_exam --identity "$identity"
 Before publication, extract the prepared Hex archive into a disposable directory,
 assemble the release using the runtime-config overlay described in the
 [Exam package guide](../apps/exam/guides/getting_started.md), and boot it
-against fresh PostgreSQL. The archive carries the runtime sources. The Mix
+against fresh PostgreSQL. Confirm that migrations 006 and 007 are present
+and applied, then exercise paired and spot-check acquisition with the
+packaged clients. The archive carries the runtime sources. The Mix
 assembler's default runtime config copy carries only the entry file.
 
 Run archive after Hex confirms publication. Prepared bundles and writable

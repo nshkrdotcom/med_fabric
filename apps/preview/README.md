@@ -24,13 +24,14 @@ Add `mf_preview` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:mf_preview, "~> 0.1.0"}
+    {:mf_preview, "~> 0.1.1"}
   ]
 end
 ```
 
-Requires Elixir `~> 1.20` (OTP 29) and native build tools / `libopus` support
-for `med_ex_opus`.
+Requires Elixir `~> 1.20` (OTP 29), MedEx `~> 0.2.1`, and native build tools /
+`libopus` support for `med_ex_opus`. The Opus and RTC providers remain at
+`~> 0.1.0`.
 
 ## How It Works
 
@@ -58,9 +59,9 @@ mix run --no-halt
 
 ## Guides
 
-- [Getting Started](https://mf-preview.hexdocs.pm/0.1.0/getting_started.html) — Environment variables,
+- [Getting Started](https://mf-preview.hexdocs.pm/0.1.1/getting_started.html) — Environment variables,
   credentials, and Mix release startup.
-- [Isolation Model](https://mf-preview.hexdocs.pm/0.1.0/isolation_model.html) — Process, credential, and
+- [Isolation Model](https://mf-preview.hexdocs.pm/0.1.1/isolation_model.html) — Process, credential, and
   failure isolation from `mf_exam`.
 
 ## License

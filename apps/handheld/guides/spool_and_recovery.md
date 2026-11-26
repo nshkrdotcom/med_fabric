@@ -5,21 +5,23 @@ and `mf_exam` do not lose committed clinical acquisitions.
 
 ## Durability Boundary
 
-1. Synthetic peripheral frames and measurement events are written into the
-   bounded local spool (`MedExHandheld.Spool`) and flushed with directory
-   `fsync` under an exclusive `flock` lock.
-2. The measurement durability guarantee begins once the handheld command
-   journal has synced to local disk.
-3. `MedExHandheld.Transport` opens an authenticated Gun WSS/TLS connection to
-   `mf_exam` and streams records with explicit acknowledgement tracking.
+1. Handheld syncs each synthetic waveform frame or measurement event and
+   its directory in a bounded local spool under an exclusive `flock` lock.
+2. The authenticated WSS connection can pipeline up to 15 waveform records
+   per stream with Exam 0.1.1. The single-credit mode remains available for
+   peers that do not negotiate a larger window.
+3. An accepted receipt can cover frames still in Exam memory. Handheld
+   persists a verified durable receipt before reclaiming its covered
+   waveform prefix. Measurement events use their own durable acknowledgment
+   and sealed inventory.
 
 ## Disconnect & Replay
 
 When the uplink drops:
 
 - Active acquisition continues writing into the bounded disk spool.
-- On reconnect, `MedExHandheld.Session` resumes from the last server-confirmed
-  offset.
+- On reconnect, `MedExHandheld.Session` resumes from the verified server
+  durable boundary and replays retained records after it.
 - `mf_exam` deduplicates replayed segments and events by acquisition ID and
   sequence range, preserving exact source hashes.
 

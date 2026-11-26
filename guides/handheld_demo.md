@@ -4,10 +4,11 @@ Med Fabric records two independent reference-peripheral waveforms or a sparse PL
 
 ## Choose application sources
 
-The default dependencies use MedEx `~> 0.2.0` and its optional providers
+The default dependencies use MedEx `~> 0.2.1` and its optional providers
 `~> 0.1.0` from Hex. Resolve the default app locks in Exam, Handheld, and
-Preview with `mix deps.get`. Check the legacy media
-profile in its own context. Stream-v1 applications require the revision-1
+Preview with `mix deps.get`. Before the exact base archive is available in
+public Hex, use the prepared SDK path or the signed candidate registry for
+release qualification. Check the legacy media profile in its own context. Stream-v1 applications require the revision-1
 contract. A legacy SDK package with only browser capture cannot satisfy it.
 
 For local MedEx development, create `.mix_sources.json` in the **Fabric root**:
@@ -334,7 +335,7 @@ The prepared harness config authorizes the synthetic encounter/site in advance. 
 
 To run the PLXS fixture, copy the handheld configuration, set its `acquisition` field to a fresh ID, and pass `--scenario plx_spot_check` with that copy. The same ID/boot is used for resuming an interrupted internet link with its original spool; reusing an ID for a different descriptor or patient is refused. The fixture holds its original local measurement time and explicit synthetic UTC qualification across delayed upload. Only qualified eligible completed measurements can be exported. Accepting both metrics creates one immutable review and two independently retryable outbox rows in one transaction. Collection rows do not represent scalar observations.
 
-Waveform spool defaults to 64 MiB and a single in-flight network frame per stream. Directory and file sync plus the Linux ownership lock are required. Use one authoritative Exam artifact root per configured database, one owner per device/acquisition spool and a service manager that observes actual process death before takeover. The protocol has no automatic network-filesystem or cross-host takeover. A reboot interrupts its source epoch; a new acquisition/boot can resume clinical collection after explicit reassignment. A committed receipt can confirm only a covered prefix on its bound stream/fence. Corruption, a missing acknowledged prefix or a timed-out disk operation blocks clean completion.
+The waveform spool defaults to 64 MiB. Handheld and Exam negotiate up to 15 in-flight waveform records per stream, with a one-credit fallback. Exam checkpoints a batch at the credit limit or after a 250 ms flush timer for a partial batch. Handheld reclaims records only after it persists a verified durable receipt. Directory and file sync plus the Linux ownership lock are required. Use one authoritative Exam artifact root per configured database, one owner per device/acquisition spool and a service manager that observes actual process death before takeover. The protocol has no automatic network-filesystem or cross-host takeover. A reboot interrupts its source epoch; a new acquisition/boot can resume clinical collection after explicit reassignment. A committed receipt can confirm only a covered prefix on its bound stream/fence. Corruption, a missing acknowledged prefix or a timed-out disk operation blocks clean completion.
 
 ## Focused checks
 

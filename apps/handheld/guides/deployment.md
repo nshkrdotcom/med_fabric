@@ -17,7 +17,7 @@ architecture and ABI.
 
 Provide the following files on the target host with restrictive permissions:
 
-- Device credential JSON issued by `mf_exam` enrollment
+- Device bearer credential file matching the token enrolled in `mf_exam`
 - Trusted CA PEM bundle for verifying the `mf_exam` TLS certificate
 - Fixture/scenario configuration JSON
 - Dedicated writable spool directory on a local filesystem supporting `flock`

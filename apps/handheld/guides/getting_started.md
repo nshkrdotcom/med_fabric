@@ -40,7 +40,7 @@ mix run -e 'MedExHandheld.CLI.main(["--config", "/path/to/fixture.json", "--scen
 
 - `paired_exam` — Runs synthetic acoustic (`RDP1`) and ECG streams concurrently
   against an admitted encounter, verifying paired capture and replay.
-- `plxs` — Collects synthetic pulse-oximetry (`PLXS`) spot-check measurements
+- `plx_spot_check` — Collects synthetic pulse-oximetry (`PLXS`) spot-check measurements
   into the durable spool and delivers them for clinician review.
 
 All peripheral signals, clocks, and calibration data produced by `mf_handheld`
