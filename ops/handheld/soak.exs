@@ -57,8 +57,8 @@ defmodule MedFabric.Acceptance.Soak do
   defp stream(dir, hz, seconds, capture_ms, previous, interval) do
     source = read_json(Path.join(dir, "source.json"))
     receipt = read_json(Path.join(dir, "receipt.json"))
-    produced = source["sample"] || 0
     durable = String.to_integer(receipt["durable_sample"] || "0")
+    produced = max(source["sample"] || 0, durable)
     target = seconds * hz
     expected = min(div((capture_ms || 0) * hz, 1_000), target)
 

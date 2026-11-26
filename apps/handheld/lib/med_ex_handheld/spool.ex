@@ -87,6 +87,24 @@ defmodule MedExHandheld.Spool do
         30_000
       )
 
+  def put_and_advance(p, root, stream, seq, bytes, next_seq, next_sample)
+      when is_binary(root) and stream in ["audio", "ecg", "events"] and is_integer(seq) and
+             seq >= 0 do
+    path = Path.join([root, stream, to_string(seq) <> ".rec"])
+    framed = :crypto.hash(:sha256, bytes) <> bytes
+    tmp = stage_tmp!(Path.dirname(path), path, framed)
+
+    try do
+      GenServer.call(
+        p,
+        {:commit_and_advance, stream, seq, bytes, tmp, byte_size(framed), next_seq, next_sample},
+        30_000
+      )
+    after
+      File.rm(tmp)
+    end
+  end
+
   def watermark(p, stream), do: GenServer.call(p, {:watermark, stream})
 
   def persist_watermark(p, stream), do: GenServer.call(p, {:persist_watermark, stream}, 30_000)
@@ -111,6 +129,21 @@ defmodule MedExHandheld.Spool do
 
   def handle_call({:put_and_advance, name, seq, bytes, next_seq, next_sample}, _, s) do
     case put_record(s, name, seq, bytes) do
+      {:ok, next} ->
+        mark = %{"sequence" => next_seq, "sample" => next_sample, "done" => false}
+        {:reply, :ok, %{next | watermarks: Map.put(next.watermarks, name, mark)}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, s}
+    end
+  end
+
+  def handle_call(
+        {:commit_and_advance, name, seq, bytes, tmp, framed_size, next_seq, next_sample},
+        _,
+        s
+      ) do
+    case commit_staged_record(s, name, seq, bytes, tmp, framed_size) do
       {:ok, next} ->
         mark = %{"sequence" => next_seq, "sample" => next_sample, "done" => false}
         {:reply, :ok, %{next | watermarks: Map.put(next.watermarks, name, mark)}}
@@ -255,6 +288,28 @@ defmodule MedExHandheld.Spool do
 
       true ->
         write!(f, :crypto.hash(:sha256, bytes) <> bytes)
+        {:ok, %{s | bytes: total, maximum: max(s.maximum, total)}}
+    end
+  end
+
+  defp commit_staged_record(s, name, seq, bytes, tmp, framed_size) do
+    f = record(s, name, seq)
+    dir = Path.dirname(f)
+    total = s.bytes + framed_size
+
+    cond do
+      Path.dirname(tmp) != dir ->
+        {:error, :invalid_stage_path}
+
+      File.exists?(f) ->
+        if read_record!(f) == bytes, do: {:ok, s}, else: {:error, :spool_conflict}
+
+      total > s.limit ->
+        {:error, :spool_full}
+
+      true ->
+        File.rename!(tmp, f)
+        sync_dir!(dir)
         {:ok, %{s | bytes: total, maximum: max(s.maximum, total)}}
     end
   end
@@ -473,20 +528,36 @@ defmodule MedExHandheld.Spool do
 
   def write!(path, bytes) do
     dir = Path.dirname(path)
-    File.mkdir_p!(dir)
-    tmp = path <> ".tmp." <> Base.url_encode64(:crypto.strong_rand_bytes(9))
+    tmp = stage_tmp!(dir, path, bytes)
 
     try do
-      File.open!(tmp, [:write, :binary, :exclusive], fn f ->
-        :ok = IO.binwrite(f, bytes)
-        :ok = :file.sync(f)
-      end)
-
-      File.chmod!(tmp, 0o600)
       File.rename!(tmp, path)
       sync_dir!(dir)
     after
       File.rm(tmp)
+    end
+  end
+
+  defp stage_tmp!(dir, path, bytes) do
+    File.mkdir_p!(dir)
+    tmp = path <> ".tmp." <> Base.url_encode64(:crypto.strong_rand_bytes(9))
+
+    try do
+      {:ok, fd} = :file.open(String.to_charlist(tmp), [:write, :raw, :binary, :exclusive])
+
+      try do
+        File.chmod!(tmp, 0o600)
+        :ok = :file.write(fd, bytes)
+        :ok = :file.sync(fd)
+      after
+        :file.close(fd)
+      end
+
+      tmp
+    rescue
+      e ->
+        File.rm(tmp)
+        reraise e, __STACKTRACE__
     end
   end
 

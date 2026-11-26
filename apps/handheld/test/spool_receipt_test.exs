@@ -277,6 +277,34 @@ defmodule MedExHandheld.SpoolReceiptTest do
     assert {:ok, _} = Spool.get(pid, "audio", 199)
   end
 
+  @tag :tmp_dir
+  test "staged put_and_advance commits atomically and cleans up temp files on rejection", %{
+    tmp_dir: dir
+  } do
+    pid =
+      start_supervised!(
+        Supervisor.child_spec({Spool, root: dir, limit: 120}, id: :staged, restart: :temporary)
+      )
+
+    first = frame(0, 0)
+    assert :ok = Spool.put_and_advance(pid, dir, "audio", 0, first, 1, 1)
+    assert {:ok, ^first} = Spool.get(pid, "audio", 0)
+    assert %{"sequence" => 1, "sample" => 1, "done" => false} = Spool.watermark(pid, "audio")
+
+    # Identical retry is idempotent and leaves no temp file.
+    assert :ok = Spool.put_and_advance(pid, dir, "audio", 0, first, 1, 1)
+
+    # Conflicting retry is refused and leaves no temp file.
+    assert {:error, :spool_conflict} =
+             Spool.put_and_advance(pid, dir, "audio", 0, frame(0, 99), 1, 1)
+
+    # Budget overflow is refused and leaves no temp file.
+    assert {:error, :spool_full} =
+             Spool.put_and_advance(pid, dir, "audio", 1, :binary.copy(<<0>>, 200), 2, 2)
+
+    assert Path.wildcard(Path.join([dir, "audio", "*.tmp.*"])) == []
+  end
+
   defp start_spool(dir, id) do
     start_supervised!(
       Supervisor.child_spec({Spool, root: dir, limit: 4096}, id: id, restart: :temporary)

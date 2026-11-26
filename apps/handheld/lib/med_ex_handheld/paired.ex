@@ -122,7 +122,7 @@ defmodule MedExHandheld.Paired do
     {next, record} =
       if gap, do: lost_frame(c, p, next, step, target, spec.sample_rate), else: {next, raw}
 
-    case Spool.put_and_advance(spool, n, p.seq, record, next.seq, next.first) do
+    case Spool.put_and_advance(spool, c["spool"], n, p.seq, record, next.seq, next.first) do
       :ok ->
         if not gap and {n, spec.encoding} == {"audio", :s16le} do
           publish_monitor_frame(c, monitor, hub, frame)
