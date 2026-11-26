@@ -95,6 +95,6 @@ Set `MF_TURN_URLS` to comma-separated TURN URIs and `MF_TURN_SECRET` to the shar
   `env -u MF_LAB mix test integration/{recording,encounter_scope}_test.exs`
   for interrupted recording and encounter scope. Select the matching SDK
   family in `.mix_sources.json`.
-- The optional legacy media profile pins the dependency-constraint change from Ratio PR 131 at commit `05191db`. The lock resolves Numbers 5.2.5 and Decimal 3.2.0. Run `mix hex.audit` in the exam and review the pinned Git change separately. Remove the Git pin when a Hex Ratio release admits Decimal 3. MedEx itself continues to declare Hex dependencies. [Ratio PR 131](https://github.com/qqwy/elixir-rational/pull/131)
+- The optional legacy media profile uses `med_ex_opus ~> 0.2.0` (C11 `libopus` Port encoder built via `elixir_make` with no system `libopus-dev` or Git overrides; natively qualified on Ubuntu Linux `x86_64`) and `med_ex_rtc ~> 0.2.0`.
 
 See [Architecture and roadmap](architecture_and_roadmap.md) for storage ownership and clinical invariants.

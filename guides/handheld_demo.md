@@ -4,7 +4,7 @@ Med Fabric records two independent reference-peripheral waveforms or a sparse PL
 
 ## Choose application sources
 
-The default dependencies use MedEx `~> 0.2.1` and its optional providers
+The default dependencies use MedEx `~> 0.3.0` and its optional providers
 `~> 0.1.0` from Hex. Resolve the default app locks in Exam, Handheld, and
 Preview with `mix deps.get`. Before the exact base archive is available in
 public Hex, use the prepared SDK path or the signed candidate registry for

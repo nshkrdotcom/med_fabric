@@ -51,12 +51,12 @@ defmodule MedFabric.BuildSourcesTest do
   end
 
   test "the default MedEx family uses the published Hex package ranges" do
-    assert {:med_ex, "~> 0.2.1", base_opts} = Sources.med_ex_dependency(:med_ex)
+    assert {:med_ex, "~> 0.3.0", base_opts} = Sources.med_ex_dependency(:med_ex)
     assert base_opts[:hex] == "med_ex"
     assert base_opts[:repo] == "hexpm"
     assert base_opts[:override]
 
-    for {app, requirement} <- [med_ex_opus: "~> 0.2.0", med_ex_rtc: "~> 0.1.0"] do
+    for {app, requirement} <- [med_ex_opus: "~> 0.2.0", med_ex_rtc: "~> 0.2.0"] do
       assert {^app, ^requirement, options} = Sources.med_ex_dependency(app)
       assert options == [hex: Atom.to_string(app), repo: "hexpm"]
     end

@@ -12,21 +12,13 @@ admission, lossless waveform capture, clinical review, and HL7 FHIR R4 export.
 
 ## Installing Exam and Preview in one Mix project
 
-The normal deployment runs Exam and Preview as separate releases. A single Mix
-project that includes both must declare this dependency in its own `deps/0`.
-Exam uses Decimal 3, and the published Ratio dependency selected by Membrane
-excludes Decimal 3. The pinned revision below admits it.
-
-```elixir
-{:ratio,
- git: "https://github.com/robertbenavidez/elixir-rational.git",
- ref: "05191dbe8061b49a170352f3c35c21360bdbb328",
- override: true}
-```
-
-Run `mix deps.get` and commit the resulting lockfile in the consuming project.
-This override fixes dependency resolution. Preview remains a separate process
-in the documented deployment.
+The normal deployment runs Exam and Preview as separate OS releases so native
+WebRTC NIFs (`ex_dtls` / `ex_libsrtp`) stay isolated from authoritative capture.
+Because `med_ex_opus ~> 0.2.0` runs a standalone C11 `libopus` Port encoder
+with no Membrane dependencies, a single Mix project that includes both `mf_exam`
+and `mf_preview` resolves cleanly from Hex with no overrides (requires POSIX
+`cc`, `make`, `tar`, `sh`, and `curl` or `MED_EX_OPUS_TARBALL`; natively
+qualified on Ubuntu Linux `x86_64`).
 
 ## Configuration
 

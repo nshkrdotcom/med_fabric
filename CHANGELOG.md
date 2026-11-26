@@ -1,5 +1,12 @@
 # Med Fabric changelog
 
+## 0.3.0 — 2026-11-25
+
+- Support file-based deployment configuration (`/etc/med_fabric/{exam,preview}.json`) across Exam and Preview.
+- Consolidate media dependencies on `med_ex_opus ~> 0.2.0` (Port-isolated C11 `libopus` encoder) and remove the legacy Membrane `:ratio` Git override from Exam and combined Mix consumer guides.
+- Add failure-matrix, operations/telemetry, security/clinical-boundary, and core-API/compatibility guides plus `ops/check_hardening.exs`.
+- Align `mf_exam 0.2.0`, `mf_preview 0.2.0`, and `mf_handheld 0.2.0` on `med_ex ~> 0.3.0`, `med_ex_opus ~> 0.2.0`, `med_ex_rtc ~> 0.2.0`, and Weld `0.19.0`.
+
 ## 0.2.0 — 2026-11-25
 
 - Add a Weld 0.18.0 maintainer project and a release manifest for the standalone

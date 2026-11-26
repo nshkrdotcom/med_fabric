@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0 - 2026-11-25
+
+- Align base SDK requirement to `med_ex ~> 0.3.0`.
+
 ## 0.1.1 - 2026-11-25
 
 - Replay multi-sequence gaps and stop production on verified premature terminal receipts.

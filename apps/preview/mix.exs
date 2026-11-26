@@ -56,9 +56,9 @@ defmodule MedFabric.Preview.MixProject do
       MedFabric.BuildSources.resolve(defaults, __DIR__, Path.expand("../..", __DIR__))
     else
       {[
-         {:med_ex, "~> 0.2.1", hex: "med_ex", repo: "hexpm"},
+         {:med_ex, "~> 0.3.0", hex: "med_ex", repo: "hexpm"},
          {:med_ex_opus, "~> 0.2.0", hex: "med_ex_opus", repo: "hexpm"},
-         {:med_ex_rtc, "~> 0.1.0", hex: "med_ex_rtc", repo: "hexpm"},
+         {:med_ex_rtc, "~> 0.2.0", hex: "med_ex_rtc", repo: "hexpm"},
          {:bandit, "~> 1.6"},
          {:plug, "~> 1.16"}
        ] ++ dev_deps, []}

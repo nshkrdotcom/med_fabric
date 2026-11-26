@@ -21,7 +21,7 @@ publish a reusable library once a second application defines its public API:
 | Med Fabric | `med_ex` | `med_ex_opus` | `med_ex_rtc` | Status |
 | --- | --- | --- | --- | --- |
 | `0.2.0` (apps `0.1.1`) | `~> 0.2.1` | `~> 0.1.0` (Membrane) | `~> 0.1.0` | Qualified & released |
-| `main` (unreleased) | `~> 0.2.1` | `~> 0.2.0` (libopus Port, no Membrane) | `~> 0.1.0` | Requirements bumped and `:ratio` override removed. Hex-mode resolution fails until `med_ex_opus 0.2.0` is published; path and Git modes work. |
+| `0.3.0` (apps `0.2.0`) | `~> 0.3.0` | `~> 0.2.0` (libopus Port, no Membrane) | `~> 0.2.0` | Prepared for coordinated release train (Weld `0.19.0` → MedEx family → Med Fabric apps). |
 
 ## 3. Unified Qualification Pipeline
 

@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-11-25
 
-- Support file-based deployment configuration and document the Ratio override for combined Mix consumers.
+- Support file-based deployment configuration (`/etc/med_fabric/preview.json`).
+- Adopt `med_ex_opus ~> 0.2.0` (Port-isolated C11 `libopus` encoder, removing Membrane/Ratio dependency conflicts), `med_ex_rtc ~> 0.2.0`, and `med_ex ~> 0.3.0`.
 
 ## 0.1.1 - 2026-11-25
 

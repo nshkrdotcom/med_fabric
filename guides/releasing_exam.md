@@ -7,7 +7,7 @@ It reads the package version from `apps/exam/VERSION`. The ordinary workspace
 and the separate Handheld and Preview projects keep their own Mix workflows.
 
 From the repository root, use a Hex environment that resolves the
-exact MedEx 0.2.1 archive recorded by the candidate lock. Use the private
+exact MedEx 0.3.0 archive recorded by the candidate lock. Use the private
 signed registry for local verification before the base is public.
 
 ```sh

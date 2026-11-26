@@ -54,7 +54,7 @@ defmodule MedExHandheld.MixProject do
       )
     else
       {[
-         {:med_ex, "~> 0.2.1", hex: "med_ex", repo: "hexpm"},
+         {:med_ex, "~> 0.3.0", hex: "med_ex", repo: "hexpm"},
          {:gun, "~> 2.8.0"}
        ] ++ dev_deps, []}
     end
