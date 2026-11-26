@@ -328,6 +328,90 @@ defmodule MedExHandheld.SpoolReceiptTest do
     end
   end
 
+  @tag :tmp_dir
+  test "partial batch spool_full preserves committed prefix and cleans up remaining temps", %{
+    tmp_dir: dir
+  } do
+    # Each encoded 1-sample frame is 50 bytes + 32-byte sha256 = 82 bytes; 2 frames = 164 <= 200 < 246.
+    pid =
+      start_supervised!(
+        Supervisor.child_spec({Spool, root: dir, limit: 200},
+          id: :partial_full,
+          restart: :temporary
+        )
+      )
+
+    items = for q <- 0..4, do: {q, frame(q, q), q + 1, q + 1}
+    assert {:error, :spool_full} = Spool.put_batch_and_advance(pid, dir, "audio", items)
+
+    assert %{"sequence" => 2, "sample" => 2, "done" => false} = Spool.watermark(pid, "audio")
+    assert {:ok, b0} = Spool.get(pid, "audio", 0)
+    assert {:ok, b1} = Spool.get(pid, "audio", 1)
+    assert {b0, b1} == {frame(0, 0), frame(1, 1)}
+    assert :absent = Spool.get(pid, "audio", 2)
+    assert Path.wildcard(Path.join([dir, "audio", "*.tmp.*"])) == []
+  end
+
+  @tag :tmp_dir
+  test "restart after partial batch rename recovers contiguous prefix and marks interruption", %{
+    tmp_dir: dir
+  } do
+    pid = start_spool(dir, :before_crash)
+    watermark(dir, 0)
+
+    # Commit the first two frames of a 5-frame batch, then leave 2..4 as staged temp files
+    # as if Handheld were killed mid-batch before rename/sync_dir!.
+    assert :ok =
+             Spool.put_batch_and_advance(
+               pid,
+               dir,
+               "audio",
+               for(q <- 0..1, do: {q, frame(q, q), q + 1, q + 1})
+             )
+
+    audio_dir = Path.join(dir, "audio")
+
+    for q <- 2..4 do
+      bytes = frame(q, q)
+
+      File.write!(
+        Path.join(audio_dir, "#{q}.rec.tmp.killed"),
+        :crypto.hash(:sha256, bytes) <> bytes
+      )
+    end
+
+    kill_spool(pid)
+
+    restarted = start_spool(dir, :after_crash)
+    assert Path.wildcard(Path.join(audio_dir, "*.tmp.*")) == []
+    assert %{bytes: bytes} = Spool.stats(restarted)
+    assert bytes == 2 * (byte_size(frame(0, 0)) + 32)
+
+    audio_spec =
+      Map.merge(spec(), %{
+        encoding: :s16le,
+        channels: [%{id: "1"}],
+        capabilities: %{max_frame_samples: 960}
+      })
+
+    assert :ok =
+             MedExHandheld.Paired.interrupt_after_restart(
+               %{"spool" => dir},
+               restarted,
+               "audio",
+               audio_spec
+             )
+
+    assert %{
+             "sequence" => 2,
+             "sample" => 2,
+             "done" => true,
+             "interruption" => "source_reset"
+           } = Spool.watermark(restarted, "audio")
+
+    assert :absent = Spool.get(restarted, "audio", 2)
+  end
+
   defp start_spool(dir, id) do
     start_supervised!(
       Supervisor.child_spec({Spool, root: dir, limit: 4096}, id: id, restart: :temporary)

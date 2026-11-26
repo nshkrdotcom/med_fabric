@@ -37,7 +37,8 @@ filesystem supporting directory `fsync`, OTP TLS, and MedEx `~> 0.2.1`.
   and calibration metadata.
 - **Offline-first bounded spool:** Persists frames and measurement events into a
   local directory-locked spool (`MedExHandheld.Spool`) before uplink delivery;
-  local durability begins after the record and its directory have been synced.
+  50 Hz audio holds up to 5 frames (100 ms) in memory before atomic commit, and
+  local durability begins once records and their directory have been synced.
 - **Resumable TLS/WSS transport:** Connects to `mf_exam` using device-scoped
   credentials and a pinned CA (`MedExHandheld.Transport`), replaying queued
   records after network interruption without duplicating accepted evidence.
