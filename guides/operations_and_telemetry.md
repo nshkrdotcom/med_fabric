@@ -1,36 +1,45 @@
 # Operations, Startup Config, Bounds, and Telemetry
 
-## 1. Startup Config and Secrets Contract
+Statements below were checked against the source on 2026-11-26. Items marked
+**Gap** are not implemented or not yet proven by a test.
 
-`mf_exam`, `mf_handheld`, and `mf_preview` validate required runtime
-configuration at boot (database URL, endpoint secret key base, TLS listener
-certificates/CA for device ingress, shared Preview credential, and FHIR base URL
-when export is enabled). Packaged releases preserve complete endpoint
-configuration in `config/runtime.exs`.
+## 1. Startup Config
 
-## 2. Bounded Queues, Spools, and Mailboxes
+- `apps/exam/config/runtime.exs` reads required settings with
+  `System.fetch_env!/1` (or a packaged settings map via `Map.fetch!/2`), so a
+  missing required value fails at boot with a clear `KeyError`/env error.
+- `apps/preview/config/runtime.exs` requires `MF_PREVIEW_PORT` and reads the
+  shared credential from `MF_PREVIEW_CREDENTIAL_FILE`.
+- **Gap:** no single documented list of required settings and no test that boots
+  each app with each required value removed.
 
-| Surface | Bound / Backpressure |
+## 2. Bounds and Backpressure
+
+The following bounds are stated in the changelog and implemented in the named
+areas; they have not been re-audited in this pass.
+
+| Surface | Bound |
 | --- | --- |
-| Handheld audio spool | 5-frame (100 ms) batched commits, live spool watermarks, O(k) sequence-range ack reclamation, crash-leftover temp sweep |
-| Exam waveform writer | Host-fenced 15-frame pipelined batching with explicit `checkpoint_ms: :manual` |
-| Monitor / Preview commands | Bounded monitor command queue; at most one in-flight Opus encode per provider with 1 s deadline and retire-on-timeout |
-| Review HTTP artifact streaming | Same-descriptor HTTP Range streaming with bounded memory |
+| Handheld audio spool | 5-frame (100 ms) batched commits; crash-leftover temp sweep |
+| Exam waveform writer | Host-fenced 15-frame pipelined batching with `checkpoint_ms: :manual` |
+| Preview encode | One in-flight encode per provider, 1 s deadline, provider retired on timeout |
+| Review streaming | Range streaming with bounded memory |
 
-## 3. Migrations (Upgrade and Rollback)
+**Gap:** no systematic mailbox/queue audit.
 
-SQL migrations live in `core/store/priv/repo/migrations` and are packaged into
-the standalone Exam release. Native qualification (`./ops/qc_native.sh` and
-`./ops/qc_services.sh`) exercises migrations against native PostgreSQL.
+## 3. Migrations
 
-## 4. Telemetry and Soak Lag Detection
+SQL migrations ship in the Exam release. Native suites (`ops/qc_services.sh`,
+`ops/qc_native.sh`) run them against PostgreSQL. **Gap:** no upgrade-from-0.2 or
+rollback test.
 
-Key operational signals emitted across capture, spooling, and review:
+## 4. Telemetry
 
-- **Admission & batching:** acquisition admission, host-fenced batch commit
-  latency, and checkpoint receipts.
-- **Spool & replay:** live spool depth/watermarks and ack reclamation progress.
-- **Soak gate:** the native 29-minute ext4 soak runner measures sustained
-  throughput and stops early on sustained lag.
-- **Review & FHIR outbox:** clinical acceptance commits and retryable FHIR
-  Observation delivery outcomes.
+Only two events exist today, both in `apps/exam/lib/mf_exam/device_ingress.ex`:
+
+- `[:mf_exam, :device_ingress, :checkpoint]`
+- `[:mf_exam, :device_ingress, :writer_checkpoint]`
+
+Each carries `duration_us` and `%{stream, acquisition_id}`. **Gap:** no events
+for admission, spool depth, replay, review decisions or FHIR outbox delivery, and
+the soak runner measures lag itself rather than consuming telemetry.

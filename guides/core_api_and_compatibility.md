@@ -21,12 +21,12 @@ publish a reusable library once a second application defines its public API:
 | Med Fabric | `med_ex` | `med_ex_opus` | `med_ex_rtc` | Status |
 | --- | --- | --- | --- | --- |
 | `0.2.0` (apps `0.1.1`) | `~> 0.2.1` | `~> 0.1.0` (Membrane) | `~> 0.1.0` | Qualified & released |
-| `0.3.0-dev` (`main`) | `~> 0.2.1` | `~> 0.2.0` (libopus Port, no Membrane) | `~> 0.1.0` | In progress (`apps/exam` `:ratio` override removed) |
+| `main` (unreleased) | `~> 0.2.1` | `~> 0.2.0` (libopus Port, no Membrane) | `~> 0.1.0` | Requirements bumped and `:ratio` override removed. Hex-mode resolution fails until `med_ex_opus 0.2.0` is published; path and Git modes work. |
 
 ## 3. Unified Qualification Pipeline
 
 1. **Sources & boundaries:** `elixir config/sources_test.exs`,
-   `elixir ops/check_hardening.exs`, and `./ops/qc_sources.sh`.
+   `elixir ops/check_hardening.exs` (also verifies every path cited in `guides/failure_matrix.md` exists), and `./ops/qc_sources.sh`.
 2. **Native services & acceptance:** `./ops/qc_services.sh`,
    `./ops/qc_native.sh`, and `ops/handheld_acceptance.exs` against native
    PostgreSQL and HAPI FHIR R4.

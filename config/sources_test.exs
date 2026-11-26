@@ -56,8 +56,8 @@ defmodule MedFabric.BuildSourcesTest do
     assert base_opts[:repo] == "hexpm"
     assert base_opts[:override]
 
-    for app <- [:med_ex_opus, :med_ex_rtc] do
-      assert {^app, "~> 0.1.0", options} = Sources.med_ex_dependency(app)
+    for {app, requirement} <- [med_ex_opus: "~> 0.2.0", med_ex_rtc: "~> 0.1.0"] do
+      assert {^app, ^requirement, options} = Sources.med_ex_dependency(app)
       assert options == [hex: Atom.to_string(app), repo: "hexpm"]
     end
   end

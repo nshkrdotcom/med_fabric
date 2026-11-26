@@ -39,4 +39,12 @@ if String.contains?(exam_mix, "elixir-rational.git") do
   raise "apps/exam/mix.exs still contains the removed Membrane :ratio git override"
 end
 
+# 5. Verify every test/ops path cited in the failure matrix exists
+matrix = File.read!(Path.join(root, "guides/failure_matrix.md"))
+
+for [path] <- Regex.scan(~r/`((?:apps|core|ops)\/[^`\s,]+)`/, matrix) do
+  unless File.exists?(Path.join(root, path)),
+    do: raise("failure_matrix cites missing path: #{path}")
+end
+
 IO.puts("check_hardening ok")
