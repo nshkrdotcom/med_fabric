@@ -266,7 +266,7 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
     case AcquisitionManifest.finish(s.context, s.bind, Map.take(msg, ["count", "digest"])) do
       {:ok, digest} ->
         MedFabric.Exam.announce(s.bind.encounter, s.context)
-        reply("sealed", %{"digest" => digest}, s)
+        reply("sealed", %{"digest" => digest}, s, :acquisition)
 
       {:error, :inventory_pending} ->
         reply("inventory_pending", %{}, s)
@@ -523,11 +523,13 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
       "connection" => bind.connection
     }
 
-  defp reply(type, fields, s) do
+  defp reply(type, fields, s, scope \\ :stream) do
     # This check prevents deliberate submission to a known obsolete binding. A
     # reply already in flight remains historical truth; clients match incarnation.
+    # Manifest sealing reacquires retired stream gates while proving quiescence,
+    # so its acquisition-scoped reply relies on the current database binding.
     active_stream =
-      is_nil(s.binding) or is_nil(s.binding["stream"]) or
+      scope == :acquisition or is_nil(s.binding) or is_nil(s.binding["stream"]) or
         DeviceRootLock.current_connection?(
           s.context.root_owner,
           {s.bind.id, s.binding["stream"]},
