@@ -200,36 +200,42 @@ defmodule MedExHandheld.SpoolReceiptTest do
     assert %{"sequence" => 1, "sample" => 1} = Spool.watermark(c.spool, "audio")
   end
 
-  test "a lost ACK can be reconciled through exact authenticated predecessor import", c do
-    for q <- 0..2, do: put(c, q, q)
-    previous = receipt(c.spec, 0, 0, 1)
-    assert {:ok, _} = Spool.activate(c.spool, "audio", c.spec, reply(previous, 1, "old"))
-    recovered = receipt(c.spec, 2, 2, 3)
+  for stored_ack? <- [true, false] do
+    @tag stored_ack?: stored_ack?
+    test "authenticated predecessor import with stored ACK #{stored_ack?}", c do
+      for q <- 0..2, do: put(c, q, q)
+      previous = receipt(c.spec, 0, 0, 1)
 
-    successor =
-      recovered
-      |> Map.put("fence", "successor")
-      |> Map.put("journal_id", "next-journal")
-      |> Map.put("journal_generation", "1")
-      |> Map.put("journal_digest", MedEx.Serialization.sha256("successor"))
+      if c.stored_ack?,
+        do: assert({:ok, _} = Spool.activate(c.spool, "audio", c.spec, reply(previous, 1, "old")))
 
-    handoff = %{
-      "previous" => recovered,
-      "successor" => successor,
-      "imported" => recovered,
-      "asserted_by" => "authenticated_host"
-    }
+      recovered = receipt(c.spec, 2, 2, 3)
 
-    assert {:ok, _} =
-             Spool.activate(
-               c.spool,
-               "audio",
-               c.spec,
-               Map.put(reply(successor, 2, "fresh"), "handoff", handoff)
-             )
+      successor =
+        recovered
+        |> Map.put("fence", "successor")
+        |> Map.put("journal_id", "next-journal")
+        |> Map.put("journal_generation", "1")
+        |> Map.put("journal_digest", MedEx.Serialization.sha256("successor"))
 
-    assert :absent = Spool.get(c.spool, "audio", {1, 1})
-    assert {:ok, _} = Spool.get(c.spool, "audio", {2, 2})
+      handoff = %{
+        "previous" => recovered,
+        "successor" => successor,
+        "imported" => recovered,
+        "asserted_by" => "authenticated_host"
+      }
+
+      assert {:ok, _} =
+               Spool.activate(
+                 c.spool,
+                 "audio",
+                 c.spec,
+                 Map.put(reply(successor, 2, "fresh"), "handoff", handoff)
+               )
+
+      assert :absent = Spool.get(c.spool, "audio", {1, 1})
+      assert {:ok, _} = Spool.get(c.spool, "audio", {2, 2})
+    end
   end
 
   test "duplicate metadata keys and symlinked metadata cannot replace recovery state", c do

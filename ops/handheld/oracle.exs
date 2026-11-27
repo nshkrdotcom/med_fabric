@@ -268,7 +268,7 @@ defmodule MedFabric.Acceptance.Oracle do
     cursor =
       if File.exists?(cursor_path), do: read(cursor_path), else: %{"sequence" => 0, "sample" => 0}
 
-    check!(not cursor["done"], "Restart fixture already completed")
+    check!(cursor["done"] != true, "Restart fixture already completed")
     sequence = integer(cursor["sequence"])
     sample = integer(cursor["sample"])
     receipt_path = Path.join(root, "ack.json")

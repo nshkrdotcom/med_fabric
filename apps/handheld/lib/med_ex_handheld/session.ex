@@ -654,22 +654,8 @@ defmodule MedExHandheld.Session do
     inventory = Spool.read_json(Path.join(config["spool"], "inventory.json"), [])
 
     with :ok <- Spool.event_activate(spool, binding),
-         :ok <-
-           if(admission["phase"] == "sealed",
-             do: :ok,
-             else: transfer_events(config, socket, spool, binding, inventory)
-           ),
-         {:ok, %{"type" => "sealed", "digest" => digest}} <-
-           request(
-             socket,
-             binding,
-             "collection_finish",
-             %{
-               "count" => to_string(length(inventory)),
-               "digest" => Serialization.digest(inventory)
-             },
-             35_000
-           ),
+         {:ok, response} <- finish_events(socket, binding, inventory),
+         {:ok, digest} <- seal_events(response, config, socket, spool, binding, inventory),
          :ok <- current_control(config["hub"], binding),
          true <- ContractRules.digest?(digest),
          :ok <- Spool.event_seal(spool, binding, inventory) do
@@ -679,6 +665,31 @@ defmodule MedExHandheld.Session do
       {:error, _} = error -> error
       _ -> {:error, :unexpected_collection_reply}
     end
+  end
+
+  defp seal_events(%{"type" => "sealed", "digest" => digest}, _, _, _, _, _), do: {:ok, digest}
+
+  defp seal_events(%{"type" => "inventory_pending"}, config, socket, spool, binding, inventory) do
+    with :ok <- transfer_events(config, socket, spool, binding, inventory),
+         {:ok, %{"type" => "sealed", "digest" => digest}} <-
+           finish_events(socket, binding, inventory) do
+      {:ok, digest}
+    end
+  end
+
+  defp seal_events(_, _, _, _, _, _), do: {:error, :unexpected_collection_reply}
+
+  defp finish_events(socket, binding, inventory) do
+    request(
+      socket,
+      binding,
+      "collection_finish",
+      %{
+        "count" => to_string(length(inventory)),
+        "digest" => Serialization.digest(inventory)
+      },
+      35_000
+    )
   end
 
   defp transfer_events(config, socket, spool, binding, inventory) do

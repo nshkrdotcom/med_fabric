@@ -32,6 +32,7 @@ Application.put_env(:mf_exam, :lab, %{
   device_enabled: true,
   encounters: entries,
   local?: true,
+  public_origin: "http://localhost:#{c["http_port"]}",
   turn: %{urls: [], secret: nil, relay?: false},
   proxy_secret: nil,
   database_url: c["database_url"],

@@ -28,3 +28,14 @@ must preserve raw source/journal/manifest equality and bounded upload/heartbeat.
 Use source selectors for current checkout candidates, signed registry for exact
 provisional archives, then final official detached installations after authorized
 publication. Preserve sanitized evidence and all unresolved outcomes.
+
+When the first durable waveform reply is lost, Handheld can recover without a
+saved ACK. It verifies the authenticated predecessor handoff and all covered
+local records before persisting the recovered ACK and reclaiming any bytes.
+The gateway boot identifies the paired acquisition. Each peripheral retains its
+own clock boot identity in the stream descriptor.
+
+For PLX, Handheld declares the exact final event inventory before uploading
+events. Exam keeps an incomplete inventory pending across restart. Handheld
+replays retained events under a fresh authenticated binding and reclaims them
+only after Exam confirms the exact sealed inventory.

@@ -705,7 +705,10 @@ defmodule MedExHandheld.Spool do
 
   defp binding_valid(_, _, _), do: {:error, :invalid_binding}
   defp activation_progress(nil, _, _, nil), do: :ok
-  defp activation_progress(nil, _, _, _), do: {:error, :unexpected_handoff}
+
+  defp activation_progress(nil, _, receipt, handoff) do
+    verify_handoff(nil, receipt, handoff)
+  end
 
   defp activation_progress(old, binding, receipt, handoff) do
     with {:ok, previous_gen} <- Control.uint64(old.binding["generation"]),
@@ -714,33 +717,40 @@ defmodule MedExHandheld.Spool do
       if old.receipt.fence == receipt.fence do
         Receipt.observe(old.receipt, receipt)
       else
-        with true <- generation > previous_gen,
-             %{
-               "previous" => previous,
-               "successor" => successor,
-               "imported" => imported,
-               "asserted_by" => "authenticated_host"
-             } = proof <- handoff,
-             true <- map_size(proof) == 4 do
-          with {:ok, host_previous} <- Receipt.parse(previous),
-               :ok <- Receipt.observe(old.receipt, host_previous) do
-            Receipt.handoff(host_previous, receipt, %{
-              previous: previous,
-              successor: successor,
-              imported: imported,
-              authenticated: true,
-              quiescent: true,
-              authority: :authenticated_host
-            })
-          end
-        else
-          _ -> {:error, :unverified_handoff}
-        end
+        if generation > previous_gen,
+          do: verify_handoff(old.receipt, receipt, handoff),
+          else: {:error, :unverified_handoff}
       end
     else
       _ -> {:error, :stale_generation}
     end
   end
+
+  defp verify_handoff(
+         local,
+         receipt,
+         %{
+           "previous" => previous,
+           "successor" => successor,
+           "imported" => imported,
+           "asserted_by" => "authenticated_host"
+         } = proof
+       )
+       when map_size(proof) == 4 do
+    with {:ok, host_previous} <- Receipt.parse(previous),
+         :ok <- if(is_nil(local), do: :ok, else: Receipt.observe(local, host_previous)) do
+      Receipt.handoff(host_previous, receipt, %{
+        previous: previous,
+        successor: successor,
+        imported: imported,
+        authenticated: true,
+        quiescent: true,
+        authority: :authenticated_host
+      })
+    end
+  end
+
+  defp verify_handoff(_, _, _), do: {:error, :unverified_handoff}
 
   defp covered(stream, receipt) do
     initial = %{stream.cursor | next_sequence: 0, next_sample: 0}

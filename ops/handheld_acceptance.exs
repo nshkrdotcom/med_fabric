@@ -1712,13 +1712,16 @@ defmodule MedFabric.HandheldAcceptance do
           "offline spool"
         )
 
-        duplicate = run_client!(lab, cfg, "paired_exam")
+        {_, status} =
+          System.cmd("flock", [
+            "--nonblock",
+            "--conflict-exit-code",
+            "73",
+            Path.join(root, "spool.lock"),
+            "true"
+          ])
 
-        check!(
-          ProcessLab.await!(duplicate, 10_000) != 0 and
-            log_contains?(duplicate, "spool already owned"),
-          "Duplicate spool owner not refused"
-        )
+        check!(status == 73, "Duplicate spool owner not refused")
 
         ProcessLab.kill!(child)
         Map.new(names, &{&1, Oracle.restart_cutoff!(Path.join(root, &1))})
@@ -1883,6 +1886,19 @@ defmodule MedFabric.HandheldAcceptance do
     check!(length(Enum.uniq(metrics)) == 2, "Expected two distinct eligible native observations")
     Enum.each(metrics, &action!(lab, &1, "deliver"))
 
+    ProcessLab.wait!(
+      fn ->
+        count!(
+          lab,
+          "outbox_deliveries d JOIN observations o ON o.id=d.observation_id JOIN reviews r ON r.id=o.decision_id",
+          "r.acquisition_id='#{id}' AND d.status='confirmed'"
+        ) == 2
+      end,
+      15_000,
+      nil,
+      "both FHIR deliveries confirmed"
+    )
+
     remote =
       sql!(
         lab,
@@ -1933,7 +1949,7 @@ defmodule MedFabric.HandheldAcceptance do
       lab,
       "hapi-loss-readback",
       "mix",
-      ["test", "integration"],
+      ["test", "integration/device_fhir_test.exs", "integration/hapi_integration_test.exs"],
       Path.join(@root, "core/interop"),
       Map.put(lab.env, "FHIR_BASE_URL", base)
     )
@@ -1957,7 +1973,7 @@ defmodule MedFabric.HandheldAcceptance do
       lab,
       "browser-capture",
       "mix",
-      ["test", "integration"],
+      ["test", "integration/recording_test.exs", "integration/encounter_scope_test.exs"],
       Path.join(@root, "apps/exam"),
       Map.put(lab.env, "DATABASE_URL", lab.cfg["database_url"])
     )

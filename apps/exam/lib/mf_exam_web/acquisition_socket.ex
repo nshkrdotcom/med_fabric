@@ -302,6 +302,7 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
   defp dispatch("measurement", msg, %{principal: %{kind: :device}} = s, _) do
     case MeasurementEvents.put(s.context.db, s.bind, msg["event"]) do
       {:ok, result} ->
+        Barrier.hit("measurement_commit")
         reply("durable", %{"event_id" => result.event_id, "fingerprint" => result.fingerprint}, s)
 
       _ ->

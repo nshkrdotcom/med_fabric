@@ -41,6 +41,9 @@ defmodule MedFabric.Exam.AcquisitionManifest do
         {:ok, _} = result ->
           result
 
+        {:error, :inventory_pending} = pending ->
+          pending
+
         error ->
           S.settlement_pending(context.db, bind.id)
           error
@@ -60,7 +63,11 @@ defmodule MedFabric.Exam.AcquisitionManifest do
           end
         end
 
-      unless match?({:ok, _}, result), do: S.settlement_pending(context.db, id)
+      case result do
+        {:ok, _} -> :ok
+        {:error, :inventory_pending} -> :ok
+        _ -> S.settlement_pending(context.db, id)
+      end
     end)
 
     :ok

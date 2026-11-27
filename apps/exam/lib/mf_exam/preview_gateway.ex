@@ -143,7 +143,9 @@ defmodule MedFabric.ExamWeb.DevicePreview do
              config,
              op,
              p["id"],
-             JSON.encode!(%{"token" => token, "sdp" => sdp}),
+             JSON.encode!(
+               if(op == "offer", do: %{"token" => token, "sdp" => sdp}, else: %{"token" => token})
+             ),
              "application/json"
            ) do
       conn
