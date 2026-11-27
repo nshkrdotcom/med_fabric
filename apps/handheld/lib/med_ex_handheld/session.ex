@@ -20,13 +20,7 @@ defmodule MedExHandheld.Session do
     case {state.phase, event} do
       {phase, {:admitted, binding, deadline}}
       when phase in [:disconnected, :resuming] and deadline > now ->
-        {:ok,
-         %{
-           state
-           | phase: if(state.stopped, do: :draining, else: :capturing),
-             binding: binding,
-             authority_deadline: deadline
-         }}
+        admitted_state(state, binding, deadline)
 
       {phase, :transport_lost} when phase in [:capturing, :draining, :finalizing] ->
         {:ok, %{state | phase: :disconnected, binding: nil, authority_deadline: nil}}
@@ -37,20 +31,8 @@ defmodule MedExHandheld.Session do
       {:capturing, :source_stopped} ->
         {:ok, %{state | phase: :draining, stopped: true}}
 
-      {:draining, :durably_drained} ->
-        {:ok, %{state | phase: :finalizing}}
-
-      {:finalizing, {:sealed, digest}} ->
-        if ContractRules.digest?(digest),
-          do: {:ok, %{state | phase: :complete}},
-          else: {:error, :invalid_terminal}
-
-      {phase, :authority_lost} when phase not in [:complete, :interrupted] ->
-        {:ok,
-         %{state | phase: :interrupted, binding: nil, authority_deadline: nil, stopped: true}}
-
-      _ ->
-        {:error, :invalid_session_transition}
+      other ->
+        later_transition(state, other)
     end
   end
 
@@ -94,13 +76,7 @@ defmodule MedExHandheld.Session do
         Regex.match?(~r/\A[A-Za-z0-9_-]+\z/, value)
 
   defp load_identity(config, profile, root) do
-    if File.exists?(root) and File.ls!(root) != [] do
-      unless Spool.read_json(Path.join(root, "namespace.json"), nil) == %{
-               "schema" => "mf_handheld.spool",
-               "revision" => 2
-             },
-             do: raise(ArgumentError, "incompatible spool namespace")
-    end
+    check_namespace!(root)
 
     expected = Map.take(config, ~w(encounter device acquisition)) |> Map.put("profile", profile)
     saved = Spool.read_json(Path.join(root, "identity.json"), nil)
@@ -172,28 +148,13 @@ defmodule MedExHandheld.Session do
 
     for {_, {_, spec}} <- sources, do: :ok = Spool.register(spool, spec)
 
-    monitor =
-      if sources != %{} do
-        case Supervisor.start_child(
-               resources,
-               {Monitor,
-                {Map.take(config, ~w(spool trace_monitor trace_limit_bytes)), config["boot"], hub}}
-             ) do
-          {:ok, pid} -> pid
-          {:error, _} -> nil
-        end
-      end
+    monitor = start_monitor(config, sources, resources, hub)
 
     {:ok, pool} = Supervisor.start_child(resources, {Task.Supervisor, []})
     marker = Path.join(root, "source_started.json")
     resuming = File.exists?(marker)
 
-    if resuming do
-      for {name, {_, spec}} <- sources,
-          do: :ok = Paired.interrupt_after_restart(config, spool, name, spec)
-    else
-      Spool.write!(marker, JSON.encode!(Map.take(config, ~w(boot acquisition api_revision))))
-    end
+    mark_source_start(config, spool, sources, marker, resuming)
 
     config = Map.put(config, "hub", hub)
 
@@ -215,16 +176,7 @@ defmodule MedExHandheld.Session do
     :ets.insert(hub, {:stop, true})
     Task.await_many(tasks, 35_000)
 
-    report = %{
-      "acquisition" => config["acquisition"],
-      "status" => if(match?({:ok, _}, outcome), do: "complete", else: "interrupted"),
-      "manifest_digest" =>
-        case outcome do
-          {:ok, digest} -> digest
-          _ -> nil
-        end,
-      "spool" => Spool.stats(spool)
-    }
+    report = session_report(config, outcome, spool)
 
     Spool.write!(Path.join(root, "result.json"), JSON.encode!(report))
     report
@@ -234,37 +186,7 @@ defmodule MedExHandheld.Session do
     {:ok, state} = transition(state, :resume, System.monotonic_time(:millisecond))
 
     result =
-      with {:ok, socket} <- Transport.connect(config, "control") do
-        try do
-          started = System.monotonic_time(:millisecond)
-
-          with {:ok, reply} <- Transport.request(socket, "hello", hello(config, sources)),
-               {:ok, admission} <- validate_admission(reply, config, started),
-               {:ok, state} <-
-                 transition(
-                   state,
-                   {:admitted, admission["binding"], admission["authority_deadline"]},
-                   System.monotonic_time(:millisecond)
-                 ) do
-            :ets.insert(hub, {:authority, admission["binding"], admission["authority_deadline"]})
-
-            try do
-              case config["profile"] do
-                "paired_exam" ->
-                  paired(config, socket, spool, monitor, hub, sources, admission, state)
-
-                "plx_spot_check" ->
-                  upload_events(config, socket, spool, admission)
-              end
-            after
-              :ets.delete(hub, :authority)
-              Spool.invalidate(spool, admission["binding"])
-            end
-          end
-        after
-          Transport.close(socket)
-        end
-      end
+      connect_once(config, sources, spool, monitor, hub, state)
 
     case result do
       {:ok, digest} ->
@@ -436,17 +358,7 @@ defmodule MedExHandheld.Session do
         :ok
 
       true ->
-        with :ok <- submit_monitor_results(socket, admission["binding"], 1),
-             {:ok, reply, authority} <- poll(socket, admission, config, hub),
-             :ok <- monitor_response(reply, authority, monitor, hub) do
-          if reply["stop_requested"] == true, do: :ets.insert(hub, {:stop, true})
-
-          if rem(iteration, 5) == 0 and admission["phase"] == "capturing",
-            do: record_clock_probes(config, socket, admission["binding"])
-
-          Process.sleep(100)
-          control(config, socket, monitor, hub, active, admission, iteration + 1)
-        end
+        control_active(config, socket, monitor, hub, active, admission, iteration)
     end
   end
 
@@ -575,29 +487,7 @@ defmodule MedExHandheld.Session do
     else
       case :ets.lookup(hub, :latest) do
         [{:latest, batch_id, at, frames}] when batch_id != last ->
-          result =
-            Enum.reduce_while(Enum.with_index(frames), :ok, fn {bytes, index}, _ ->
-              now = System.monotonic_time(:millisecond)
-
-              if now - at <= 200 do
-                Process.sleep(max(0, at + index * 20 - now))
-
-                with :ok <- current_control(hub, control_binding),
-                     :ok <- Transport.send_frame(socket, {:binary, bytes}),
-                     {:ok, %{"type" => "monitor_credit", "binding" => ^binding}} <-
-                       Transport.recv(socket) do
-                  {:cont, :ok}
-                else
-                  _ -> {:halt, :failed}
-                end
-              else
-                {:cont, :ok}
-              end
-            end)
-
-          if result == :ok,
-            do: send_latest(socket, binding, control_binding, hub, batch_id),
-            else: :ok
+          send_latest_batch(socket, binding, control_binding, hub, batch_id, at, frames)
 
         _ ->
           Process.sleep(10)
@@ -621,25 +511,7 @@ defmodule MedExHandheld.Session do
 
       {entries, _} =
         Enum.map_reduce(Enum.with_index(records), nil, fn {raw, sequence}, prior ->
-          event =
-            case Spool.get(spool, "events", sequence) do
-              {:ok, bytes} ->
-                JSON.decode!(bytes)
-
-              :absent ->
-                event =
-                  PLXPeripheral.event(
-                    raw,
-                    Transport.operation_id(),
-                    sequence,
-                    prior,
-                    config,
-                    :fixed_fixture_utc
-                  )
-
-                :ok = Spool.put(spool, "events", sequence, MedEx.CanonicalJSON.encode(event))
-                event
-            end
+          event = collect_event(config, spool, raw, sequence, prior)
 
           {[event["event_id"], Serialization.digest(event)], event["event_id"]}
         end)
@@ -718,6 +590,195 @@ defmodule MedExHandheld.Session do
           do: Process.unlink(producer)
 
       Supervisor.stop(resources)
+    end
+  end
+
+  defp admitted_state(state, binding, deadline) do
+    {:ok,
+     %{
+       state
+       | phase: if(state.stopped, do: :draining, else: :capturing),
+         binding: binding,
+         authority_deadline: deadline
+     }}
+  end
+
+  defp sealed_state(state, digest) do
+    if ContractRules.digest?(digest),
+      do: {:ok, %{state | phase: :complete}},
+      else: {:error, :invalid_terminal}
+  end
+
+  defp later_transition(state, {:draining, :durably_drained}),
+    do: {:ok, %{state | phase: :finalizing}}
+
+  defp later_transition(state, {:finalizing, {:sealed, digest}}), do: sealed_state(state, digest)
+
+  defp later_transition(state, {phase, :authority_lost})
+       when phase not in [:complete, :interrupted],
+       do:
+         {:ok,
+          %{state | phase: :interrupted, binding: nil, authority_deadline: nil, stopped: true}}
+
+  defp later_transition(_, _), do: {:error, :invalid_session_transition}
+
+  defp check_namespace!(root) do
+    if File.exists?(root) and File.ls!(root) != [] do
+      unless Spool.read_json(Path.join(root, "namespace.json"), nil) == %{
+               "schema" => "mf_handheld.spool",
+               "revision" => 2
+             },
+             do: raise(ArgumentError, "incompatible spool namespace")
+    end
+  end
+
+  defp start_monitor(config, sources, resources, hub) do
+    if sources != %{} do
+      case Supervisor.start_child(
+             resources,
+             {Monitor,
+              {Map.take(config, ~w(spool trace_monitor trace_limit_bytes)), config["boot"], hub}}
+           ) do
+        {:ok, pid} -> pid
+        {:error, _} -> nil
+      end
+    end
+  end
+
+  defp mark_source_start(config, spool, sources, marker, resuming) do
+    if resuming do
+      for {name, {_, spec}} <- sources,
+          do: :ok = Paired.interrupt_after_restart(config, spool, name, spec)
+    else
+      Spool.write!(marker, JSON.encode!(Map.take(config, ~w(boot acquisition api_revision))))
+    end
+  end
+
+  defp session_report(config, outcome, spool) do
+    %{
+      "acquisition" => config["acquisition"],
+      "status" => if(match?({:ok, _}, outcome), do: "complete", else: "interrupted"),
+      "manifest_digest" =>
+        case outcome do
+          {:ok, digest} -> digest
+          _ -> nil
+        end,
+      "spool" => Spool.stats(spool)
+    }
+  end
+
+  defp run_admitted(config, sources, spool, monitor, hub, state, socket, admission) do
+    :ets.insert(hub, {:authority, admission["binding"], admission["authority_deadline"]})
+
+    try do
+      case config["profile"] do
+        "paired_exam" ->
+          paired(config, socket, spool, monitor, hub, sources, admission, state)
+
+        "plx_spot_check" ->
+          upload_events(config, socket, spool, admission)
+      end
+    after
+      :ets.delete(hub, :authority)
+      Spool.invalidate(spool, admission["binding"])
+    end
+  end
+
+  defp admit_connected(config, sources, spool, monitor, hub, state, socket) do
+    started = System.monotonic_time(:millisecond)
+
+    with {:ok, reply} <- Transport.request(socket, "hello", hello(config, sources)),
+         {:ok, admission} <- validate_admission(reply, config, started),
+         {:ok, state} <-
+           transition(
+             state,
+             {:admitted, admission["binding"], admission["authority_deadline"]},
+             System.monotonic_time(:millisecond)
+           ) do
+      run_admitted(config, sources, spool, monitor, hub, state, socket, admission)
+    end
+  end
+
+  defp connect_once(config, sources, spool, monitor, hub, state) do
+    with {:ok, socket} <- Transport.connect(config, "control") do
+      try do
+        admit_connected(config, sources, spool, monitor, hub, state, socket)
+      after
+        Transport.close(socket)
+      end
+    end
+  end
+
+  defp control_observations(reply, config, socket, hub, admission, iteration) do
+    if reply["stop_requested"] == true, do: :ets.insert(hub, {:stop, true})
+
+    if rem(iteration, 5) == 0 and admission["phase"] == "capturing",
+      do: record_clock_probes(config, socket, admission["binding"])
+  end
+
+  defp control_active(config, socket, monitor, hub, active, admission, iteration) do
+    with :ok <- submit_monitor_results(socket, admission["binding"], 1),
+         {:ok, reply, authority} <- poll(socket, admission, config, hub),
+         :ok <- monitor_response(reply, authority, monitor, hub) do
+      control_observations(reply, config, socket, hub, admission, iteration)
+
+      Process.sleep(100)
+      control(config, socket, monitor, hub, active, admission, iteration + 1)
+    end
+  end
+
+  defp transmit_monitor_frame(socket, binding, control_binding, hub, at, bytes, index, now) do
+    Process.sleep(max(0, at + index * 20 - now))
+
+    with :ok <- current_control(hub, control_binding),
+         :ok <- Transport.send_frame(socket, {:binary, bytes}),
+         {:ok, %{"type" => "monitor_credit", "binding" => ^binding}} <-
+           Transport.recv(socket) do
+      {:cont, :ok}
+    else
+      _ -> {:halt, :failed}
+    end
+  end
+
+  defp send_monitor_frame(socket, binding, control_binding, hub, at, bytes, index) do
+    now = System.monotonic_time(:millisecond)
+
+    if now - at <= 200 do
+      transmit_monitor_frame(socket, binding, control_binding, hub, at, bytes, index, now)
+    else
+      {:cont, :ok}
+    end
+  end
+
+  defp send_latest_batch(socket, binding, control_binding, hub, batch_id, at, frames) do
+    result =
+      Enum.reduce_while(Enum.with_index(frames), :ok, fn {bytes, index}, _ ->
+        send_monitor_frame(socket, binding, control_binding, hub, at, bytes, index)
+      end)
+
+    if result == :ok,
+      do: send_latest(socket, binding, control_binding, hub, batch_id),
+      else: :ok
+  end
+
+  defp collect_event(config, spool, raw, sequence, prior) do
+    case Spool.get(spool, "events", sequence) do
+      {:ok, bytes} ->
+        JSON.decode!(bytes)
+
+      :absent ->
+        event =
+          PLXPeripheral.event(
+            raw,
+            Transport.operation_id(),
+            sequence,
+            prior,
+            config,
+            :fixed_fixture_utc
+          )
+
+        :ok = Spool.put(spool, "events", sequence, MedEx.CanonicalJSON.encode(event))
+        event
     end
   end
 end

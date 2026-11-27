@@ -3,6 +3,7 @@ defmodule MedFabric.ExamWeb.UserSocket do
   use Phoenix.Socket
   alias MedFabric.Exam
   alias MedFabric.ExamWeb.{Endpoint, ProxyIdentity}
+  alias MedFabric.Store.Encounters
   channel("talkback:*", MedFabric.ExamWeb.TalkbackChannel)
 
   def connect(%{"token" => token}, socket, info)
@@ -12,7 +13,7 @@ defmodule MedFabric.ExamWeb.UserSocket do
          true <- role in [:patient, :clinician],
          true <- ProxyIdentity.matches?(info[:x_headers] || [], actor, Exam.lab()),
          true <-
-           MedFabric.Store.Encounters.session_authorized?(
+           Encounters.session_authorized?(
              Exam.context().db,
              session,
              enc,

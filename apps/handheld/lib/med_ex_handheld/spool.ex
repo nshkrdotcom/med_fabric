@@ -216,7 +216,7 @@ defmodule MedExHandheld.Spool do
            else: {:error, :event_conflict}
          ), state}
 
-      state.bytes + byte_size(bytes) + 32 > state.limit or map_size(state.files) >= @max_records ->
+      event_capacity_exceeded?(state, bytes) ->
         {:reply, {:error, :spool_full}, state}
 
       true ->
@@ -276,24 +276,7 @@ defmodule MedExHandheld.Spool do
     seal_path = Path.join([state.root, "events", "seal.json"])
     saved = read_json(seal_path, nil)
 
-    valid =
-      binding == state.events_binding and is_map(binding) and valid_inventory?(inventory) and
-        (saved == nil or saved == inventory) and
-        Enum.all?(Enum.with_index(inventory), fn {entry, q} ->
-          case state.files[{"events", q}] do
-            nil ->
-              saved == inventory
-
-            file ->
-              raw = read_record!(file.path)
-
-              with true <- valid_event?(raw, q, state.root), {:ok, event} <- JSON.decode(raw) do
-                entry == [event["event_id"], Serialization.digest(event)]
-              else
-                _ -> false
-              end
-          end
-        end) and Enum.all?(files, fn {{_, q}, _} -> q < length(inventory) end)
+    valid = valid_seal?(state, binding, inventory, saved, files)
 
     if valid do
       # The complete authenticated remote inventory is persisted before any local deletion.
@@ -370,21 +353,7 @@ defmodule MedExHandheld.Spool do
     paths = Path.expand(root) |> Path.split() |> Enum.scan(&Path.join(&2, &1))
 
     Enum.reduce_while(paths, :ok, fn path, :ok ->
-      case File.lstat(path) do
-        {:error, :enoent} ->
-          {:cont, :ok}
-
-        {:ok, %{type: :directory, uid: owner, mode: mode}} ->
-          # A root-owned sticky system temporary directory cannot rename this user's entries.
-          trusted =
-            owner in [0, uid] and
-              (band(mode, 0o022) == 0 or (owner == 0 and band(mode, 0o1000) != 0))
-
-          if trusted, do: {:cont, :ok}, else: {:halt, {:error, :unsafe_spool_root}}
-
-        _ ->
-          {:halt, {:error, :unsafe_spool_root}}
-      end
+      trusted_ancestor(path, uid)
     end)
   rescue
     _ in [ArgumentError, ErlangError, MatchError] -> {:error, :unsafe_spool_root}
@@ -410,42 +379,7 @@ defmodule MedExHandheld.Spool do
 
   defp load_records(root) do
     Enum.reduce_while(["audio", "ecg", "events"], {:ok, %{}, 0}, fn name, {:ok, all, total} ->
-      dir = Path.join(root, name)
-
-      with :ok <- File.mkdir_p(dir),
-           {:ok, stat} <- File.lstat(dir),
-           true <- stat.type == :directory do
-        files = File.ls!(dir)
-
-        # Only recognizable uncommitted staging files are removable; all installed evidence is retained.
-        :ok =
-          clean_staging(
-            dir,
-            ~r/\A(?:(?:descriptor|source|ack|binding|seal)\.json|[0-9]+(?:-[0-9]+)?\.rec(?:\.receipt)?)\.tmp\.[A-Za-z0-9_-]{16}\z/
-          )
-
-        entries = Enum.filter(files, &String.ends_with?(&1, ".rec"))
-        if map_size(all) + length(entries) > @max_records, do: throw(:spool_metadata_limit)
-
-        {records, bytes} =
-          Enum.reduce(entries, {all, total}, fn file, {acc, count} ->
-            path = Path.join(dir, file)
-            {:ok, info} = File.lstat(path)
-            true = info.type == :regular and info.size in 33..65_616
-            body = read_record!(path)
-            key = file_key(name, file)
-
-            if name == "events" and not valid_event?(body, key, root),
-              do: raise(ArgumentError, "corrupt source event")
-
-            {Map.put(acc, {name, key}, %{path: path, size: info.size, raw: body}),
-             count + info.size}
-          end)
-
-        {:cont, {:ok, records, bytes}}
-      else
-        _ -> {:halt, {:error, :unsafe_spool_path}}
-      end
+      load_stream_records(root, name, all, total)
     end)
   catch
     :spool_metadata_limit -> {:error, :spool_metadata_limit}
@@ -541,18 +475,7 @@ defmodule MedExHandheld.Spool do
 
       valid =
         Enum.all?(records, fn {key, metadata} ->
-          case Plan.advance(
-                 %{base | next_sequence: elem(key, 0), next_sample: elem(key, 1)},
-                 metadata
-               ) do
-            {:ok, ending} ->
-              MapSet.member?(visited, key) or
-                (ending.next_sequence <= base.next_sequence and
-                   ending.next_sample <= base.next_sample)
-
-            _ ->
-              false
-          end
+          record_covered?(base, visited, key, metadata)
         end)
 
       if valid, do: :ok, else: {:error, :source_discontinuity}
@@ -583,10 +506,10 @@ defmodule MedExHandheld.Spool do
   defp validate_watermark(%{"sequence" => q, "sample" => sample, "done" => done}, cursor)
        when is_integer(q) and q >= 0 and is_integer(sample) and sample >= 0 and is_boolean(done) do
     cond do
-      q > cursor.next_sequence or sample > cursor.next_sample ->
+      watermark_ahead?(q, sample, cursor) ->
         {:error, :source_watermark_ahead}
 
-      done and {q, sample} != {cursor.next_sequence, cursor.next_sample} ->
+      terminal_watermark_conflict?(q, sample, done, cursor) ->
         {:error, :terminal_source_conflict}
 
       true ->
@@ -609,58 +532,7 @@ defmodule MedExHandheld.Spool do
 
   defp install_one(state, name, stream, {q, raw, next_q, next_sample}) do
     with {:ok, metadata} <- Plan.record(raw, stream.spec), true <- elem(metadata.key, 0) == q do
-      case stream.records[metadata.key] do
-        %{fingerprint: fingerprint} when fingerprint == metadata.fingerprint ->
-          start = %{
-            stream.cursor
-            | next_sequence: elem(metadata.key, 0),
-              next_sample: elem(metadata.key, 1)
-          }
-
-          with {:ok, ending} <- Plan.advance(start, metadata),
-               true <- {ending.next_sequence, ending.next_sample} == {next_q, next_sample},
-               :ok <- verify_record(stream.records[metadata.key], stream.spec) do
-            {:ok, state}
-          else
-            _ -> {:error, :spool_conflict}
-          end
-
-        %{} ->
-          {:error, :spool_conflict}
-
-        nil ->
-          with {:ok, cursor} <- Plan.advance(stream.cursor, metadata),
-               true <- {cursor.next_sequence, cursor.next_sample} == {next_q, next_sample},
-               true <- state.bytes + byte_size(raw) + 32 <= state.limit,
-               true <- map_size(state.files) < @max_records do
-            path = record_path(state.root, name, metadata.key)
-            install!(path, :crypto.hash(:sha256, raw) <> raw)
-            metadata = Map.merge(metadata, %{path: path, size: byte_size(raw) + 32})
-
-            next_stream = %{
-              stream
-              | cursor: cursor,
-                records: Map.put(stream.records, metadata.key, metadata)
-            }
-
-            {:ok,
-             %{
-               state
-               | bytes: state.bytes + metadata.size,
-                 maximum: max(state.maximum, state.bytes + metadata.size),
-                 files:
-                   Map.put(state.files, {name, metadata.key}, %{
-                     path: path,
-                     size: metadata.size,
-                     raw: raw
-                   }),
-                 streams: Map.put(state.streams, name, next_stream)
-             }}
-          else
-            false -> {:error, :spool_full}
-            error -> error
-          end
-      end
+      install_record(state, name, stream, metadata, raw, next_q, next_sample)
     else
       false -> {:error, :invalid_source_batch}
       error -> error
@@ -714,13 +586,7 @@ defmodule MedExHandheld.Spool do
     with {:ok, previous_gen} <- Control.uint64(old.binding["generation"]),
          {:ok, generation} <- Control.uint64(binding["generation"]),
          true <- generation >= previous_gen do
-      if old.receipt.fence == receipt.fence do
-        Receipt.observe(old.receipt, receipt)
-      else
-        if generation > previous_gen,
-          do: verify_handoff(old.receipt, receipt, handoff),
-          else: {:error, :unverified_handoff}
-      end
+      check_activation_progress(old, receipt, handoff, generation, previous_gen)
     else
       _ -> {:error, :stale_generation}
     end
@@ -924,25 +790,7 @@ defmodule MedExHandheld.Spool do
   def read_json(path, default) do
     case File.lstat(path) do
       {:ok, %{type: :regular, size: size}} when size <= 4_194_304 ->
-        bytes = File.read!(path)
-        if byte_size(bytes) > 4_194_304, do: raise(ArgumentError, "metadata limit")
-
-        decoders = [
-          object_start: fn _ -> %{} end,
-          object_push: fn key, value, object ->
-            if Map.has_key?(object, key), do: raise(ArgumentError, "duplicate metadata key")
-            Map.put(object, key, value)
-          end,
-          object_finish: fn object, parent -> {object, parent} end
-        ]
-
-        case JSON.decode(bytes, nil, decoders) do
-          {value, nil, rest} ->
-            if String.trim(rest) == "", do: value, else: raise(ArgumentError, "invalid metadata")
-
-          _ ->
-            raise ArgumentError, "invalid metadata"
-        end
+        decode_metadata!(path)
 
       {:error, :enoent} ->
         default
@@ -1052,4 +900,210 @@ defmodule MedExHandheld.Spool do
   end
 
   def terminate(_, state), do: close_port(state.owner)
+
+  defp event_capacity_exceeded?(state, bytes),
+    do: state.bytes + byte_size(bytes) + 32 > state.limit or map_size(state.files) >= @max_records
+
+  defp valid_seal?(state, binding, inventory, saved, files) do
+    binding == state.events_binding and is_map(binding) and valid_inventory?(inventory) and
+      (saved == nil or saved == inventory) and
+      Enum.all?(Enum.with_index(inventory), fn {entry, q} ->
+        seal_entry?(state, inventory, saved, entry, q)
+      end) and
+      Enum.all?(files, fn {{_, q}, _} -> q < length(inventory) end)
+  end
+
+  defp seal_entry?(state, inventory, saved, entry, q) do
+    case state.files[{"events", q}] do
+      nil ->
+        saved == inventory
+
+      file ->
+        verified_seal_entry?(state, file, entry, q)
+    end
+  end
+
+  defp trusted_ancestor(path, uid) do
+    case File.lstat(path) do
+      {:error, :enoent} ->
+        {:cont, :ok}
+
+      {:ok, %{type: :directory, uid: owner, mode: mode}} ->
+        # A root-owned sticky system temporary directory cannot rename this user's entries.
+        trusted =
+          owner in [0, uid] and
+            (band(mode, 0o022) == 0 or (owner == 0 and band(mode, 0o1000) != 0))
+
+        if trusted, do: {:cont, :ok}, else: {:halt, {:error, :unsafe_spool_root}}
+
+      _ ->
+        {:halt, {:error, :unsafe_spool_root}}
+    end
+  end
+
+  defp load_record(root, name, dir, file, acc, count) do
+    path = Path.join(dir, file)
+    {:ok, info} = File.lstat(path)
+    true = info.type == :regular and info.size in 33..65_616
+    body = read_record!(path)
+    key = file_key(name, file)
+
+    if name == "events" and not valid_event?(body, key, root),
+      do: raise(ArgumentError, "corrupt source event")
+
+    {Map.put(acc, {name, key}, %{path: path, size: info.size, raw: body}), count + info.size}
+  end
+
+  defp load_stream_records(root, name, all, total) do
+    dir = Path.join(root, name)
+
+    with :ok <- File.mkdir_p(dir),
+         {:ok, stat} <- File.lstat(dir),
+         true <- stat.type == :directory do
+      files = File.ls!(dir)
+
+      # Only recognizable uncommitted staging files are removable; all installed evidence is retained.
+      :ok =
+        clean_staging(
+          dir,
+          ~r/\A(?:(?:descriptor|source|ack|binding|seal)\.json|[0-9]+(?:-[0-9]+)?\.rec(?:\.receipt)?)\.tmp\.[A-Za-z0-9_-]{16}\z/
+        )
+
+      entries = Enum.filter(files, &String.ends_with?(&1, ".rec"))
+      if map_size(all) + length(entries) > @max_records, do: throw(:spool_metadata_limit)
+
+      {records, bytes} =
+        Enum.reduce(entries, {all, total}, fn file, {acc, count} ->
+          load_record(root, name, dir, file, acc, count)
+        end)
+
+      {:cont, {:ok, records, bytes}}
+    else
+      _ -> {:halt, {:error, :unsafe_spool_path}}
+    end
+  end
+
+  defp record_covered?(base, visited, key, metadata) do
+    case Plan.advance(
+           %{base | next_sequence: elem(key, 0), next_sample: elem(key, 1)},
+           metadata
+         ) do
+      {:ok, ending} ->
+        MapSet.member?(visited, key) or
+          (ending.next_sequence <= base.next_sequence and
+             ending.next_sample <= base.next_sample)
+
+      _ ->
+        false
+    end
+  end
+
+  defp watermark_ahead?(q, sample, cursor),
+    do: q > cursor.next_sequence or sample > cursor.next_sample
+
+  defp install_new_record(state, name, stream, metadata, raw, next_q, next_sample) do
+    with {:ok, cursor} <- Plan.advance(stream.cursor, metadata),
+         true <- {cursor.next_sequence, cursor.next_sample} == {next_q, next_sample},
+         true <- state.bytes + byte_size(raw) + 32 <= state.limit,
+         true <- map_size(state.files) < @max_records do
+      path = record_path(state.root, name, metadata.key)
+      install!(path, :crypto.hash(:sha256, raw) <> raw)
+      metadata = Map.merge(metadata, %{path: path, size: byte_size(raw) + 32})
+
+      next_stream = %{
+        stream
+        | cursor: cursor,
+          records: Map.put(stream.records, metadata.key, metadata)
+      }
+
+      {:ok,
+       %{
+         state
+         | bytes: state.bytes + metadata.size,
+           maximum: max(state.maximum, state.bytes + metadata.size),
+           files:
+             Map.put(state.files, {name, metadata.key}, %{
+               path: path,
+               size: metadata.size,
+               raw: raw
+             }),
+           streams: Map.put(state.streams, name, next_stream)
+       }}
+    else
+      false -> {:error, :spool_full}
+      error -> error
+    end
+  end
+
+  defp install_record(state, name, stream, metadata, raw, next_q, next_sample) do
+    case stream.records[metadata.key] do
+      %{fingerprint: fingerprint} when fingerprint == metadata.fingerprint ->
+        start = %{
+          stream.cursor
+          | next_sequence: elem(metadata.key, 0),
+            next_sample: elem(metadata.key, 1)
+        }
+
+        with {:ok, ending} <- Plan.advance(start, metadata),
+             true <- {ending.next_sequence, ending.next_sample} == {next_q, next_sample},
+             :ok <- verify_record(stream.records[metadata.key], stream.spec) do
+          {:ok, state}
+        else
+          _ -> {:error, :spool_conflict}
+        end
+
+      %{} ->
+        {:error, :spool_conflict}
+
+      nil ->
+        install_new_record(state, name, stream, metadata, raw, next_q, next_sample)
+    end
+  end
+
+  defp check_activation_progress(old, receipt, handoff, generation, previous_gen) do
+    if old.receipt.fence == receipt.fence do
+      Receipt.observe(old.receipt, receipt)
+    else
+      if generation > previous_gen,
+        do: verify_handoff(old.receipt, receipt, handoff),
+        else: {:error, :unverified_handoff}
+    end
+  end
+
+  defp decode_metadata!(path) do
+    bytes = File.read!(path)
+    if byte_size(bytes) > 4_194_304, do: raise(ArgumentError, "metadata limit")
+
+    decoders = [
+      object_start: fn _ -> %{} end,
+      object_push: &push_metadata!/3,
+      object_finish: fn object, parent -> {object, parent} end
+    ]
+
+    case JSON.decode(bytes, nil, decoders) do
+      {value, nil, rest} ->
+        if String.trim(rest) == "", do: value, else: raise(ArgumentError, "invalid metadata")
+
+      _ ->
+        raise ArgumentError, "invalid metadata"
+    end
+  end
+
+  defp push_metadata!(key, value, object) do
+    if Map.has_key?(object, key), do: raise(ArgumentError, "duplicate metadata key")
+    Map.put(object, key, value)
+  end
+
+  defp terminal_watermark_conflict?(q, sample, done, cursor),
+    do: done and {q, sample} != {cursor.next_sequence, cursor.next_sample}
+
+  defp verified_seal_entry?(state, file, entry, q) do
+    raw = read_record!(file.path)
+
+    with true <- valid_event?(raw, q, state.root), {:ok, event} <- JSON.decode(raw) do
+      entry == [event["event_id"], Serialization.digest(event)]
+    else
+      _ -> false
+    end
+  end
 end

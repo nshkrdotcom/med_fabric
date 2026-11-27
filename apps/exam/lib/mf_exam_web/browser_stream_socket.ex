@@ -2,6 +2,7 @@ defmodule MedFabric.ExamWeb.BrowserStreamSocket do
   @moduledoc "Thin authenticated patient-session edge to the common source-neutral acquisition socket."
   import Plug.Conn
   alias MedFabric.Exam
+  alias MedFabric.ExamWeb.{AcquisitionSocket, ProxyIdentity}
   alias MedFabric.Store.Encounters
   def init(opts), do: opts
 
@@ -20,9 +21,9 @@ defmodule MedFabric.ExamWeb.BrowserStreamSocket do
            Phoenix.Token.verify(MedFabric.ExamWeb.Endpoint, "browser-acquisition", token,
              max_age: 60
            ),
-         true <- MedFabric.ExamWeb.ProxyIdentity.matches?(conn.req_headers, actor, Exam.lab()),
+         true <- ProxyIdentity.matches?(conn.req_headers, actor, Exam.lab()),
          true <- Encounters.session_authorized?(context.db, session, enc, actor, :patient) do
-      MedFabric.ExamWeb.AcquisitionSocket.upgrade(
+      AcquisitionSocket.upgrade(
         conn,
         context,
         %{

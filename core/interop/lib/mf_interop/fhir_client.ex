@@ -61,31 +61,7 @@ defmodule MedFabric.Interop.FhirClient do
         ]
       }
 
-      resource =
-        case native["provenance"] do
-          %{"kind" => "manual"} ->
-            Map.put(resource, "method", %{"text" => "Manually entered measurement"})
-
-          %{
-            "kind" => "simulated_plxs",
-            "simulated" => true,
-            "time_basis" => "qualified_fixture_utc"
-          } ->
-            Map.merge(resource, %{
-              "method" => %{"text" => "Synthetic PLXS fixture"},
-              "note" => [%{"text" => "Simulated source; not a physical device measurement."}],
-              "meta" =>
-                Map.put(resource["meta"], "tag", [
-                  %{"system" => "urn:medfabric:source", "code" => "simulated"}
-                ])
-            })
-            |> device_lineage(native)
-
-          _ ->
-            nil
-        end
-
-      if resource, do: {:ok, resource}, else: {:error, :unqualified_native_provenance}
+      qualify_provenance(resource, native)
     else
       _ -> {:error, :representation_unavailable}
     end
@@ -94,6 +70,34 @@ defmodule MedFabric.Interop.FhirClient do
   end
 
   def resource_checked(_, _, _), do: {:error, :representation_unavailable}
+
+  defp qualify_provenance(resource, native) do
+    resource =
+      case native["provenance"] do
+        %{"kind" => "manual"} ->
+          Map.put(resource, "method", %{"text" => "Manually entered measurement"})
+
+        %{
+          "kind" => "simulated_plxs",
+          "simulated" => true,
+          "time_basis" => "qualified_fixture_utc"
+        } ->
+          Map.merge(resource, %{
+            "method" => %{"text" => "Synthetic PLXS fixture"},
+            "note" => [%{"text" => "Simulated source; not a physical device measurement."}],
+            "meta" =>
+              Map.put(resource["meta"], "tag", [
+                %{"system" => "urn:medfabric:source", "code" => "simulated"}
+              ])
+          })
+          |> device_lineage(native)
+
+        _ ->
+          nil
+      end
+
+    if resource, do: {:ok, resource}, else: {:error, :unqualified_native_provenance}
+  end
 
   def mapping_version, do: "medfabric.fhir-r4.v2"
   def canonical_bytes(resource), do: JSON.encode_to_iodata!(resource) |> IO.iodata_to_binary()
@@ -117,11 +121,7 @@ defmodule MedFabric.Interop.FhirClient do
              body: bytes
            ) do
         {:ok, %{status: status, body: remote}} when status in [200, 201] ->
-          case verify(resource, remote, identifier) do
-            {:matched, _} = matched -> matched
-            {:conflict, _} = conflict -> conflict
-            _ -> reconcile(resource, opts)
-          end
+          confirm_delivery(resource, remote, identifier, opts)
 
         {:ok, %{status: status}} when status in [409, 412] ->
           {:conflict, :conditional_conflict}
@@ -134,6 +134,14 @@ defmodule MedFabric.Interop.FhirClient do
       end
     else
       _ -> {:permanent_noncommit, :before_http}
+    end
+  end
+
+  defp confirm_delivery(resource, remote, identifier, opts) do
+    case verify(resource, remote, identifier) do
+      {:matched, _} = matched -> matched
+      {:conflict, _} = conflict -> conflict
+      _ -> reconcile(resource, opts)
     end
   end
 
@@ -154,30 +162,38 @@ defmodule MedFabric.Interop.FhirClient do
            params: [identifier: system <> "|" <> value, _count: 2]
          ) do
       {:ok, %{status: 200, body: %{"resourceType" => "Bundle"} = bundle}} ->
-        links = Map.get(bundle, "link", [])
-        entries = Map.get(bundle, "entry", [])
-
-        cond do
-          not is_list(links) or not is_list(entries) ->
-            {:unknown, :unconfirmed_remote_record}
-
-          Enum.any?(links, &(is_map(&1) and &1["relation"] == "next")) or length(entries) > 1 ->
-            {:conflict, :ambiguous_search}
-
-          entries == [] ->
-            {:unknown, :empty_search}
-
-          true ->
-            case hd(entries) do
-              %{"resource" => remote} -> verify(resource, remote, identifier)
-              _ -> {:unknown, :unconfirmed_remote_record}
-            end
-        end
+        reconcile_bundle(resource, identifier, bundle)
 
       _ ->
         {:unknown, :reconciliation_unavailable}
     end
   end
+
+  defp reconcile_bundle(resource, identifier, bundle) do
+    links = Map.get(bundle, "link", [])
+    entries = Map.get(bundle, "entry", [])
+
+    cond do
+      not is_list(links) or not is_list(entries) ->
+        {:unknown, :unconfirmed_remote_record}
+
+      Enum.any?(links, &next_link?/1) or length(entries) > 1 ->
+        {:conflict, :ambiguous_search}
+
+      entries == [] ->
+        {:unknown, :empty_search}
+
+      true ->
+        verify_entry(resource, hd(entries), identifier)
+    end
+  end
+
+  defp next_link?(link), do: is_map(link) and link["relation"] == "next"
+
+  defp verify_entry(resource, %{"resource" => remote}, identifier),
+    do: verify(resource, remote, identifier)
+
+  defp verify_entry(_, _, _), do: {:unknown, :unconfirmed_remote_record}
 
   def verify(
         expected,
@@ -289,10 +305,7 @@ defmodule MedFabric.Interop.FhirClient do
        when is_binary(m) and is_binary(e) and byte_size(m) <= 21 and byte_size(e) <= 3 do
     # This mapper supports up to 18 significant decimal digits. Native values
     # have a larger exact domain; unsupported representation is an outbox block.
-    valid =
-      Regex.match?(~r/\A(?:0|[1-9][0-9]*|-[1-9][0-9]*)\z/, m) and
-        Regex.match?(~r/\A(?:0|[1-9][0-9]*|-[1-9][0-9]*)\z/, e) and
-        String.length(String.trim_leading(m, "-")) <= 18 and String.to_integer(e) in -18..18
+    valid = supported_decimal?(m, e)
 
     case if(valid, do: Decimal.parse(m <> "e" <> e), else: :unsupported) do
       {value, ""} ->
@@ -306,6 +319,12 @@ defmodule MedFabric.Interop.FhirClient do
   end
 
   defp represent_decimal(_), do: {:error, :invalid_decimal}
+
+  defp supported_decimal?(m, e) do
+    Regex.match?(~r/\A(?:0|[1-9][0-9]*|-[1-9][0-9]*)\z/, m) and
+      Regex.match?(~r/\A(?:0|[1-9][0-9]*|-[1-9][0-9]*)\z/, e) and
+      String.length(String.trim_leading(m, "-")) <= 18 and String.to_integer(e) in -18..18
+  end
 
   defp reference?(s, type),
     do: is_binary(s) and Regex.match?(~r/\A#{type}\/[A-Za-z0-9.-]{1,64}\z/, s)

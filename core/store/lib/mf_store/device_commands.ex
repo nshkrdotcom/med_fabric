@@ -1,28 +1,15 @@
 defmodule MedFabric.Store.DeviceCommands do
   @moduledoc "Device grant authority and durable command attempts; MedEx owns technical decisions."
-  alias MedFabric.Store.AcquisitionSessions, as: S
   alias MedEx.ControlInterlock
+  alias MedFabric.Domain.Review
+  alias MedFabric.Store.AcquisitionSessions, as: S
 
   def request(db, enc, id, actor, gain) when gain in ["unity", "half"] do
     Postgrex.transaction(db, fn tx ->
       S.writable!(tx)
       s = S.snapshot!(tx, id, :share)
 
-      unless s.encounter == enc and s.clinician == actor and is_nil(s.closed_at),
-        do: S.abort(tx, :unauthorized)
-
-      S.rows(tx, "SELECT id FROM acquisition_sessions WHERE id=$1 FOR NO KEY UPDATE", [id])
-      S.authorize_source!(tx, s)
-
-      unless s.encounter == enc and s.profile == "paired_exam" and s.state == "capturing" and
-               s.authority == "authorized",
-             do: S.abort(tx, :inactive)
-
-      unless S.rows(
-               tx,
-               "SELECT id FROM device_commands WHERE acquisition_id=$1 AND state IN ('requested','dispatching','outcome_unknown')",
-               [id]
-             ) == [], do: S.abort(tx, :reconciliation_required)
+      authorize_request!(tx, s, enc, id, actor)
 
       [[epoch]] =
         S.rows(
@@ -62,17 +49,18 @@ defmodule MedFabric.Store.DeviceCommands do
         generation: s.generation
       }
 
-      with {:ok, _, _} <-
-             ControlInterlock.request(state, command(request, fingerprint), watermarks) do
-        S.rows(
-          tx,
-          "INSERT INTO device_commands(id,acquisition_id,fingerprint,request,state,expires_at) VALUES($1,$2,$3,$4,'requested',clock_timestamp()+interval '30 seconds')",
-          [request["id"], id, fingerprint, request]
-        )
+      case ControlInterlock.request(state, command(request, fingerprint), watermarks) do
+        {:ok, _, _} ->
+          S.rows(
+            tx,
+            "INSERT INTO device_commands(id,acquisition_id,fingerprint,request,state,expires_at) VALUES($1,$2,$3,$4,'requested',clock_timestamp()+interval '30 seconds')",
+            [request["id"], id, fingerprint, request]
+          )
 
-        S.fact(tx, id, "command_requested", Map.put(request, "fingerprint", fingerprint))
-      else
-        _ -> S.abort(tx, :invalid_command)
+          S.fact(tx, id, "command_requested", Map.put(request, "fingerprint", fingerprint))
+
+        _ ->
+          S.abort(tx, :invalid_command)
       end
     end)
   end
@@ -94,70 +82,84 @@ defmodule MedFabric.Store.DeviceCommands do
              "SELECT id,fingerprint,request,state,GREATEST(0,FLOOR(EXTRACT(EPOCH FROM (expires_at-clock_timestamp()))*1000))::integer,updated_at<=clock_timestamp()-interval '3 seconds' FROM device_commands WHERE acquisition_id=$1 AND state IN ('requested','dispatching','outcome_unknown') ORDER BY updated_at LIMIT 1 FOR UPDATE",
              [s.id]
            ) do
-        [[id, fp, request, state, command_ms, timed_out]] ->
-          remaining = min(base["remaining_ms"], command_ms)
-
-          cond do
-            state == "requested" and remaining > 0 and
-                request["generation"] == to_string(s.generation) ->
-              interlock = interlock(request, fp, :requested)
-
-              with {:ok, _, _} <- ControlInterlock.step(interlock, {:intent_committed, id}) do
-                transition(tx, s.id, id, "dispatching", nil)
-
-                Map.merge(base, %{
-                  "type" => "command",
-                  "command" => Map.put(request, "fingerprint", fp),
-                  "command_remaining_ms" => remaining
-                })
-              else
-                _ -> S.abort(tx, :invalid_command_state)
-              end
-
-            state == "requested" ->
-              transition(tx, s.id, id, "rejected", %{"reason" => "expired_before_dispatch"})
-              base
-
-            state == "dispatching" and timed_out ->
-              with {:ok, _, _} <-
-                     ControlInterlock.step(interlock(request, fp, :dispatched), {:timeout, id}) do
-                transition(tx, s.id, id, "outcome_unknown", nil)
-
-                Map.merge(base, %{
-                  "type" => "state_query",
-                  "id" => id,
-                  "fingerprint" => fp,
-                  "command" => Map.put(request, "fingerprint", fp),
-                  "command_remaining_ms" => 0
-                })
-              else
-                _ -> S.abort(tx, :invalid_command_state)
-              end
-
-            state == "outcome_unknown" ->
-              if S.rows(
-                   tx,
-                   "UPDATE device_commands SET readback_count=readback_count+1,updated_at=clock_timestamp() WHERE id=$1 AND readback_count<3 AND updated_at<clock_timestamp()-interval '1 second' RETURNING id",
-                   [id]
-                 ) == [[id]],
-                 do:
-                   Map.merge(base, %{
-                     "type" => "state_query",
-                     "id" => id,
-                     "fingerprint" => fp,
-                     "command" => Map.put(request, "fingerprint", fp),
-                     "command_remaining_ms" => 0
-                   }),
-                 else: base
-
-            true ->
-              base
-          end
+        [[_, _, _, _, _, _] = row] ->
+          poll_command(tx, s, base, row)
 
         [] ->
           base
       end
     end)
+  end
+
+  defp poll_command(tx, s, base, [id, fp, request, state, command_ms, timed_out]) do
+    remaining = min(base["remaining_ms"], command_ms)
+
+    cond do
+      state == "requested" and remaining > 0 and request["generation"] == to_string(s.generation) ->
+        dispatch_command(tx, s, base, id, fp, request, remaining)
+
+      state == "requested" ->
+        transition(tx, s.id, id, "rejected", %{"reason" => "expired_before_dispatch"})
+        base
+
+      state == "dispatching" and timed_out ->
+        time_out_command(tx, s, base, id, fp, request)
+
+      state == "outcome_unknown" ->
+        readback_command(tx, base, id, fp, request)
+
+      true ->
+        base
+    end
+  end
+
+  defp dispatch_command(tx, s, base, id, fp, request, remaining) do
+    interlock = interlock(request, fp, :requested)
+
+    case ControlInterlock.step(interlock, {:intent_committed, id}) do
+      {:ok, _, _} ->
+        transition(tx, s.id, id, "dispatching", nil)
+
+        Map.merge(base, %{
+          "type" => "command",
+          "command" => Map.put(request, "fingerprint", fp),
+          "command_remaining_ms" => remaining
+        })
+
+      _ ->
+        S.abort(tx, :invalid_command_state)
+    end
+  end
+
+  defp time_out_command(tx, s, base, id, fp, request) do
+    case ControlInterlock.step(interlock(request, fp, :dispatched), {:timeout, id}) do
+      {:ok, _, _} ->
+        transition(tx, s.id, id, "outcome_unknown", nil)
+        state_query(base, id, fp, request)
+
+      _ ->
+        S.abort(tx, :invalid_command_state)
+    end
+  end
+
+  defp readback_command(tx, base, id, fp, request) do
+    if S.rows(
+         tx,
+         "UPDATE device_commands SET readback_count=readback_count+1,updated_at=clock_timestamp() WHERE id=$1 AND readback_count<3 AND updated_at<clock_timestamp()-interval '1 second' RETURNING id",
+         [id]
+       ) == [[id]],
+       do: state_query(base, id, fp, request),
+       else: base
+  end
+
+  defp state_query(base, id, fp, request) do
+    Map.merge(base, %{
+      "type" => "state_query",
+      "id" => id,
+      "fingerprint" => fp,
+      "command" => Map.put(request, "fingerprint", fp),
+      "command_remaining_ms" => 0
+    })
   end
 
   def result(db, bind, result) when is_map(result) do
@@ -173,29 +175,7 @@ defmodule MedFabric.Store.DeviceCommands do
           :ok
 
         [[request, fp, state, _]] when state in ["dispatching", "outcome_unknown"] ->
-          unless result["gain"] == request["gain"] and
-                   result["expected_epoch"] == request["expected_epoch"],
-                 do: S.abort(tx, :command_conflict)
-
-          technical = historical(result)
-          phase = if state == "dispatching", do: :dispatched, else: :outcome_unknown
-
-          with {:ok, _, _} <-
-                 ControlInterlock.step(
-                   interlock(request, fp, phase),
-                   {:historical_result, technical}
-                 ) do
-            outcome =
-              case technical.outcome do
-                :applied -> "applied"
-                :rejected -> "rejected"
-                :outcome_unknown -> "outcome_unknown"
-              end
-
-            transition(tx, s.id, result["id"], outcome, result)
-          else
-            _ -> S.abort(tx, :command_conflict)
-          end
+          apply_result(tx, s, request, fp, state, result)
 
         _ ->
           S.abort(tx, :command_conflict)
@@ -204,6 +184,27 @@ defmodule MedFabric.Store.DeviceCommands do
   end
 
   def result(_, _, _), do: {:error, :invalid_result}
+
+  defp apply_result(tx, s, request, fp, state, result) do
+    unless result["gain"] == request["gain"] and
+             result["expected_epoch"] == request["expected_epoch"],
+           do: S.abort(tx, :command_conflict)
+
+    technical = historical(result)
+    phase = if state == "dispatching", do: :dispatched, else: :outcome_unknown
+
+    case ControlInterlock.step(interlock(request, fp, phase), {:historical_result, technical}) do
+      {:ok, _, _} ->
+        transition(tx, s.id, result["id"], result_state(technical.outcome), result)
+
+      _ ->
+        S.abort(tx, :command_conflict)
+    end
+  end
+
+  defp result_state(:applied), do: "applied"
+  defp result_state(:rejected), do: "rejected"
+  defp result_state(:outcome_unknown), do: "outcome_unknown"
 
   def close_pending(tx, id) do
     for [command, state] <-
@@ -279,7 +280,7 @@ defmodule MedFabric.Store.DeviceCommands do
   end
 
   defp counter(s) do
-    case MedFabric.Domain.Review.counter(s) do
+    case Review.counter(s) do
       {:ok, n} -> n
       _ -> :invalid
     end
@@ -293,5 +294,23 @@ defmodule MedFabric.Store.DeviceCommands do
     )
 
     S.fact(tx, acq, "command_" <> state, Map.put(result || %{}, "id", id))
+  end
+
+  defp authorize_request!(tx, s, enc, id, actor) do
+    unless s.encounter == enc and s.clinician == actor and is_nil(s.closed_at),
+      do: S.abort(tx, :unauthorized)
+
+    S.rows(tx, "SELECT id FROM acquisition_sessions WHERE id=$1 FOR NO KEY UPDATE", [id])
+    S.authorize_source!(tx, s)
+
+    unless s.encounter == enc and s.profile == "paired_exam" and s.state == "capturing" and
+             s.authority == "authorized",
+           do: S.abort(tx, :inactive)
+
+    unless S.rows(
+             tx,
+             "SELECT id FROM device_commands WHERE acquisition_id=$1 AND state IN ('requested','dispatching','outcome_unknown')",
+             [id]
+           ) == [], do: S.abort(tx, :reconciliation_required)
   end
 end

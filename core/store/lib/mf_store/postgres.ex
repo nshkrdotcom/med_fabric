@@ -71,44 +71,52 @@ defmodule MedFabric.Store.Postgres do
           )
           |> List.flatten()
 
-        cond do
-          tables == [] ->
-            bytes
-            |> String.split("-- statement")
-            |> Enum.map(&String.trim/1)
-            |> Enum.reject(&(&1 == ""))
-            |> Enum.each(&query(tx, &1, []))
-
-            fingerprint = schema_fingerprint(tx)
-
-            query(
-              tx,
-              "INSERT INTO deployment_identity(singleton,deployment_uuid,revision,migration_sha256,schema_fingerprint) VALUES(true,$1::text::uuid,2,$2,$3)",
-              [deployment_uuid, checksum, fingerprint]
-            )
-
-          Enum.sort(tables) == Enum.sort(@tables) ->
-            case query(
-                   tx,
-                   "SELECT deployment_uuid::text,revision,migration_sha256,schema_fingerprint FROM deployment_identity WHERE singleton",
-                   []
-                 ) do
-              [[^deployment_uuid, 2, ^checksum, fingerprint]] ->
-                unless fingerprint == schema_fingerprint(tx),
-                  do: Postgrex.rollback(tx, :schema_drift)
-
-              _ ->
-                Postgrex.rollback(tx, :incompatible_deployment)
-            end
-
-          true ->
-            Postgrex.rollback(tx, :incompatible_schema)
-        end
+        migrate_tables!(tx, tables, bytes, deployment_uuid, checksum)
 
         :ok
       end)
     else
       _ -> {:error, :schema_resource_or_identity_missing}
+    end
+  end
+
+  defp migrate_tables!(tx, tables, bytes, deployment_uuid, checksum) do
+    cond do
+      tables == [] ->
+        bytes
+        |> String.split("-- statement")
+        |> Enum.map(&String.trim/1)
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.each(&query(tx, &1, []))
+
+        fingerprint = schema_fingerprint(tx)
+
+        query(
+          tx,
+          "INSERT INTO deployment_identity(singleton,deployment_uuid,revision,migration_sha256,schema_fingerprint) VALUES(true,$1::text::uuid,2,$2,$3)",
+          [deployment_uuid, checksum, fingerprint]
+        )
+
+      Enum.sort(tables) == Enum.sort(@tables) ->
+        verify_deployment!(tx, deployment_uuid, checksum)
+
+      true ->
+        Postgrex.rollback(tx, :incompatible_schema)
+    end
+  end
+
+  defp verify_deployment!(tx, deployment_uuid, checksum) do
+    case query(
+           tx,
+           "SELECT deployment_uuid::text,revision,migration_sha256,schema_fingerprint FROM deployment_identity WHERE singleton",
+           []
+         ) do
+      [[^deployment_uuid, 2, ^checksum, fingerprint]] ->
+        unless fingerprint == schema_fingerprint(tx),
+          do: Postgrex.rollback(tx, :schema_drift)
+
+      _ ->
+        Postgrex.rollback(tx, :incompatible_deployment)
     end
   end
 

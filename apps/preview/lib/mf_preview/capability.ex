@@ -87,10 +87,14 @@ defmodule MedFabric.Preview.Capability do
 
   defp valid_scope?(c, id) do
     c["purpose"] == "monitor" and c["acquisition"] == id and
-      c["source_kind"] in ["device", "browser"] and
-      ((c["source_kind"] == "device" and c["profile"] == "paired_exam") or
-         (c["source_kind"] == "browser" and c["profile"] == "browser_microphone")) and
+      valid_profile?(c) and
       Enum.all?(~w(acquisition viewer viewer_session nonce), &ContractRules.id?(c[&1])) and
       is_binary(c["descriptor_ref"]) and Regex.match?(~r/\A[0-9a-f]{64}\z/, c["descriptor_ref"])
+  end
+
+  defp valid_profile?(c) do
+    c["source_kind"] in ["device", "browser"] and
+      ((c["source_kind"] == "device" and c["profile"] == "paired_exam") or
+         (c["source_kind"] == "browser" and c["profile"] == "browser_microphone"))
   end
 end

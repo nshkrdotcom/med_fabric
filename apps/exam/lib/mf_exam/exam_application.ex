@@ -2,7 +2,8 @@ defmodule MedFabric.Exam.Application do
   @moduledoc false
   use Application
   alias MedFabric.Exam
-  alias MedFabric.Store.{Encounters, Postgres}
+  alias MedFabric.Exam.{AcquisitionExpiry, AcquisitionManifest, ClockObservations, DeliveryWorker}
+  alias MedFabric.Store.{AcquisitionSessions, Encounters, Postgres}
   @asset_revision "0.3.0"
   @asset_hashes %{
     "exam.js" => "adbb1090694c985530b59409de3631eba0ff9cd83f5756da3d2a7bdf4c294157",
@@ -11,7 +12,7 @@ defmodule MedFabric.Exam.Application do
   }
 
   def start(_type, _args) do
-    MedFabric.Exam.ClockObservations.initialize_host_generation()
+    ClockObservations.initialize_host_generation()
 
     case Application.get_env(:mf_exam, :lab) do
       nil ->
@@ -72,12 +73,12 @@ defmodule MedFabric.Exam.Application do
   end
 
   def recover do
-    :ok = MedFabric.Exam.AcquisitionManifest.recover(Exam.context())
+    :ok = AcquisitionManifest.recover(Exam.context())
     :ignore
   end
 
-  def expiry, do: MedFabric.Exam.AcquisitionExpiry.start_link(Exam.context())
-  def delivery, do: MedFabric.Exam.DeliveryWorker.start_link(Exam.context())
+  def expiry, do: AcquisitionExpiry.start_link(Exam.context())
+  def delivery, do: DeliveryWorker.start_link(Exam.context())
   @doc false
   def resources(dir \\ Application.app_dir(:mf_exam, "priv/static")) do
     verified =
@@ -89,7 +90,7 @@ defmodule MedFabric.Exam.Application do
                true <- size in 1..262_144,
                {:ok, bytes} <- File.read(path),
                true <- byte_size(bytes) == size do
-            MedFabric.Store.AcquisitionSessions.hash(bytes) == expected
+            AcquisitionSessions.hash(bytes) == expected
           else
             _ -> false
           end

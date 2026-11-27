@@ -3,7 +3,9 @@ defmodule MedFabric.ExamWeb.Router do
   use Phoenix.Router
   import Phoenix.LiveView.Router
   alias MedFabric.Exam
+  alias MedFabric.Exam.ICE
   alias MedFabric.ExamWeb.ProxyIdentity
+  alias MedFabric.Store.{AcquisitionSessions, Encounters, Records}
 
   scope "/api/device/v1" do
     match(:get, "/control", MedFabric.ExamWeb.DeviceSocket, :control)
@@ -70,7 +72,7 @@ defmodule MedFabric.ExamWeb.Router do
       |> put_resp_content_type("application/json")
       |> send_resp(
         200,
-        Jason.encode!(MedFabric.Exam.ICE.config(get_session(conn, :exam_actor), Exam.lab().turn))
+        Jason.encode!(ICE.config(get_session(conn, :exam_actor), Exam.lab().turn))
       )
     end
   end
@@ -87,7 +89,7 @@ defmodule MedFabric.ExamWeb.Router do
 
       with "patient" <- get_session(conn, :exam_role),
            {:ok, created} <-
-             MedFabric.Store.AcquisitionSessions.create_browser(
+             AcquisitionSessions.create_browser(
                Exam.context().db,
                enc,
                actor,
@@ -132,7 +134,7 @@ defmodule MedFabric.ExamWeb.Router do
 
     current_session =
       get_session(conn, :lab_encounter) == id and role in ["patient", "clinician"] and
-        MedFabric.Store.Encounters.session_authorized?(
+        Encounters.session_authorized?(
           Exam.context().db,
           get_session(conn, :exam_session),
           id,
@@ -170,7 +172,7 @@ defmodule MedFabric.ExamWeb.Router do
          role when role in ["patient", "clinician"] <-
            Enum.find(["patient", "clinician"], &(entry[&1 <> "_actor"] == actor)),
          true <-
-           MedFabric.Store.Records.member?(
+           Records.member?(
              Exam.context().db,
              id,
              actor,
@@ -188,10 +190,10 @@ defmodule MedFabric.ExamWeb.Router do
   defp valid_key?(key, expected), do: is_binary(key) and Plug.Crypto.secure_compare(key, expected)
 
   defp grant(conn, id, actor, role) do
-    session = MedFabric.Store.AcquisitionSessions.nonce()
+    session = AcquisitionSessions.nonce()
 
     {:ok, :ok} =
-      MedFabric.Store.Encounters.browser_session(
+      Encounters.browser_session(
         Exam.context().db,
         session,
         id,

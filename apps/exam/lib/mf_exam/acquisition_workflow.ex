@@ -1,6 +1,7 @@
 defmodule MedFabric.Exam.AcquisitionWorkflow do
   @moduledoc "Authorized acquisition read models and bounded immutable-index playback."
-  alias MedFabric.Exam.{AcquisitionManifest, ClockObservations}
+  alias MedEx.Wire.FrameV1
+  alias MedFabric.Exam.{AcquisitionManifest, ClockObservations, PreviewGateway}
   alias MedFabric.Store.AcquisitionSessions, as: S
 
   def list(context, enc, actor) do
@@ -17,45 +18,48 @@ defmodule MedFabric.Exam.AcquisitionWorkflow do
   end
 
   def publish(bind, spec, raw) do
-    with {:ok, frame} <- MedEx.Wire.FrameV1.decode(raw) do
-      try do
-        if spec.stream_id == "ecg",
-          do:
-            :ets.insert(
-              :mf_live_ecg,
-              {:erlang.phash2(bind.id, 64), bind.id, bind.generation,
-               System.monotonic_time(:millisecond), spec, frame}
-            )
-      rescue
-        ArgumentError -> :ok
-      end
-
-      if spec.stream_id == "audio" and bind.source_kind == :browser do
-        monitor = %{frame | stream_number: 3}
-
-        case MedEx.Wire.FrameV1.encode(monitor) do
-          {:ok, derived} -> MedFabric.Exam.PreviewGateway.feed(bind, spec, derived)
-          _ -> :ok
-        end
-      end
+    with {:ok, frame} <- FrameV1.decode(raw) do
+      publish_ecg(bind, spec, frame)
+      publish_browser_audio(bind, spec, frame)
     end
 
     :ok
   end
 
-  defp latest(id, generation) do
-    try do
-      case :ets.lookup(:mf_live_ecg, :erlang.phash2(id, 64)) do
-        [{_, ^id, ^generation, at, spec, frame}] ->
-          if System.monotonic_time(:millisecond) - at <= 1500,
-            do: trace(spec, frame.first_sample, frame.payload)
+  defp publish_ecg(bind, spec, frame) do
+    if spec.stream_id == "ecg",
+      do:
+        :ets.insert(
+          :mf_live_ecg,
+          {:erlang.phash2(bind.id, 64), bind.id, bind.generation,
+           System.monotonic_time(:millisecond), spec, frame}
+        )
+  rescue
+    ArgumentError -> :ok
+  end
 
-        _ ->
-          nil
+  defp publish_browser_audio(bind, spec, frame) do
+    if spec.stream_id == "audio" and bind.source_kind == :browser do
+      monitor = %{frame | stream_number: 3}
+
+      case FrameV1.encode(monitor) do
+        {:ok, derived} -> PreviewGateway.feed(bind, spec, derived)
+        _ -> :ok
       end
-    rescue
-      ArgumentError -> nil
     end
+  end
+
+  defp latest(id, generation) do
+    case :ets.lookup(:mf_live_ecg, :erlang.phash2(id, 64)) do
+      [{_, ^id, ^generation, at, spec, frame}] ->
+        if System.monotonic_time(:millisecond) - at <= 1500,
+          do: trace(spec, frame.first_sample, frame.payload)
+
+      _ ->
+        nil
+    end
+  rescue
+    ArgumentError -> nil
   end
 
   def stop(context, enc, id, actor), do: S.stop(context.db, enc, id, actor)

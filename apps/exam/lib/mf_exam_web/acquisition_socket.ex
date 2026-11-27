@@ -4,16 +4,19 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
   alias MedEx.{Receipt, Serialization}
   alias MedEx.Wire.{Control, Credit, FrameV1}
 
+  alias MedFabric.Domain.Review
+
   alias MedFabric.Exam.{
     AcquisitionIngress,
     AcquisitionManifest,
+    Barrier,
     ClockObservations,
-    PreviewGateway,
-    Barrier
+    DeviceRootLock,
+    PreviewGateway
   }
 
-  alias MedFabric.Store.{AcquisitionSessions, DeviceCommands, MeasurementEvents}
-  alias AcquisitionSessions, as: S
+  alias MedFabric.Store.AcquisitionSessions, as: S
+  alias MedFabric.Store.{DeviceCommands, MeasurementEvents}
 
   @ops ~w(hello open_stream open_monitor heartbeat result measurement probe probe_reply anchor status collection_finish finish_acquisition gap checkpoint finish)
   @gap_keys ~w(id first end first_sequence next_sequence irreversible cause)
@@ -63,18 +66,20 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
 
   def handle_in({raw, [opcode: :binary]}, %{writer: writer} = s)
       when is_pid(writer) and byte_size(raw) <= 65_584 do
-    with {:ok, frame} <- FrameV1.decode(raw) do
-      operation = %{
-        id: "frame-#{frame.sequence}-#{frame.first_sample}",
-        fingerprint: S.hash(raw),
-        bytes: byte_size(raw),
-        sequence: frame.sequence + 1,
-        sample: frame.first_sample + frame.sample_count
-      }
+    case FrameV1.decode(raw) do
+      {:ok, frame} ->
+        operation = %{
+          id: "frame-#{frame.sequence}-#{frame.first_sample}",
+          fingerprint: S.hash(raw),
+          bytes: byte_size(raw),
+          sequence: frame.sequence + 1,
+          sample: frame.first_sample + frame.sample_count
+        }
 
-      record(s, operation, {:frame, raw}, byte_size(frame.payload))
-    else
-      _ -> denied(s)
+        record(s, operation, {:frame, raw}, byte_size(frame.payload))
+
+      _ ->
+        denied(s)
     end
   catch
     :exit, _ -> denied(s)
@@ -84,18 +89,7 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
     with {:ok, frame} <- FrameV1.decode(raw),
          true <- frame.stream_number == 3,
          {:ok, spec} <-
-           S.scoped(s.context.db, bind, fn tx, current ->
-             unless current.state == "capturing" and current.profile == "paired_exam",
-               do: S.abort(tx, :inactive)
-
-             {:ok, spec} = Serialization.stream_spec(current.descriptors["audio"])
-
-             unless frame.source_epoch == spec.source_epoch and frame.sample_count == 960 and
-                      byte_size(frame.payload) == 1920,
-                    do: S.abort(tx, :invalid_monitor)
-
-             spec
-           end) do
+           S.scoped(s.context.db, bind, fn tx, current -> monitor_spec(tx, current, frame) end) do
       PreviewGateway.feed(bind, spec, raw)
       reply("monitor_credit", %{"credit_frames" => 1, "credit_bytes" => 1968}, s)
     else
@@ -219,8 +213,8 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
   end
 
   defp dispatch("gap", msg, %{writer: writer} = s, raw) when is_pid(writer) do
-    with {:ok, sequence} <- MedFabric.Domain.Review.counter(msg["next_sequence"]),
-         {:ok, sample} <- MedFabric.Domain.Review.counter(msg["end"]) do
+    with {:ok, sequence} <- Review.counter(msg["next_sequence"]),
+         {:ok, sample} <- Review.counter(msg["end"]) do
       fields = Map.take(msg, @gap_keys)
 
       operation = %{
@@ -413,37 +407,7 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
           %{stream: s.binding["stream"], fence: s.binding["fence"]}
         )
 
-        case call_writer(s.writer, request) do
-          {:ok, %{receipt: receipt}} ->
-            if Receipt.durable?(receipt) do
-              durable_reply(next, receipt)
-            else
-              reply(
-                "accepted",
-                %{"receipt" => Receipt.to_map(receipt), digest_field => operation.fingerprint},
-                arm(next)
-              )
-            end
-
-          {:error, {:not_committed, _}} ->
-            {:ok, ledger} = Credit.refuse(ledger, s.binding, operation.id, operation.fingerprint)
-
-            reply(
-              "refused",
-              %{
-                "reason" => "not_committed",
-                digest_field => operation.fingerprint,
-                "retry" => true
-              },
-              %{next | ledger: ledger}
-            )
-
-          {:error, :outcome_unknown} ->
-            recover_connection(next)
-
-          _ ->
-            denied(next)
-        end
+        record_reply(s, next, ledger, operation, request, digest_field)
 
       _ ->
         denied(s)
@@ -510,7 +474,7 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
   def terminate(_, s) do
     if s.bind && s.binding && s.binding["stream"],
       do:
-        MedFabric.Exam.DeviceRootLock.invalidate_connection(
+        DeviceRootLock.invalidate_connection(
           s.context.root_owner,
           {s.bind.id, s.binding["stream"]}
         )
@@ -522,7 +486,7 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
   defp resolve_bind(%{bind: bind}, _) when is_map(bind), do: {:ok, bind}
 
   defp resolve_bind(s, %{"binding" => b, "lease" => lease}) do
-    with {:ok, generation} <- MedFabric.Domain.Review.counter(b["generation"]),
+    with {:ok, generation} <- Review.counter(b["generation"]),
          true <- is_binary(lease) do
       bind = %{
         id: b["acquisition"],
@@ -535,12 +499,9 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
         browser_session: Map.get(s.principal, :session)
       }
 
-      case S.scoped(s.context.db, bind, fn _, current ->
-             Map.merge(bind, %{encounter: current.encounter, boot: current.boot})
-           end) do
-        {:ok, bind} -> {:ok, bind}
-        error -> error
-      end
+      S.scoped(s.context.db, bind, fn _, current ->
+        Map.merge(bind, %{encounter: current.encounter, boot: current.boot})
+      end)
     else
       _ -> {:error, :invalid_binding}
     end
@@ -566,7 +527,7 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
     # reply already in flight remains historical truth; clients match incarnation.
     active_stream =
       is_nil(s.binding) or is_nil(s.binding["stream"]) or
-        MedFabric.Exam.DeviceRootLock.current_connection?(
+        DeviceRootLock.current_connection?(
           s.context.root_owner,
           {s.bind.id, s.binding["stream"]},
           s.binding["connection"]
@@ -593,4 +554,51 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
   defp recover_connection(s), do: {:stop, :normal, {1011, "reconcile_required"}, cancel(s)}
 
   defp denied(s), do: {:stop, :normal, 1008, {:text, "acquisition_request_denied"}, cancel(s)}
+
+  defp monitor_spec(tx, current, frame) do
+    unless current.state == "capturing" and current.profile == "paired_exam",
+      do: S.abort(tx, :inactive)
+
+    {:ok, spec} = Serialization.stream_spec(current.descriptors["audio"])
+
+    unless frame.source_epoch == spec.source_epoch and frame.sample_count == 960 and
+             byte_size(frame.payload) == 1920,
+           do: S.abort(tx, :invalid_monitor)
+
+    spec
+  end
+
+  defp record_reply(s, next, ledger, operation, request, digest_field) do
+    case call_writer(s.writer, request) do
+      {:ok, %{receipt: receipt}} ->
+        if Receipt.durable?(receipt) do
+          durable_reply(next, receipt)
+        else
+          reply(
+            "accepted",
+            %{"receipt" => Receipt.to_map(receipt), digest_field => operation.fingerprint},
+            arm(next)
+          )
+        end
+
+      {:error, {:not_committed, _}} ->
+        {:ok, ledger} = Credit.refuse(ledger, s.binding, operation.id, operation.fingerprint)
+
+        reply(
+          "refused",
+          %{
+            "reason" => "not_committed",
+            digest_field => operation.fingerprint,
+            "retry" => true
+          },
+          %{next | ledger: ledger}
+        )
+
+      {:error, :outcome_unknown} ->
+        recover_connection(next)
+
+      _ ->
+        denied(next)
+    end
+  end
 end

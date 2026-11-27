@@ -1,9 +1,11 @@
 defmodule MedFabric.ExamWeb.DeviceLive do
   @moduledoc false
   use Phoenix.LiveView
+  alias MedFabric.Domain.Review
   alias MedFabric.Exam
-  alias MedFabric.Exam.AcquisitionWorkflow
-  alias MedFabric.Store.{DeviceSessions, Encounters}
+  alias MedFabric.Exam.{AcquisitionManifest, AcquisitionWorkflow}
+  alias MedFabric.ExamWeb.ProxyIdentity
+  alias MedFabric.Store.{DeviceCommands, DeviceSessions, Encounters}
 
   def mount(
         %{"encounter_id" => enc},
@@ -17,7 +19,7 @@ defmodule MedFabric.ExamWeb.DeviceLive do
       ) do
     if Encounters.session_authorized?(Exam.context().db, session, enc, actor, :clinician, :read) and
          (not connected?(socket) or
-            MedFabric.ExamWeb.ProxyIdentity.matches?(
+            ProxyIdentity.matches?(
               get_connect_info(socket, :x_headers) || [],
               actor,
               Exam.lab()
@@ -91,11 +93,11 @@ defmodule MedFabric.ExamWeb.DeviceLive do
 
   defp event("band", %{"acquisition_id" => id, "sample" => sample}, s) do
     result =
-      with {:ok, index} <- MedFabric.Domain.Review.counter(sample),
+      with {:ok, index} <- Review.counter(sample),
            row when not is_nil(row) <- Enum.find(s.assigns.rows, &(&1.id == id)),
            true <- is_map(row.manifest) and row.profile == "paired_exam",
            {:ok, manifest} <-
-             MedFabric.Exam.AcquisitionManifest.promoted(
+             AcquisitionManifest.promoted(
                Exam.context(),
                s.assigns.enc,
                id,
@@ -130,7 +132,7 @@ defmodule MedFabric.ExamWeb.DeviceLive do
 
   defp event("gain", %{"acquisition_id" => id, "gain" => gain}, s) do
     result =
-      MedFabric.Store.DeviceCommands.request(
+      DeviceCommands.request(
         Exam.context().db,
         s.assigns.enc,
         id,

@@ -1,6 +1,8 @@
 defmodule MedFabric.Domain.Evidence do
   @moduledoc "Immutable native manual evidence. Entry and clinician acceptance are separate actions."
 
+  alias MedFabric.Domain.NativeValue
+
   def pulse_rate(value, %DateTime{} = at, actor)
       when is_integer(value) and value >= 0 and value <= 9_223_372_036_854_775_807 and
              is_binary(actor) and byte_size(actor) in 1..256 do
@@ -33,7 +35,7 @@ defmodule MedFabric.Domain.Evidence do
     with true <- Enum.sort(Map.keys(evidence)) == ~w(effective_at kind provenance unit value),
          true <- Enum.sort(Map.keys(provenance)) == ~w(actor kind recorded_at),
          true <- is_binary(actor) and String.valid?(actor) and byte_size(actor) in 1..256,
-         true <- MedFabric.Domain.NativeValue.eligible?("pulse_rate", value),
+         true <- NativeValue.eligible?("pulse_rate", value),
          {:ok, at, 0} <- parse_time(effective),
          {:ok, entered, 0} <- parse_time(recorded),
          true <- DateTime.compare(at, entered) != :gt do

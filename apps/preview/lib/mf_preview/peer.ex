@@ -49,24 +49,32 @@ defmodule MedFabric.Preview.Peer do
         key = Capability.key(grant)
         opts = %{grant: grant, ticket: ticket, config: config}
 
-        case DynamicSupervisor.start_child(MedFabric.Preview.Peers, {__MODULE__, opts}) do
-          {:ok, pid} ->
-            case Feed.attach(key, ticket, pid) do
-              :ok ->
-                {:ok, pid}
-
-              error ->
-                Process.exit(pid, :kill)
-                Feed.release(key, ticket)
-                error
-            end
-
-          error ->
-            Feed.release(key, ticket)
-            error
-        end
+        start_reserved_peer(key, ticket, opts)
 
       error ->
+        error
+    end
+  end
+
+  defp start_reserved_peer(key, ticket, opts) do
+    case DynamicSupervisor.start_child(MedFabric.Preview.Peers, {__MODULE__, opts}) do
+      {:ok, pid} ->
+        attach_reserved_peer(key, ticket, pid)
+
+      error ->
+        Feed.release(key, ticket)
+        error
+    end
+  end
+
+  defp attach_reserved_peer(key, ticket, pid) do
+    case Feed.attach(key, ticket, pid) do
+      :ok ->
+        {:ok, pid}
+
+      error ->
+        Process.exit(pid, :kill)
+        Feed.release(key, ticket)
         error
     end
   end
@@ -122,11 +130,7 @@ defmodule MedFabric.Preview.Peer do
               last_activity: System.monotonic_time(:millisecond)
           }
 
-          if current?(grant) and Feed.update(state.key, self(), grant) == :ok do
-            {:reply, {:ok, %{"sdp" => answer, "state" => "connecting"}}, next}
-          else
-            {:stop, :normal, {:error, :expired_authority}, next}
-          end
+          accept_media(state.key, grant, answer, next)
 
         {:error, _} ->
           {:stop, :normal, {:error, :negotiation_failed}, stopped}
@@ -236,47 +240,61 @@ defmodule MedFabric.Preview.Peer do
 
   def handle_info(_, state), do: {:noreply, state}
 
+  defp accept_media(key, grant, answer, next) do
+    if current?(grant) and Feed.update(key, self(), grant) == :ok do
+      {:reply, {:ok, %{"sdp" => answer, "state" => "connecting"}}, next}
+    else
+      {:stop, :normal, {:error, :expired_authority}, next}
+    end
+  end
+
   defp feed(state, now) do
     case Feed.take(state.key) do
-      {:ok, at, source, frame} ->
-        epoch = state.grant.claims["source_epoch"]
+      {:ok, at, source, frame} -> admit_frame(state, now, at, source, frame)
+      :empty -> state
+    end
+  end
 
-        cond do
-          source != Capability.source(state.grant) ->
-            %{state | drops: state.drops + 1}
+  defp admit_frame(state, now, at, source, frame) do
+    epoch = state.grant.claims["source_epoch"]
 
-          to_string(frame.source_epoch) != epoch ->
-            {:stop, state}
+    cond do
+      source != Capability.source(state.grant) ->
+        %{state | drops: state.drops + 1}
 
-          now - at > 200 or state.status != "connected" or state.pending != nil ->
-            %{state | drops: state.drops + 1}
+      to_string(frame.source_epoch) != epoch ->
+        {:stop, state}
 
-          not current?(state.grant) ->
-            {:stop, state}
+      now - at > 200 or state.status != "connected" or state.pending != nil ->
+        %{state | drops: state.drops + 1}
 
-          true ->
-            case Timeline.plan(state.timeline, frame.first_sample, {48_000, 1}) do
-              {:ok, plan} ->
-                id = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+      not current?(state.grant) ->
+        {:stop, state}
 
-                case Opus.offer(state.encoder, id, frame.first_sample, frame.payload) do
-                  :ok ->
-                    %{state | pending: %{id: id, sample: frame.first_sample, plan: plan, at: at}}
+      true ->
+        plan_frame(state, frame, at)
+    end
+  end
 
-                  {:error, :busy} ->
-                    %{state | drops: state.drops + 1}
+  defp plan_frame(state, frame, at) do
+    case Timeline.plan(state.timeline, frame.first_sample, {48_000, 1}) do
+      {:ok, plan} -> offer_frame(state, frame, at, plan)
+      _ -> {:stop, state}
+    end
+  end
 
-                  _ ->
-                    {:stop, state}
-                end
+  defp offer_frame(state, frame, at, plan) do
+    id = Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 
-              _ ->
-                {:stop, state}
-            end
-        end
+    case Opus.offer(state.encoder, id, frame.first_sample, frame.payload) do
+      :ok ->
+        %{state | pending: %{id: id, sample: frame.first_sample, plan: plan, at: at}}
 
-      :empty ->
-        state
+      {:error, :busy} ->
+        %{state | drops: state.drops + 1}
+
+      _ ->
+        {:stop, state}
     end
   end
 
@@ -311,30 +329,34 @@ defmodule MedFabric.Preview.Peer do
     if current?(grant) do
       case Opus.start_link(owner: self()) do
         {:ok, encoder} ->
-          result =
-            if current?(grant),
-              do:
-                RTC.answer(sdp,
-                  owner: self(),
-                  ice_servers: config[:ice_servers],
-                  ice_transport_policy: config[:ice_transport_policy]
-                ),
-              else: {:error, :expired}
-
-          case result do
-            {:ok, peer, answer} ->
-              {:ok, encoder, peer, answer}
-
-            _ ->
-              Opus.stop(encoder)
-              {:error, :negotiation_failed}
-          end
+          open_rtc(grant, sdp, config, encoder)
 
         _ ->
           {:error, :encoder_unavailable}
       end
     else
       {:error, :expired}
+    end
+  end
+
+  defp open_rtc(grant, sdp, config, encoder) do
+    result =
+      if current?(grant),
+        do:
+          RTC.answer(sdp,
+            owner: self(),
+            ice_servers: config[:ice_servers],
+            ice_transport_policy: config[:ice_transport_policy]
+          ),
+        else: {:error, :expired}
+
+    case result do
+      {:ok, peer, answer} ->
+        {:ok, encoder, peer, answer}
+
+      _ ->
+        Opus.stop(encoder)
+        {:error, :negotiation_failed}
     end
   end
 

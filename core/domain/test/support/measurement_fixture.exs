@@ -1,5 +1,6 @@
 defmodule MedFabric.TestMeasurement do
   import Bitwise
+  alias MedFabric.Domain.DeviceMeasurement
 
   def event(acquisition \\ "collection", gateway \\ "gateway", boot \\ "boot", pulse \\ 721) do
     raw =
@@ -27,7 +28,7 @@ defmodule MedFabric.TestMeasurement do
       stream_id: "plx",
       source_epoch: 0,
       gateway_sequence: 0,
-      descriptor_ref: MedFabric.Domain.DeviceMeasurement.descriptor_ref(),
+      descriptor_ref: DeviceMeasurement.descriptor_ref(),
       metrics: %{"spo2" => {:value, 972, -1, "%"}, "pulse_rate" => {:value, pulse, -1, "/min"}},
       raw: {:bytes, raw},
       device_status: %{"measurement" => "1280", "device" => "0"},

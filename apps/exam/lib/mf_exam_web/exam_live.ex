@@ -2,6 +2,7 @@ defmodule MedFabric.ExamWeb.ExamLive do
   @moduledoc false
   use Phoenix.LiveView
   alias MedFabric.Exam
+  alias MedFabric.ExamWeb.ProxyIdentity
   alias MedFabric.Store.{Encounters, Records}
 
   def mount(
@@ -19,7 +20,7 @@ defmodule MedFabric.ExamWeb.ExamLive do
 
     trusted =
       not connected?(socket) or
-        MedFabric.ExamWeb.ProxyIdentity.matches?(
+        ProxyIdentity.matches?(
           get_connect_info(socket, :x_headers) || [],
           actor,
           Exam.lab()

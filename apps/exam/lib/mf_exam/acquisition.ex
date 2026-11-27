@@ -14,28 +14,44 @@ defmodule MedFabric.Exam.Acquisition do
       not authorized?(s) ->
         {:error, :authority_ended}
 
-      op == :reserve and s.quiescent and s.state in ["capturing", "finalizing"] ->
-        {:ok, %{effect: :reserve_fence, commit_before_open: true}}
-
-      op == :open and s.quiescent and s.reserved ->
-        {:ok, %{effect: :open, observe_before_ack: true}}
-
-      op in [:push, :gap, :checkpoint, :replay] and s.writer_open and s.state == "capturing" ->
-        {:ok, %{effect: op, scope_required: true, observe_before_ack: true}}
-
-      op == :finish and s.writer_open and s.final_covered and
-          s.state in ["capturing", "finalizing"] ->
-        {:ok, %{effect: :seal, scope_required: true, verify_terminal: true}}
-
-      op == :abort and s.quiescent ->
-        {:ok, %{effect: :settle_interrupted, source_append: false}}
-
       true ->
-        {:error, :illegal_transition}
+        active_plan(s, op)
     end
   end
 
   def plan(_, _), do: {:error, :invalid_snapshot}
+
+  defp active_plan(s, :reserve) do
+    if s.quiescent and s.state in ["capturing", "finalizing"],
+      do: {:ok, %{effect: :reserve_fence, commit_before_open: true}},
+      else: {:error, :illegal_transition}
+  end
+
+  defp active_plan(s, :open) do
+    if s.quiescent and s.reserved,
+      do: {:ok, %{effect: :open, observe_before_ack: true}},
+      else: {:error, :illegal_transition}
+  end
+
+  defp active_plan(s, op) when op in [:push, :gap, :checkpoint, :replay] do
+    if s.writer_open and s.state == "capturing",
+      do: {:ok, %{effect: op, scope_required: true, observe_before_ack: true}},
+      else: {:error, :illegal_transition}
+  end
+
+  defp active_plan(s, :finish) do
+    if s.writer_open and s.final_covered and s.state in ["capturing", "finalizing"],
+      do: {:ok, %{effect: :seal, scope_required: true, verify_terminal: true}},
+      else: {:error, :illegal_transition}
+  end
+
+  defp active_plan(s, :abort) do
+    if s.quiescent,
+      do: {:ok, %{effect: :settle_interrupted, source_append: false}},
+      else: {:error, :illegal_transition}
+  end
+
+  defp active_plan(_, _), do: {:error, :illegal_transition}
 
   defp authorized?(s),
     do:

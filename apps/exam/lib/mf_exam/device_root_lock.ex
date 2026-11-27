@@ -2,6 +2,7 @@ defmodule MedFabric.Exam.DeviceRootLock do
   @moduledoc "Exclusive service-owned root, immutable deployment identity and local effect gates. Lock loss is fail-stop."
   use GenServer
   import Bitwise
+  alias MedFabric.Store.AcquisitionSessions
 
   def start_link(opts),
     do: GenServer.start_link(__MODULE__, opts, name: Keyword.fetch!(opts, :name))
@@ -149,19 +150,14 @@ defmodule MedFabric.Exam.DeviceRootLock do
         s
       ) do
     expected =
-      Path.join([s.root, "acquisitions-v2", MedFabric.Store.AcquisitionSessions.hash(id), name]) <>
+      Path.join([s.root, "acquisitions-v2", AcquisitionSessions.hash(id), name]) <>
         "/"
 
     proof = prefix.provenance
 
     case s.gates[key] do
       %{owner: ^pid, poisoned: true} = gate ->
-        if proof[:scope] == :full_journal and proof[:root_owner] == self() and
-             proof[:root_token] == s.token and
-             proof[:root] == s.root and proof[:receipt] == prefix.receipt and
-             MedEx.Receipt.durable?(prefix.receipt) and
-             String.starts_with?(Path.expand(prefix.artifact_dir), expected) and
-             Port.info(s.port) != nil do
+        if verified_quiescence?(proof, s, prefix, expected) do
           {:reply, :ok, put_in(s.gates[key], %{gate | poisoned: false})}
         else
           {:reply, {:error, :unverified_quiescence}, s}
@@ -222,17 +218,21 @@ defmodule MedFabric.Exam.DeviceRootLock do
     components = Path.split(Path.expand(path))
     paths = Enum.scan(components, &Path.join(&2, &1))
 
-    if Enum.all?(paths, fn p ->
-         case File.lstat(p) do
-           {:ok, %{type: :directory, uid: owner, mode: mode}} ->
-             if p == Path.expand(path),
-               do: owner == uid and (mode &&& 0o022) == 0,
-               else: owner in [0, uid] and ((mode &&& 0o022) == 0 or (mode &&& 0o1000) != 0)
+    if Enum.all?(paths, &trusted_component?(&1, Path.expand(path), uid)),
+      do: :ok,
+      else: {:error, :untrusted_artifact_root}
+  end
 
-           _ ->
-             false
-         end
-       end), do: :ok, else: {:error, :untrusted_artifact_root}
+  defp trusted_component?(p, path, uid) do
+    case File.lstat(p) do
+      {:ok, %{type: :directory, uid: owner, mode: mode}} ->
+        if p == path,
+          do: owner == uid and (mode &&& 0o022) == 0,
+          else: owner in [0, uid] and ((mode &&& 0o022) == 0 or (mode &&& 0o1000) != 0)
+
+      _ ->
+        false
+    end
   end
 
   defp identity(root, uuid) do
@@ -244,17 +244,7 @@ defmodule MedFabric.Exam.DeviceRootLock do
         :ok
 
       {:error, :enoent} ->
-        case File.ls(root) do
-          {:ok, []} ->
-            File.open(path, [:write, :binary, :exclusive], fn io ->
-              :ok = IO.binwrite(io, bytes)
-              :file.sync(io)
-            end)
-            |> synced(root)
-
-          _ ->
-            {:error, :unmarked_artifact_namespace}
-        end
+        initialize_identity(root, path, bytes)
 
       _ ->
         {:error, :artifact_identity_mismatch}
@@ -272,5 +262,28 @@ defmodule MedFabric.Exam.DeviceRootLock do
         :file.close(fd)
       end
     end
+  end
+
+  defp verified_quiescence?(proof, s, prefix, expected) do
+    proof[:scope] == :full_journal and proof[:root_owner] == self() and
+      proof[:root_token] == s.token and proof[:root] == s.root and
+      proof[:receipt] == prefix.receipt and MedEx.Receipt.durable?(prefix.receipt) and
+      String.starts_with?(Path.expand(prefix.artifact_dir), expected) and Port.info(s.port) != nil
+  end
+
+  defp initialize_identity(root, path, bytes) do
+    case File.ls(root) do
+      {:ok, []} ->
+        File.open(path, [:write, :binary, :exclusive], &write_identity(&1, bytes))
+        |> synced(root)
+
+      _ ->
+        {:error, :unmarked_artifact_namespace}
+    end
+  end
+
+  defp write_identity(io, bytes) do
+    :ok = IO.binwrite(io, bytes)
+    :file.sync(io)
   end
 end

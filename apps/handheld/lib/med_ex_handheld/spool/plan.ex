@@ -6,29 +6,31 @@ defmodule MedExHandheld.Spool.Plan do
   def record(<<"MEX1", _::binary>> = raw, %StreamSpec{} = spec) do
     number = if spec.stream_id == "audio", do: 1, else: 2
 
-    with {:ok, %FrameV1{stream_number: ^number} = frame} <- FrameV1.decode(raw) do
-      value =
-        struct!(
-          SampleFrame,
-          Map.take(
-            Map.from_struct(frame),
-            ~w(source_epoch config_epoch sequence first_sample sample_count payload)a
+    case FrameV1.decode(raw) do
+      {:ok, %FrameV1{stream_number: ^number} = frame} ->
+        value =
+          struct!(
+            SampleFrame,
+            Map.take(
+              Map.from_struct(frame),
+              ~w(source_epoch config_epoch sequence first_sample sample_count payload)a
+            )
+            |> Map.merge(%{stream_id: spec.stream_id, descriptor_ref: spec.descriptor_ref})
           )
-          |> Map.merge(%{stream_id: spec.stream_id, descriptor_ref: spec.descriptor_ref})
-        )
 
-      with :ok <- SampleFrame.validate(value, spec) do
-        {:ok,
-         %{
-           key: {frame.sequence, frame.first_sample},
-           event: {:frame, value},
-           id: "frame-#{frame.sequence}-#{frame.first_sample}",
-           fingerprint: Serialization.sha256(raw),
-           bytes: byte_size(raw)
-         }}
-      end
-    else
-      _ -> {:error, :invalid_source_frame}
+        with :ok <- SampleFrame.validate(value, spec) do
+          {:ok,
+           %{
+             key: {frame.sequence, frame.first_sample},
+             event: {:frame, value},
+             id: "frame-#{frame.sequence}-#{frame.first_sample}",
+             fingerprint: Serialization.sha256(raw),
+             bytes: byte_size(raw)
+           }}
+        end
+
+      _ ->
+        {:error, :invalid_source_frame}
     end
   end
 

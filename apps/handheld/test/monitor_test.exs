@@ -1,7 +1,7 @@
 defmodule MedExHandheld.MonitorTest do
   use ExUnit.Case, async: true
-  alias MedExHandheld.Monitor
   alias MedEx.Wire.FrameV1
+  alias MedExHandheld.Monitor
   @moduletag :tmp_dir
 
   setup %{tmp_dir: dir} do
@@ -64,6 +64,8 @@ defmodule MedExHandheld.MonitorTest do
     assert_receive {:med_ex_monitor, ^ticket, %{"status" => "applied"} = result}, 1_000
     assert result["application"]["first_sample"] == "2880"
     assert result["epoch"] == "1"
+    # Synchronize with the batch callback before reading its published frame.
+    assert :sys.get_state(monitor).pending == nil
     assert [{:latest, _, _, [raw]}] = :ets.lookup(c.table, :latest)
     assert {:ok, %{payload: <<2, 0>>, stream_number: 3}} = FrameV1.decode(raw)
     stop_supervised!(Monitor)

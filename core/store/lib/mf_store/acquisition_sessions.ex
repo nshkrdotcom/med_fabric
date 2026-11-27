@@ -1,6 +1,7 @@
 defmodule MedFabric.Store.AcquisitionSessions do
   @moduledoc "Sole SQL owner for source-neutral admission, attempt reservations, durable facts and finalization. Every operation takes an explicit database or transaction."
   alias MedEx.{Receipt, Serialization}
+  alias MedFabric.Store.{DeviceCommands, MeasurementEvents}
 
   @profiles ["paired_exam", "plx_spot_check", "browser_microphone"]
   @max_attempts 32
@@ -45,38 +46,40 @@ defmodule MedFabric.Store.AcquisitionSessions do
   end
 
   def create_browser(db, enc, actor, session, page, request_id) do
-    with true <- Enum.all?([page, request_id], &identifier?/1) do
-      Postgrex.transaction(db, fn tx ->
-        authorize_browser!(tx, session, enc, actor, :patient, :mutate)
-        writable!(tx)
-
-        case rows(
-               tx,
-               "SELECT page,session_id,acquisition_id,binding_secret FROM browser_creations WHERE encounter_id=$1 AND actor=$2 AND request_id=$3",
-               [enc, actor, request_id]
-             ) do
-          [[^page, ^session, id, secret]] ->
-            %{acquisition: id, creation: secret, page: page}
-
-          [] ->
-            id = nonce()
-            secret = nonce()
-            insert_acquisition!(tx, id, enc, "browser", actor, "browser_microphone", nil)
-
-            rows(
-              tx,
-              "INSERT INTO browser_creations(encounter_id,actor,request_id,page,session_id,acquisition_id,binding_hash,binding_secret) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
-              [enc, actor, request_id, page, session, id, hash(secret), secret]
-            )
-
-            %{acquisition: id, creation: secret, page: page}
-
-          _ ->
-            abort(tx, :creation_conflict)
-        end
-      end)
+    if Enum.all?([page, request_id], &identifier?/1) do
+      Postgrex.transaction(db, &create_browser_locked(&1, enc, actor, session, page, request_id))
     else
-      _ -> {:error, :invalid_creation}
+      {:error, :invalid_creation}
+    end
+  end
+
+  defp create_browser_locked(tx, enc, actor, session, page, request_id) do
+    authorize_browser!(tx, session, enc, actor, :patient, :mutate)
+    writable!(tx)
+
+    case rows(
+           tx,
+           "SELECT page,session_id,acquisition_id,binding_secret FROM browser_creations WHERE encounter_id=$1 AND actor=$2 AND request_id=$3",
+           [enc, actor, request_id]
+         ) do
+      [[^page, ^session, id, secret]] ->
+        %{acquisition: id, creation: secret, page: page}
+
+      [] ->
+        id = nonce()
+        secret = nonce()
+        insert_acquisition!(tx, id, enc, "browser", actor, "browser_microphone", nil)
+
+        rows(
+          tx,
+          "INSERT INTO browser_creations(encounter_id,actor,request_id,page,session_id,acquisition_id,binding_hash,binding_secret) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+          [enc, actor, request_id, page, session, id, hash(secret), secret]
+        )
+
+        %{acquisition: id, creation: secret, page: page}
+
+      _ ->
+        abort(tx, :creation_conflict)
     end
   end
 
@@ -86,104 +89,7 @@ defmodule MedFabric.Store.AcquisitionSessions do
          true <- hello["profile"] in @profiles,
          :ok <- descriptors(principal, hello) do
       Postgrex.transaction(db, fn tx ->
-        enc = hello["encounter"]
-        id = hello["acquisition"]
-        profile = hello["profile"]
-        actor = principal.id
-        writable!(tx)
-        site = admission_authority!(tx, principal, hello)
-
-        case rows(
-               tx,
-               "SELECT encounter_id,source_kind,principal,profile,state FROM acquisitions WHERE id=$1 FOR UPDATE",
-               [id]
-             ) do
-          [] when principal.kind == :device ->
-            insert_acquisition!(tx, id, enc, "device", actor, profile, nil)
-
-          [[^enc, kind, ^actor, ^profile, state]]
-          when state in ["reserved", "capturing", "finalizing", "staged", "promoted"] ->
-            unless kind == to_string(principal.kind), do: abort(tx, :principal_changed)
-
-          _ ->
-            abort(tx, :resume_conflict)
-        end
-
-        existing =
-          rows(
-            tx,
-            "SELECT boot,descriptors,generation,authority_state,maximum_at>clock_timestamp() FROM acquisition_sessions WHERE id=$1 FOR UPDATE",
-            [id]
-          )
-
-        lease = nonce()
-
-        case existing do
-          [] ->
-            {device, patient, browser} =
-              if principal.kind == :device,
-                do: {actor, nil, nil},
-                else: {nil, actor, principal.session}
-
-            rows(
-              tx,
-              "INSERT INTO acquisition_sessions(id,encounter_id,source_kind,principal,profile,device_id,patient_actor,browser_session,boot,site,descriptors,lease_hash,expires_at,maximum_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,clock_timestamp()+interval '30 seconds',clock_timestamp()+interval '30 minutes')",
-              [
-                id,
-                enc,
-                to_string(principal.kind),
-                actor,
-                profile,
-                device,
-                patient,
-                browser,
-                hello["boot"],
-                site,
-                hello["descriptors"],
-                hash(lease)
-              ]
-            )
-
-          [[boot, desc, _, "authorized", true]] ->
-            unless boot == hello["boot"] and desc == hello["descriptors"],
-              do: abort(tx, :immutable_source_changed)
-
-          _ ->
-            abort(tx, :authority_ended)
-        end
-
-        [[generation, remaining]] =
-          rows(
-            tx,
-            "UPDATE acquisition_sessions SET generation=generation+1,lease_hash=$2,connection_state='active',expires_at=LEAST(maximum_at,clock_timestamp()+interval '30 seconds') WHERE id=$1 RETURNING generation,GREATEST(0,LEAST(30000,FLOOR(EXTRACT(EPOCH FROM (expires_at-clock_timestamp()))*1000)))::integer",
-            [id, hash(lease)]
-          )
-
-        unless remaining > 0, do: abort(tx, :authority_ended)
-
-        rows(tx, "UPDATE acquisitions SET state='capturing' WHERE id=$1 AND state='reserved'", [
-          id
-        ])
-
-        %{
-          id: id,
-          encounter: enc,
-          source_kind: principal.kind,
-          principal: actor,
-          browser_session: Map.get(principal, :session),
-          profile: profile,
-          boot: hello["boot"],
-          generation: generation,
-          lease: lease,
-          connection: nonce(),
-          authority_ms: remaining,
-          phase:
-            case rows(tx, "SELECT state FROM acquisitions WHERE id=$1", [id]) do
-              [["promoted"]] -> "sealed"
-              [[state]] when state in ["staged", "finalizing"] -> "finalizing"
-              _ -> "capturing"
-            end
-        }
+        admit_locked(tx, principal, hello)
       end)
     else
       _ -> {:error, :invalid_hello}
@@ -191,6 +97,118 @@ defmodule MedFabric.Store.AcquisitionSessions do
   end
 
   def admit(_, _, _), do: {:error, :invalid_hello}
+
+  defp admit_locked(tx, principal, hello) do
+    enc = hello["encounter"]
+    id = hello["acquisition"]
+    profile = hello["profile"]
+    actor = principal.id
+    writable!(tx)
+    site = admission_authority!(tx, principal, hello)
+
+    admit_acquisition!(tx, principal, enc, id, profile, actor)
+
+    existing =
+      rows(
+        tx,
+        "SELECT boot,descriptors,generation,authority_state,maximum_at>clock_timestamp() FROM acquisition_sessions WHERE id=$1 FOR UPDATE",
+        [id]
+      )
+
+    lease = nonce()
+
+    admit_session!(tx, existing, principal, hello, {id, enc, profile, actor}, site, lease)
+
+    [[generation, remaining]] =
+      rows(
+        tx,
+        "UPDATE acquisition_sessions SET generation=generation+1,lease_hash=$2,connection_state='active',expires_at=LEAST(maximum_at,clock_timestamp()+interval '30 seconds') WHERE id=$1 RETURNING generation,GREATEST(0,LEAST(30000,FLOOR(EXTRACT(EPOCH FROM (expires_at-clock_timestamp()))*1000)))::integer",
+        [id, hash(lease)]
+      )
+
+    unless remaining > 0, do: abort(tx, :authority_ended)
+
+    rows(tx, "UPDATE acquisitions SET state='capturing' WHERE id=$1 AND state='reserved'", [
+      id
+    ])
+
+    %{
+      id: id,
+      encounter: enc,
+      source_kind: principal.kind,
+      principal: actor,
+      browser_session: Map.get(principal, :session),
+      profile: profile,
+      boot: hello["boot"],
+      generation: generation,
+      lease: lease,
+      connection: nonce(),
+      authority_ms: remaining,
+      phase: admission_phase(tx, id)
+    }
+  end
+
+  defp admit_acquisition!(tx, principal, enc, id, profile, actor) do
+    case rows(
+           tx,
+           "SELECT encounter_id,source_kind,principal,profile,state FROM acquisitions WHERE id=$1 FOR UPDATE",
+           [id]
+         ) do
+      [] when principal.kind == :device ->
+        insert_acquisition!(tx, id, enc, "device", actor, profile, nil)
+
+      [[^enc, kind, ^actor, ^profile, state]]
+      when state in ["reserved", "capturing", "finalizing", "staged", "promoted"] ->
+        unless kind == to_string(principal.kind), do: abort(tx, :principal_changed)
+
+      _ ->
+        abort(tx, :resume_conflict)
+    end
+  end
+
+  defp admit_session!(tx, existing, principal, hello, {id, enc, profile, actor}, site, lease) do
+    case existing do
+      [] ->
+        {device, patient, browser} =
+          if principal.kind == :device,
+            do: {actor, nil, nil},
+            else: {nil, actor, principal.session}
+
+        rows(
+          tx,
+          "INSERT INTO acquisition_sessions(id,encounter_id,source_kind,principal,profile,device_id,patient_actor,browser_session,boot,site,descriptors,lease_hash,expires_at,maximum_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,clock_timestamp()+interval '30 seconds',clock_timestamp()+interval '30 minutes')",
+          [
+            id,
+            enc,
+            to_string(principal.kind),
+            actor,
+            profile,
+            device,
+            patient,
+            browser,
+            hello["boot"],
+            site,
+            hello["descriptors"],
+            hash(lease)
+          ]
+        )
+
+      [[boot, desc, _, "authorized", true]] ->
+        unless boot == hello["boot"] and desc == hello["descriptors"],
+          do: abort(tx, :immutable_source_changed)
+
+      _ ->
+        abort(tx, :authority_ended)
+    end
+  end
+
+  defp admission_phase(tx, id) do
+    case rows(tx, "SELECT state FROM acquisitions WHERE id=$1", [id]) do
+      [["promoted"]] -> "sealed"
+      [[state]] when state in ["staged", "finalizing"] -> "finalizing"
+      _ -> "capturing"
+    end
+  end
 
   defp admission_authority!(tx, %{kind: :device, id: actor}, hello) do
     enc = hello["encounter"]
@@ -338,14 +356,18 @@ defmodule MedFabric.Store.AcquisitionSessions do
   end
 
   defp authorize_binding!(tx, bind, s) do
-    unless s.closed_at == nil and s.authority == "authorized" and s.generation == bind.generation and
-             s.principal == bind.principal and s.profile == bind.profile and
-             s.source_kind == to_string(bind.source_kind) and
-             (s.source_kind != "browser" or s.browser_session == bind.browser_session) and
-             hash(bind.lease) == s.lease_hash and authority_ms(tx, s.id) > 0,
+    unless same_binding?(s, bind) and hash(bind.lease) == s.lease_hash and
+             authority_ms(tx, s.id) > 0,
            do: abort(tx, :stale_binding)
 
     authorize_source!(tx, s)
+  end
+
+  defp same_binding?(s, bind) do
+    s.closed_at == nil and s.authority == "authorized" and s.generation == bind.generation and
+      s.principal == bind.principal and s.profile == bind.profile and
+      s.source_kind == to_string(bind.source_kind) and
+      (s.source_kind != "browser" or s.browser_session == bind.browser_session)
   end
 
   def authorize_source!(tx, s) do
@@ -525,43 +547,50 @@ defmodule MedFabric.Store.AcquisitionSessions do
            fence
          ]) do
       [[known, state]] ->
-        if known do
-          with {:ok, old} <- Receipt.parse(known), :ok <- Receipt.observe(old, receipt) do
-            :ok
-          else
-            _ -> abort(tx, :receipt_conflict)
-          end
-        end
-
-        if state == "terminal" and is_nil(terminal) do
-          unless known == Receipt.to_map(receipt), do: abort(tx, :sealed_attempt)
-        else
-          case terminal do
-            nil ->
-              rows(
-                tx,
-                "UPDATE stream_attempts SET receipt=$2,attempt_state='open' WHERE fence=$1",
-                [fence, Receipt.to_map(receipt)]
-              )
-
-            index ->
-              rows(
-                tx,
-                "UPDATE stream_attempts SET receipt=$2,attempt_state='terminal',sealed_index=$3,index_digest=$4 WHERE fence=$1",
-                [
-                  fence,
-                  Receipt.to_map(receipt),
-                  Serialization.to_map(index),
-                  Serialization.digest(index)
-                ]
-              )
-          end
-        end
+        verify_known_receipt!(tx, known, receipt)
+        persist_receipt!(tx, fence, known, state, receipt, terminal)
 
         receipt
 
       _ ->
         abort(tx, :unknown_attempt)
+    end
+  end
+
+  defp verify_known_receipt!(_tx, known, _receipt) when known in [nil, false], do: :ok
+
+  defp verify_known_receipt!(tx, known, receipt) do
+    with {:ok, old} <- Receipt.parse(known), :ok <- Receipt.observe(old, receipt) do
+      :ok
+    else
+      _ -> abort(tx, :receipt_conflict)
+    end
+  end
+
+  defp persist_receipt!(tx, _fence, known, "terminal", receipt, nil) do
+    unless known == Receipt.to_map(receipt), do: abort(tx, :sealed_attempt)
+  end
+
+  defp persist_receipt!(tx, fence, _known, _state, receipt, terminal) do
+    case terminal do
+      nil ->
+        rows(
+          tx,
+          "UPDATE stream_attempts SET receipt=$2,attempt_state='open' WHERE fence=$1",
+          [fence, Receipt.to_map(receipt)]
+        )
+
+      index ->
+        rows(
+          tx,
+          "UPDATE stream_attempts SET receipt=$2,attempt_state='terminal',sealed_index=$3,index_digest=$4 WHERE fence=$1",
+          [
+            fence,
+            Receipt.to_map(receipt),
+            Serialization.to_map(index),
+            Serialization.digest(index)
+          ]
+        )
     end
   end
 
@@ -645,18 +674,22 @@ defmodule MedFabric.Store.AcquisitionSessions do
     do:
       scoped(db, bind, fn tx, s ->
         if s.state == "promoted" do
-          unless s.final_inventory == final, do: abort(tx, :finish_conflict)
-
-          case rows(tx, "SELECT digest,body FROM acquisition_manifests WHERE acquisition_id=$1", [
-                 s.id
-               ]) do
-            [[digest, body]] -> {digest, body}
-            _ -> abort(tx, :unverified_manifest)
-          end
+          completed_manifest!(tx, s, final)
         else
           :pending
         end
       end)
+
+  defp completed_manifest!(tx, s, final) do
+    unless s.final_inventory == final, do: abort(tx, :finish_conflict)
+
+    case rows(tx, "SELECT digest,body FROM acquisition_manifests WHERE acquisition_id=$1", [
+           s.id
+         ]) do
+      [[digest, body]] -> {digest, body}
+      _ -> abort(tx, :unverified_manifest)
+    end
+  end
 
   def freeze(db, bind, final, clock),
     do:
@@ -680,7 +713,7 @@ defmodule MedFabric.Store.AcquisitionSessions do
             )
 
             rows(tx, "UPDATE acquisitions SET state='finalizing' WHERE id=$1", [s.id])
-            MedFabric.Store.DeviceCommands.close_pending(tx, s.id)
+            DeviceCommands.close_pending(tx, s.id)
           end
 
           :ok
@@ -689,7 +722,7 @@ defmodule MedFabric.Store.AcquisitionSessions do
       )
 
   def frozen_inputs(tx, s) do
-    inventory = MedFabric.Store.MeasurementEvents.inventory(tx, s.id)
+    inventory = MeasurementEvents.inventory(tx, s.id)
 
     streams =
       Map.new(Enum.sort(s.descriptors), fn {name, descriptor} ->
@@ -903,20 +936,7 @@ defmodule MedFabric.Store.AcquisitionSessions do
         unless s.authority != "authorized", do: abort(tx, :still_authorized)
 
         unless s.frozen_at do
-          final =
-            if s.profile == "plx_spot_check" do
-              inventory = MedFabric.Store.MeasurementEvents.inventory(tx, id)
-
-              %{
-                "count" => to_string(length(inventory)),
-                "digest" =>
-                  Serialization.digest(
-                    for row <- inventory, do: [row["event"]["event_id"], row["fingerprint"]]
-                  )
-              }
-            else
-              %{}
-            end
+          final = expiry_inventory(tx, s, id)
 
           rows(
             tx,
@@ -938,35 +958,55 @@ defmodule MedFabric.Store.AcquisitionSessions do
           [id]
         )
 
-        MedFabric.Store.DeviceCommands.close_pending(tx, id)
+        DeviceCommands.close_pending(tx, id)
         :ok
       end)
+
+  defp expiry_inventory(tx, s, id) do
+    if s.profile == "plx_spot_check" do
+      inventory = MeasurementEvents.inventory(tx, id)
+
+      %{
+        "count" => to_string(length(inventory)),
+        "digest" =>
+          Serialization.digest(
+            for row <- inventory, do: [row["event"]["event_id"], row["fingerprint"]]
+          )
+      }
+    else
+      %{}
+    end
+  end
 
   def settlement_pending(db, id) do
     settlement(db, id, fn tx, s ->
       if s.state in ["finalizing", "interrupted"] do
-        rows(tx, "UPDATE acquisitions SET state='interrupted' WHERE id=$1", [id])
-
-        rows(
-          tx,
-          "UPDATE acquisition_sessions SET authority_state='expired',generation=generation+1,connection_state='disconnected' WHERE id=$1 AND authority_state='authorized'",
-          [id]
-        )
-
-        unless rows(
-                 tx,
-                 "SELECT ordinal FROM acquisition_facts WHERE acquisition_id=$1 AND kind='interrupted' LIMIT 1",
-                 [id]
-               ) != [],
-               do:
-                 fact(tx, id, "interrupted", %{
-                   "reason" => "settlement_pending",
-                   "trailing_loss" => "unknown"
-                 })
+        mark_settlement_pending!(tx, id)
       end
 
       :ok
     end)
+  end
+
+  defp mark_settlement_pending!(tx, id) do
+    rows(tx, "UPDATE acquisitions SET state='interrupted' WHERE id=$1", [id])
+
+    rows(
+      tx,
+      "UPDATE acquisition_sessions SET authority_state='expired',generation=generation+1,connection_state='disconnected' WHERE id=$1 AND authority_state='authorized'",
+      [id]
+    )
+
+    unless rows(
+             tx,
+             "SELECT ordinal FROM acquisition_facts WHERE acquisition_id=$1 AND kind='interrupted' LIMIT 1",
+             [id]
+           ) != [],
+           do:
+             fact(tx, id, "interrupted", %{
+               "reason" => "settlement_pending",
+               "trailing_loss" => "unknown"
+             })
   end
 
   def recovery_ids(db),
@@ -1037,27 +1077,29 @@ defmodule MedFabric.Store.AcquisitionSessions do
 
     valid =
       is_map(desc) and Enum.sort(Map.keys(desc)) == expected and
-        Enum.all?(desc, fn {name, wire} ->
-          case Serialization.stream_spec(wire) do
-            {:ok, spec} ->
-              spec.stream_id == name and spec.acquisition_id == hello["acquisition"] and
-                spec.source_ref == principal.id and spec.boot_id == hello["boot"] and
-                spec.descriptor_ref == Serialization.descriptor_ref(spec) and
-                Serialization.to_map(spec) == wire and
-                if(hello["profile"] == "browser_microphone",
-                  do:
-                    spec.modality == "medex:browser_microphone" and spec.encoding == :s16le and
-                      spec.sample_rate == {48_000, 1} and length(spec.channels) == 1,
-                  else:
-                    spec.modality ==
-                      if(name == "audio", do: "medex:diagnostic_audio", else: "medex:ecg")
-                )
-
-            _ ->
-              false
-          end
-        end)
+        Enum.all?(desc, &valid_descriptor?(principal, hello, &1))
 
     if valid, do: :ok, else: {:error, :invalid_descriptors}
   end
+
+  defp valid_descriptor?(principal, hello, {name, wire}) do
+    case Serialization.stream_spec(wire) do
+      {:ok, spec} ->
+        spec.stream_id == name and spec.acquisition_id == hello["acquisition"] and
+          spec.source_ref == principal.id and spec.boot_id == hello["boot"] and
+          spec.descriptor_ref == Serialization.descriptor_ref(spec) and
+          Serialization.to_map(spec) == wire and modality_matches?(hello["profile"], name, spec)
+
+      _ ->
+        false
+    end
+  end
+
+  defp modality_matches?("browser_microphone", _name, spec),
+    do:
+      spec.modality == "medex:browser_microphone" and spec.encoding == :s16le and
+        spec.sample_rate == {48_000, 1} and length(spec.channels) == 1
+
+  defp modality_matches?(_profile, name, spec),
+    do: spec.modality == if(name == "audio", do: "medex:diagnostic_audio", else: "medex:ecg")
 end

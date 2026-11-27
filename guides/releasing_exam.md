@@ -19,7 +19,7 @@ Never reuse an existing publication. Preserve factual historical changelogs.
 
 Freeze both clean source SHAs, executable Git modes and six version identities.
 Read installed Weld and Hex task help; MedEx's private maintainer project requires Weld
-~> 0.20.1. Use the pinned `.tool-versions`. Record actual compiler/native archive,
+~> 0.20.2. Use the pinned `.tool-versions`. Record actual compiler/native archive,
 OS/filesystem, browser, PostgreSQL and HAPI versions. Do not print secrets.
 
 Use `med_ex/tools/maintainer` as the Weld invoker for both repositories, passing

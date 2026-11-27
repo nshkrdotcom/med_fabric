@@ -2,7 +2,7 @@ defmodule MedFabric.ExamWeb.TalkbackChannel do
   @moduledoc "Call-bound cooperative direct-media authority; signaling cannot forcibly stop established P2P transport."
   use Phoenix.Channel
   alias MedFabric.Exam
-  alias MedFabric.Store.{Encounters, AcquisitionSessions}
+  alias MedFabric.Store.{AcquisitionSessions, Encounters}
   @registry MedFabric.Exam.AcquisitionRegistry
 
   def join(

@@ -2,7 +2,7 @@ defmodule MedFabric.Exam do
   @moduledoc "Composition of common acquisition, native review and independently durable delivery."
   alias MedFabric.Domain.{Evidence, Review}
   alias MedFabric.Exam.Context
-  alias MedFabric.Store.{Records, Deliveries, AcquisitionSessions}
+  alias MedFabric.Store.{AcquisitionSessions, Deliveries, Records}
   def lab, do: Application.fetch_env!(:mf_exam, :lab)
 
   def context do

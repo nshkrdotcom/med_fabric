@@ -1,7 +1,7 @@
 defmodule MedExHandheld.Monitor do
   @moduledoc "Disposable latest-slot monitor with one atomically admitted control and an exact durable command ledger."
   use GenServer, restart: :temporary
-  alias MedEx.{ControlInterlock, ContractRules, Serialization}
+  alias MedEx.{ContractRules, ControlInterlock, Serialization}
   alias MedEx.Wire.{Control, FrameV1}
   alias MedExHandheld.Spool
   @cache_limit 4096
@@ -143,100 +143,7 @@ defmodule MedExHandheld.Monitor do
   def handle_info({:control, ticket}, state) do
     case control_slot(state.table) do
       {:ok, {^ticket, owner, wire, authority, operation}} ->
-        now = System.monotonic_time(:millisecond)
-
-        case technical_command(wire, authority, now) do
-          {:ok, command} ->
-            cache =
-              case Map.fetch(state.ledger["cache"], wire["id"]) do
-                {:ok, entry} ->
-                  {:ok, technical} =
-                    technical_command(
-                      entry["command"],
-                      %{
-                        boot: entry["command"]["boot"],
-                        generation: entry["command"]["generation"],
-                        nonce: "ledger",
-                        deadline: 1
-                      },
-                      0
-                    )
-
-                  %{
-                    wire["id"] => %{
-                      fingerprint: technical.fingerprint,
-                      command: Map.delete(technical, :expired),
-                      result: internal_result(entry["result"])
-                    }
-                  }
-
-                :error ->
-                  %{}
-              end
-
-            cache_size = map_size(state.ledger["cache"])
-
-            case ControlInterlock.device_decide(
-                   cache,
-                   command,
-                   String.to_integer(state.ledger["epoch"])
-                 ) do
-              {:cached, _} ->
-                complete(state, ticket, owner, state.ledger["cache"][wire["id"]]["result"])
-
-              {:execute_and_persist_result, _}
-              when operation == :apply and cache_size < @cache_limit ->
-                if current_authority?(state, authority) do
-                  delay = max(0, authority.deadline - now)
-                  timer = Process.send_after(self(), {:control_expired, ticket}, delay)
-
-                  {:noreply,
-                   %{
-                     state
-                     | pending: %{
-                         ticket: ticket,
-                         owner: owner,
-                         wire: wire,
-                         authority: authority,
-                         timer: timer
-                       }
-                   }}
-                else
-                  reject(state, ticket, owner, wire, "expired")
-                end
-
-              decision
-              when operation == :readback and decision != {:error, :command_id_conflict} ->
-                complete(
-                  state,
-                  ticket,
-                  owner,
-                  result(wire, state, "outcome_unknown", "unknown", "no_exact_history")
-                )
-
-              {:error, :expired} ->
-                reject(state, ticket, owner, wire, "expired")
-
-              {:error, :command_id_conflict} ->
-                complete(
-                  state,
-                  ticket,
-                  owner,
-                  result(wire, state, "outcome_unknown", "unknown", "command_conflict")
-                )
-
-              _ ->
-                reject(state, ticket, owner, wire, "not_applied")
-            end
-
-          {:error, _} ->
-            complete(
-              state,
-              ticket,
-              owner,
-              result(wire, state, "rejected", "unknown", "invalid_authority")
-            )
-        end
+        process_control(state, ticket, owner, wire, authority, operation)
 
       _ ->
         {:noreply, state}
@@ -510,14 +417,7 @@ defmodule MedExHandheld.Monitor do
           _ -> 0
         end
 
-      if state.trace_bytes + byte_size(bytes) <= limit do
-        case File.write(Path.join(state.config["spool"], "monitor-truth.jsonl"), bytes, [:append]) do
-          :ok -> %{state | trace_bytes: state.trace_bytes + byte_size(bytes)}
-          {:error, _} -> %{state | config: Map.put(state.config, "trace_monitor", false)}
-        end
-      else
-        %{state | config: Map.put(state.config, "trace_monitor", false)}
-      end
+      append_trace(state, bytes, limit)
     else
       state
     end
@@ -537,5 +437,124 @@ defmodule MedExHandheld.Monitor do
     end
 
     :ok
+  end
+
+  defp command_cache(state, wire) do
+    case Map.fetch(state.ledger["cache"], wire["id"]) do
+      {:ok, entry} ->
+        {:ok, technical} =
+          technical_command(
+            entry["command"],
+            %{
+              boot: entry["command"]["boot"],
+              generation: entry["command"]["generation"],
+              nonce: "ledger",
+              deadline: 1
+            },
+            0
+          )
+
+        %{
+          wire["id"] => %{
+            fingerprint: technical.fingerprint,
+            command: Map.delete(technical, :expired),
+            result: internal_result(entry["result"])
+          }
+        }
+
+      :error ->
+        %{}
+    end
+  end
+
+  defp schedule_command(state, ticket, owner, wire, authority, now) do
+    if current_authority?(state, authority) do
+      delay = max(0, authority.deadline - now)
+      timer = Process.send_after(self(), {:control_expired, ticket}, delay)
+
+      {:noreply,
+       %{
+         state
+         | pending: %{
+             ticket: ticket,
+             owner: owner,
+             wire: wire,
+             authority: authority,
+             timer: timer
+           }
+       }}
+    else
+      reject(state, ticket, owner, wire, "expired")
+    end
+  end
+
+  defp decide_command(state, ticket, owner, wire, authority, operation, now, {cache, command}) do
+    cache_size = map_size(state.ledger["cache"])
+
+    case ControlInterlock.device_decide(
+           cache,
+           command,
+           String.to_integer(state.ledger["epoch"])
+         ) do
+      {:cached, _} ->
+        complete(state, ticket, owner, state.ledger["cache"][wire["id"]]["result"])
+
+      {:execute_and_persist_result, _}
+      when operation == :apply and cache_size < @cache_limit ->
+        schedule_command(state, ticket, owner, wire, authority, now)
+
+      decision
+      when operation == :readback and decision != {:error, :command_id_conflict} ->
+        complete(
+          state,
+          ticket,
+          owner,
+          result(wire, state, "outcome_unknown", "unknown", "no_exact_history")
+        )
+
+      {:error, :expired} ->
+        reject(state, ticket, owner, wire, "expired")
+
+      {:error, :command_id_conflict} ->
+        complete(
+          state,
+          ticket,
+          owner,
+          result(wire, state, "outcome_unknown", "unknown", "command_conflict")
+        )
+
+      _ ->
+        reject(state, ticket, owner, wire, "not_applied")
+    end
+  end
+
+  defp process_control(state, ticket, owner, wire, authority, operation) do
+    now = System.monotonic_time(:millisecond)
+
+    case technical_command(wire, authority, now) do
+      {:ok, command} ->
+        cache = command_cache(state, wire)
+
+        decide_command(state, ticket, owner, wire, authority, operation, now, {cache, command})
+
+      {:error, _} ->
+        complete(
+          state,
+          ticket,
+          owner,
+          result(wire, state, "rejected", "unknown", "invalid_authority")
+        )
+    end
+  end
+
+  defp append_trace(state, bytes, limit) do
+    if state.trace_bytes + byte_size(bytes) <= limit do
+      case File.write(Path.join(state.config["spool"], "monitor-truth.jsonl"), bytes, [:append]) do
+        :ok -> %{state | trace_bytes: state.trace_bytes + byte_size(bytes)}
+        {:error, _} -> %{state | config: Map.put(state.config, "trace_monitor", false)}
+      end
+    else
+      %{state | config: Map.put(state.config, "trace_monitor", false)}
+    end
   end
 end

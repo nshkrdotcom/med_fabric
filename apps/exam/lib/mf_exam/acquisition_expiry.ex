@@ -1,7 +1,7 @@
 defmodule MedFabric.Exam.AcquisitionExpiry do
   @moduledoc "Closes admission before independently quiescing and settling actual source effects."
   use GenServer
-  alias MedFabric.Exam.AcquisitionIngress
+  alias MedFabric.Exam.{AcquisitionIngress, AcquisitionManifest}
   alias MedFabric.Store.AcquisitionSessions, as: S
   def start_link(context), do: GenServer.start_link(__MODULE__, context)
   def init(context), do: {:ok, context, {:continue, :start}}
@@ -21,7 +21,7 @@ defmodule MedFabric.Exam.AcquisitionExpiry do
   def sweep_one(context, id) do
     with {:ok, {:expire, streams}} <- S.expire(context.db, id),
          :ok <- AcquisitionIngress.quiesce(context, id, streams),
-         {:ok, _} <- MedFabric.Exam.AcquisitionManifest.settle_interrupted(context, id) do
+         {:ok, _} <- AcquisitionManifest.settle_interrupted(context, id) do
       try do
         :ets.delete(:mf_live_ecg, :erlang.phash2(id, 64))
       rescue

@@ -1,5 +1,6 @@
 defmodule MedExHandheld.PLXAdapterTest do
   use ExUnit.Case, async: true
+  alias MedEx.Wire.Control
   alias MedExHandheld.PLXAdapter, as: PLX
 
   test "zero is finite, absent optional values and NaN stay distinct" do
@@ -89,13 +90,13 @@ defmodule MedExHandheld.PLXAdapterTest do
     }
 
     assert {:ok, bytes} =
-             MedEx.Wire.Control.encode("measurement", %{
+             Control.encode("measurement", %{
                "binding" => binding,
                "operation_id" => "put-event",
                "event" => wire
              })
 
-    assert {:ok, %{"event" => ^wire}} = MedEx.Wire.Control.decode(bytes, ["measurement"])
+    assert {:ok, %{"event" => ^wire}} = Control.decode(bytes, ["measurement"])
     unknown = MedExHandheld.PLXPeripheral.event(raw, "unknown-time", 2, nil, config)
     assert {:ok, %{device_time: :unknown}} = MedEx.Serialization.measurement(unknown)
   end

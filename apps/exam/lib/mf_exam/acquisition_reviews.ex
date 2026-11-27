@@ -1,7 +1,7 @@
 defmodule MedFabric.Exam.AcquisitionReviews do
   @moduledoc "Native review orchestration. External mapping is deliberately independent of clinical acceptance."
-  alias MedFabric.Exam.AcquisitionManifest
   alias MedFabric.Domain.Review
+  alias MedFabric.Exam.AcquisitionManifest
   alias MedFabric.Store.Records
 
   def review(context, enc, id, actor, digest, request_id, choice) do

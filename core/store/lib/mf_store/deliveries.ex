@@ -147,24 +147,7 @@ defmodule MedFabric.Store.Deliveries do
       if d.status == "confirmed", do: S.abort(tx, :already_confirmed)
       require_claim!(tx, d, claim)
 
-      {fact, ref, code} =
-        case outcome do
-          {:matched, remote} when is_binary(remote) ->
-            {"matched", remote, nil}
-
-          {:noncommitted, reason} when reason in [:before_http, :qualified_remote_noncommit] ->
-            {"noncommitted", nil, to_string(reason)}
-
-          {:permanent_noncommit, reason}
-          when reason in [:before_http, :qualified_remote_noncommit] ->
-            {"noncommitted", nil, "permanent_noncommit"}
-
-          {:conflict, reason} ->
-            {"conflict", nil, safe_code(reason)}
-
-          _ ->
-            {"unknown", nil, "outcome_unknown"}
-        end
+      {fact, ref, code} = classify_outcome(outcome)
 
       append(
         tx,
@@ -179,23 +162,7 @@ defmodule MedFabric.Store.Deliveries do
 
       prior = attempts(tx, d.id)
 
-      status =
-        cond do
-          fact == "conflict" ->
-            "conflict"
-
-          fact == "matched" and confirmation_allowed?(prior, d.conditional_qualified) ->
-            "confirmed"
-
-          code == "permanent_noncommit" and Enum.all?(prior, &settled_noncommit?/1) ->
-            "blocked"
-
-          dispatch_allowed?(prior, d.conditional_qualified) ->
-            "retryable"
-
-          true ->
-            "unresolved"
-        end
+      status = attempt_status(fact, code, prior, d.conditional_qualified)
 
       proof = %{
         "safe_confirmation" => status == "confirmed",
@@ -210,6 +177,45 @@ defmodule MedFabric.Store.Deliveries do
       persist_outcome(tx, d, status, ref, proof, code)
       status
     end)
+  end
+
+  defp classify_outcome(outcome) do
+    case outcome do
+      {:matched, remote} when is_binary(remote) ->
+        {"matched", remote, nil}
+
+      {:noncommitted, reason} when reason in [:before_http, :qualified_remote_noncommit] ->
+        {"noncommitted", nil, to_string(reason)}
+
+      {:permanent_noncommit, reason}
+      when reason in [:before_http, :qualified_remote_noncommit] ->
+        {"noncommitted", nil, "permanent_noncommit"}
+
+      {:conflict, reason} ->
+        {"conflict", nil, safe_code(reason)}
+
+      _ ->
+        {"unknown", nil, "outcome_unknown"}
+    end
+  end
+
+  defp attempt_status(fact, code, prior, qualified) do
+    cond do
+      fact == "conflict" ->
+        "conflict"
+
+      fact == "matched" and confirmation_allowed?(prior, qualified) ->
+        "confirmed"
+
+      code == "permanent_noncommit" and Enum.all?(prior, &settled_noncommit?/1) ->
+        "blocked"
+
+      dispatch_allowed?(prior, qualified) ->
+        "retryable"
+
+      true ->
+        "unresolved"
+    end
   end
 
   def expire_claim(db, id),
@@ -243,23 +249,7 @@ defmodule MedFabric.Store.Deliveries do
 
       history = attempts(tx, id)
 
-      {status, remote} =
-        case result do
-          {:matched, ref} when is_binary(ref) ->
-            if confirmation_allowed?(history, d.conditional_qualified),
-              do: {"confirmed", ref},
-              else: {if(d.status == "conflict", do: "conflict", else: "unresolved"), nil}
-
-          {:conflict, _} ->
-            {"conflict", nil}
-
-          _ ->
-            cond do
-              d.status == "conflict" -> {"conflict", nil}
-              dispatch_allowed?(history, d.conditional_qualified) -> {"retryable", nil}
-              true -> {"unresolved", nil}
-            end
-        end
+      {status, remote} = reconciliation_status(result, history, d)
 
       proof = %{
         "safe_confirmation" => status == "confirmed",
@@ -282,6 +272,28 @@ defmodule MedFabric.Store.Deliveries do
       status
     end)
   end
+
+  defp reconciliation_status(result, history, d) do
+    case result do
+      {:matched, ref} when is_binary(ref) ->
+        if confirmation_allowed?(history, d.conditional_qualified),
+          do: {"confirmed", ref},
+          else: {unconfirmed_status(d), nil}
+
+      {:conflict, _} ->
+        {"conflict", nil}
+
+      _ ->
+        cond do
+          d.status == "conflict" -> {"conflict", nil}
+          dispatch_allowed?(history, d.conditional_qualified) -> {"retryable", nil}
+          true -> {"unresolved", nil}
+        end
+    end
+  end
+
+  defp unconfirmed_status(%{status: "conflict"}), do: "conflict"
+  defp unconfirmed_status(_), do: "unresolved"
 
   def remediate(db, id, actor) do
     locked(db, id, fn tx, d ->

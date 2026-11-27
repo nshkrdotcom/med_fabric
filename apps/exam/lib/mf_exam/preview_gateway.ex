@@ -1,6 +1,7 @@
 defmodule MedFabric.Exam.PreviewGateway do
   @moduledoc "Disposable latest-only relay after authoritative commit. No media providers live in Exam."
   use GenServer
+  alias MedFabric.Store.AcquisitionSessions
   @cap 64
   def start_link(config), do: GenServer.start_link(__MODULE__, config, name: __MODULE__)
 
@@ -34,23 +35,27 @@ defmodule MedFabric.Exam.PreviewGateway do
         :ok
 
       id ->
-        case :ets.take(__MODULE__, id) do
-          [{_, id, at, generation, epoch, descriptor, raw}] ->
-            if System.monotonic_time(:millisecond) - at <= 200 do
-              request(config, "feed", id, raw, "application/octet-stream", [
-                {"x-generation", to_string(generation)},
-                {"x-source-epoch", to_string(epoch)},
-                {"x-descriptor-ref", descriptor}
-              ])
-            end
-
-          _ ->
-            :ok
-        end
+        drain_slot(config, id)
     end
 
     Process.send_after(self(), :drain, 10)
     {:noreply, config}
+  end
+
+  defp drain_slot(config, id) do
+    case :ets.take(__MODULE__, id) do
+      [{_, id, at, generation, epoch, descriptor, raw}] ->
+        if System.monotonic_time(:millisecond) - at <= 200 do
+          request(config, "feed", id, raw, "application/octet-stream", [
+            {"x-generation", to_string(generation)},
+            {"x-source-epoch", to_string(epoch)},
+            {"x-descriptor-ref", descriptor}
+          ])
+        end
+
+      _ ->
+        :ok
+    end
   end
 
   def capability(config, snapshot, actor, session) do
@@ -69,7 +74,7 @@ defmodule MedFabric.Exam.PreviewGateway do
       "viewer_session" => session,
       "issued_at_ms" => to_string(now),
       "expires_at_ms" => to_string(now + snapshot.preview_remaining_ms),
-      "nonce" => MedFabric.Store.AcquisitionSessions.nonce()
+      "nonce" => AcquisitionSessions.nonce()
     }
 
     bytes = MedEx.CanonicalJSON.encode(claims)
@@ -116,6 +121,7 @@ defmodule MedFabric.ExamWeb.DevicePreview do
   @moduledoc false
   import Plug.Conn
   alias MedFabric.Exam.PreviewGateway
+  alias MedFabric.Store.AcquisitionSessions
   def init(opts), do: opts
 
   def call(conn, _) do
@@ -130,7 +136,7 @@ defmodule MedFabric.ExamWeb.DevicePreview do
          true <- is_binary(sdp) and byte_size(sdp) <= 32_768,
          %{url: _, secret: _} = config <- Application.get_env(:mf_exam, :sidecar),
          {:ok, snapshot} <-
-           MedFabric.Store.AcquisitionSessions.preview_authority(
+           AcquisitionSessions.preview_authority(
              MedFabric.Exam.context().db,
              p["encounter_id"],
              p["id"],

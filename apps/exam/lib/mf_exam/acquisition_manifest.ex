@@ -2,8 +2,10 @@ defmodule MedFabric.Exam.AcquisitionManifest do
   @moduledoc "Verified source-neutral evidence: frozen snapshot, pure canonical bytes, immutable install, exact promotion."
   alias MedEx.{Receipt, Serialization}
   alias MedEx.Storage.File, as: Storage
-  alias MedFabric.Exam.{AcquisitionIngress, ClockObservations, DeviceRootLock, Barrier}
+  alias MedFabric.Domain.DeviceMeasurement
+  alias MedFabric.Exam.{AcquisitionIngress, Barrier, ClockObservations, DeviceRootLock}
   alias MedFabric.Store.AcquisitionSessions, as: S
+  alias MedFabric.Store.Postgres
 
   def root(context, id), do: Path.join([context.artifact_dir, "acquisitions-v2", S.hash(id)])
   def attempt_dir(context, id, name, fence), do: Path.join([root(context, id), name, fence])
@@ -35,33 +37,13 @@ defmodule MedFabric.Exam.AcquisitionManifest do
     with {:ok, :ok} <- S.freeze(context.db, bind, final, ClockObservations.wall_mapping()),
          {:ok, snapshot} <- S.settlement(context.db, bind.id, fn _, s -> s end),
          :ok <- AcquisitionIngress.quiesce(context, bind.id, Map.keys(snapshot.descriptors)) do
-      case gated(context, bind.id, Map.keys(snapshot.descriptors), fn ->
-             finalize(context, bind.id)
-           end) do
-        {:ok, _} = result ->
-          result
-
-        {:error, :inventory_pending} = pending ->
-          pending
-
-        error ->
-          S.settlement_pending(context.db, bind.id)
-          error
-      end
+      finalize_pending(context, bind.id, Map.keys(snapshot.descriptors))
     end
   end
 
   def recover(context) do
     Enum.each(S.recovery_ids(context.db), fn id ->
-      result =
-        with {:ok, s} <- S.settlement(context.db, id, fn _, s -> s end) do
-          if s.authority != "authorized" do
-            settle_interrupted(context, id)
-          else
-            with :ok <- AcquisitionIngress.quiesce(context, id, Map.keys(s.descriptors)),
-                 do: gated(context, id, Map.keys(s.descriptors), fn -> finalize(context, id) end)
-          end
-        end
+      result = recover_one(context, id)
 
       case result do
         {:ok, _} -> :ok
@@ -77,12 +59,7 @@ defmodule MedFabric.Exam.AcquisitionManifest do
     with {:ok, s} <- S.settlement(context.db, id, fn _, s -> s end),
          true <- s.authority != "authorized",
          :ok <- AcquisitionIngress.quiesce(context, id, Map.keys(s.descriptors)) do
-      gated(context, id, Map.keys(s.descriptors), fn ->
-        with {:ok, :ok} <- S.finish_expiry(context.db, id, ClockObservations.wall_mapping()),
-             :ok <- settle_streams(context, id, true) do
-          finalize(context, id)
-        end
-      end)
+      gated(context, id, Map.keys(s.descriptors), fn -> finalize_interrupted(context, id) end)
     else
       _ -> {:error, :settlement_pending}
     end
@@ -98,80 +75,73 @@ defmodule MedFabric.Exam.AcquisitionManifest do
              S.stage(tx, s, S.snapshot_digest(inputs), built.bytes, built.digest)
            end),
          :ok <- install(context, id, built.bytes),
-         :ok <- Barrier.hit("manifest_install"),
-         {:ok, digest} <-
-           S.settlement(context.db, id, fn tx, s ->
-             {:ok, staged} = S.staged(tx, id)
-
-             unless staged.bytes == built.bytes and staged.digest == built.digest and
-                      S.snapshot_digest(S.frozen_inputs(tx, s)) == staged.snapshot,
-                    do: S.abort(tx, :snapshot_changed)
-
-             Barrier.hit("db_completion", "all", fn ->
-               to_string(MedFabric.Store.Postgres.backend_id(tx))
-             end)
-
-             S.promote(tx, s, built.digest, built.manifest)
-           end) do
-      {:ok, digest}
+         :ok <- Barrier.hit("manifest_install") do
+      S.settlement(context.db, id, fn tx, s -> promote_staged(tx, s, id, built) end)
     end
   end
 
   defp settle_streams(context, id, interrupt?) do
     with {:ok, inputs} <- S.settlement(context.db, id, fn tx, s -> S.frozen_inputs(tx, s) end) do
       Enum.reduce_while(Enum.sort(inputs.streams), :ok, fn {name, stream}, :ok ->
-        {:ok, spec} = Serialization.stream_spec(stream.descriptor)
-
-        result =
-          Enum.reduce_while(stream.attempts, {:ok, nil}, fn attempt, {:ok, latest} ->
-            dir = attempt_dir(context, id, name, attempt.fence)
-
-            if is_nil(attempt.receipt) and not File.exists?(dir) do
-              {:cont, {:ok, latest}}
-            else
-              opts = [stream: spec, fence: attempt.fence, root_owner: context.root_owner]
-
-              opts =
-                if attempt.receipt,
-                  do: Keyword.put(opts, :known_receipt, elem(Receipt.parse(attempt.receipt), 1)),
-                  else: opts
-
-              with {:ok, prefix} <- Storage.recover(dir, opts),
-                   {:ok, prefix} <- reconcile_terminal(dir, opts, prefix),
-                   {:ok, _} <-
-                     S.settlement(context.db, id, fn tx, _ ->
-                       S.record_receipt(
-                         tx,
-                         attempt.fence,
-                         prefix.receipt,
-                         if(prefix.sealed, do: prefix.index)
-                       )
-
-                       unless prefix.sealed, do: S.mark_attempt(tx, attempt.fence, "quiescent")
-                       prefix
-                     end) do
-                {:cont, {:ok, latest || prefix}}
-              else
-                error -> {:halt, error}
-              end
-            end
-          end)
-
-        case result do
-          {:ok, %{sealed: true}} ->
-            {:cont, :ok}
-
-          {:ok, prefix} when interrupt? ->
-            case interrupt_successor(context, id, name, spec, prefix) do
-              {:ok, %{sealed: true}} -> {:cont, :ok}
-              error -> {:halt, error}
-            end
-
-          _ ->
-            {:halt, {:error, :unresolved_stream}}
-        end
+        settle_stream(context, id, interrupt?, name, stream)
       end)
     end
+  end
+
+  defp settle_stream(context, id, interrupt?, name, stream) do
+    {:ok, spec} = Serialization.stream_spec(stream.descriptor)
+
+    result =
+      Enum.reduce_while(stream.attempts, {:ok, nil}, fn attempt, {:ok, latest} ->
+        settle_attempt(context, id, name, spec, attempt, latest)
+      end)
+
+    case result do
+      {:ok, %{sealed: true}} -> {:cont, :ok}
+      {:ok, prefix} when interrupt? -> settle_successor(context, id, name, spec, prefix)
+      _ -> {:halt, {:error, :unresolved_stream}}
+    end
+  end
+
+  defp settle_successor(context, id, name, spec, prefix) do
+    case interrupt_successor(context, id, name, spec, prefix) do
+      {:ok, %{sealed: true}} -> {:cont, :ok}
+      error -> {:halt, error}
+    end
+  end
+
+  defp settle_attempt(context, id, name, spec, attempt, latest) do
+    dir = attempt_dir(context, id, name, attempt.fence)
+
+    if is_nil(attempt.receipt) and not File.exists?(dir) do
+      {:cont, {:ok, latest}}
+    else
+      settle_journal(context, id, spec, attempt, latest, dir)
+    end
+  end
+
+  defp settle_journal(context, id, spec, attempt, latest, dir) do
+    opts = [stream: spec, fence: attempt.fence, root_owner: context.root_owner]
+
+    opts =
+      if attempt.receipt,
+        do: Keyword.put(opts, :known_receipt, elem(Receipt.parse(attempt.receipt), 1)),
+        else: opts
+
+    with {:ok, prefix} <- Storage.recover(dir, opts),
+         {:ok, prefix} <- reconcile_terminal(dir, opts, prefix),
+         {:ok, _} <-
+           S.settlement(context.db, id, fn tx, _ -> settle_prefix(tx, attempt, prefix) end) do
+      {:cont, {:ok, latest || prefix}}
+    else
+      error -> {:halt, error}
+    end
+  end
+
+  defp settle_prefix(tx, attempt, prefix) do
+    S.record_receipt(tx, attempt.fence, prefix.receipt, if(prefix.sealed, do: prefix.index))
+    unless prefix.sealed, do: S.mark_attempt(tx, attempt.fence, "quiescent")
+    prefix
   end
 
   # Journals are immutable once their writer retires. Settlement imports the
@@ -195,39 +165,7 @@ defmodule MedFabric.Exam.AcquisitionManifest do
 
       result =
         S.settlement(context.db, id, fn tx, s ->
-          unless s.authority != "authorized" and s.frozen_at != nil,
-            do: S.abort(tx, :settlement_not_authorized)
-
-          case MedEx.StreamWriter.start_link(opts) do
-            {:ok, writer} ->
-              try do
-                with {:ok, observed} <- MedEx.StreamWriter.receipt(writer, attempt.fence, 30_000),
-                     :ok <- verify_import(predecessor, observed),
-                     {:ok,
-                      %MedEx.Storage.Terminal{
-                        index: index,
-                        receipt: receipt,
-                        recovered: recovered
-                      }} <-
-                       MedEx.StreamWriter.interrupt(
-                         writer,
-                         attempt.fence,
-                         "authority_ended; trailing_loss_unknown",
-                         30_000
-                       ),
-                     {:ok, ^receipt} <- Receipt.terminal_receipt(index, recovered, observed) do
-                  S.record_receipt(tx, attempt.fence, receipt, index)
-                  recovered
-                else
-                  _ -> S.abort(tx, :interrupted_seal_unknown)
-                end
-              after
-                if Process.alive?(writer), do: GenServer.stop(writer, :normal, 30_000)
-              end
-
-            _ ->
-              S.abort(tx, :interrupted_seal_unknown)
-          end
+          interrupt_locked(tx, s, opts, attempt, predecessor)
         end)
 
       with {:ok, %{receipt: receipt}} <- result,
@@ -304,7 +242,7 @@ defmodule MedFabric.Exam.AcquisitionManifest do
     with {:ok, streams} <- result,
          true <-
            Enum.all?(inputs.inventory, fn row ->
-             MedFabric.Domain.DeviceMeasurement.validate(row["event"]) == :ok and
+             DeviceMeasurement.validate(row["event"]) == :ok and
                Serialization.digest(row["event"]) == row["fingerprint"]
            end),
          :ok <- inventory_matches(inputs.session, inputs.inventory) do
@@ -420,20 +358,24 @@ defmodule MedFabric.Exam.AcquisitionManifest do
   end
 
   defp verify_full_streams(context, id, m) do
-    if Enum.all?(m["streams"], fn {name, entry} ->
-         with {:ok, spec} <- Serialization.stream_spec(entry["index"]["stream"]),
-              {:ok, prefix} <-
-                Storage.recover(attempt_dir(context, id, name, entry["index"]["fence"]),
-                  stream: spec,
-                  fence: entry["index"]["fence"],
-                  root_owner: context.root_owner
-                ) do
-           prefix.sealed and prefix.index_digest == entry["digest"] and
-             Serialization.to_map(prefix.index) == entry["index"]
-         else
-           _ -> false
-         end
-       end), do: :ok, else: {:error, :unverified_stream}
+    if Enum.all?(m["streams"], fn {name, entry} -> verified_stream?(context, id, name, entry) end),
+       do: :ok,
+       else: {:error, :unverified_stream}
+  end
+
+  defp verified_stream?(context, id, name, entry) do
+    with {:ok, spec} <- Serialization.stream_spec(entry["index"]["stream"]),
+         {:ok, prefix} <-
+           Storage.recover(attempt_dir(context, id, name, entry["index"]["fence"]),
+             stream: spec,
+             fence: entry["index"]["fence"],
+             root_owner: context.root_owner
+           ) do
+      prefix.sealed and prefix.index_digest == entry["digest"] and
+        Serialization.to_map(prefix.index) == entry["index"]
+    else
+      _ -> false
+    end
   end
 
   defp safe_manifest(context, id) do
@@ -515,6 +457,95 @@ defmodule MedFabric.Exam.AcquisitionManifest do
       {error, held} ->
         Enum.each(held, &DeviceRootLock.release(context.root_owner, &1))
         error
+    end
+  end
+
+  defp finalize_pending(context, id, names) do
+    case gated(context, id, names, fn ->
+           finalize(context, id)
+         end) do
+      {:ok, _} = result ->
+        result
+
+      {:error, :inventory_pending} = pending ->
+        pending
+
+      error ->
+        S.settlement_pending(context.db, id)
+        error
+    end
+  end
+
+  defp recover_one(context, id) do
+    with {:ok, s} <- S.settlement(context.db, id, fn _, s -> s end) do
+      recover_snapshot(context, id, s)
+    end
+  end
+
+  defp recover_snapshot(context, id, s) do
+    if s.authority != "authorized",
+      do: settle_interrupted(context, id),
+      else: recover_authorized(context, id, s)
+  end
+
+  defp recover_authorized(context, id, s) do
+    with :ok <- AcquisitionIngress.quiesce(context, id, Map.keys(s.descriptors)),
+         do: gated(context, id, Map.keys(s.descriptors), fn -> finalize(context, id) end)
+  end
+
+  defp finalize_interrupted(context, id) do
+    with {:ok, :ok} <- S.finish_expiry(context.db, id, ClockObservations.wall_mapping()),
+         :ok <- settle_streams(context, id, true) do
+      finalize(context, id)
+    end
+  end
+
+  defp promote_staged(tx, s, id, built) do
+    {:ok, staged} = S.staged(tx, id)
+
+    unless staged.bytes == built.bytes and staged.digest == built.digest and
+             S.snapshot_digest(S.frozen_inputs(tx, s)) == staged.snapshot,
+           do: S.abort(tx, :snapshot_changed)
+
+    Barrier.hit("db_completion", "all", fn -> to_string(Postgres.backend_id(tx)) end)
+    S.promote(tx, s, built.digest, built.manifest)
+  end
+
+  defp interrupt_writer(tx, writer, attempt, predecessor) do
+    with {:ok, observed} <- MedEx.StreamWriter.receipt(writer, attempt.fence, 30_000),
+         :ok <- verify_import(predecessor, observed),
+         {:ok,
+          %MedEx.Storage.Terminal{
+            index: index,
+            receipt: receipt,
+            recovered: recovered
+          }} <-
+           MedEx.StreamWriter.interrupt(
+             writer,
+             attempt.fence,
+             "authority_ended; trailing_loss_unknown",
+             30_000
+           ),
+         {:ok, ^receipt} <- Receipt.terminal_receipt(index, recovered, observed) do
+      S.record_receipt(tx, attempt.fence, receipt, index)
+      recovered
+    else
+      _ -> S.abort(tx, :interrupted_seal_unknown)
+    end
+  after
+    if Process.alive?(writer), do: GenServer.stop(writer, :normal, 30_000)
+  end
+
+  defp interrupt_locked(tx, s, opts, attempt, predecessor) do
+    unless s.authority != "authorized" and s.frozen_at != nil,
+      do: S.abort(tx, :settlement_not_authorized)
+
+    case MedEx.StreamWriter.start_link(opts) do
+      {:ok, writer} ->
+        interrupt_writer(tx, writer, attempt, predecessor)
+
+      _ ->
+        S.abort(tx, :interrupted_seal_unknown)
     end
   end
 end

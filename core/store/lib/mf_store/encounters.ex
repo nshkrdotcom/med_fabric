@@ -154,9 +154,7 @@ defmodule MedFabric.Store.Encounters do
          {:ok,
           %URI{scheme: scheme, host: host, port: port, userinfo: nil, query: nil, fragment: nil} =
             uri} <- URI.new(destination),
-         true <-
-           scheme in ["http", "https"] and is_binary(host) and byte_size(host) in 1..253 and
-             port in 1..65_535 do
+         true <- destination_authority?(scheme, host, port) do
       {:ok,
        %{
          destination: URI.to_string(uri),
@@ -171,6 +169,11 @@ defmodule MedFabric.Store.Encounters do
   end
 
   defp export_configuration(_), do: {:error, :invalid_export_configuration}
+
+  defp destination_authority?(scheme, host, port),
+    do:
+      scheme in ["http", "https"] and is_binary(host) and byte_size(host) in 1..253 and
+        port in 1..65_535
 
   defp bounded_text?(value, maximum),
     do:

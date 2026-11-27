@@ -25,6 +25,7 @@ defmodule MedFabric.Domain.MixProject do
       app: :mf_domain,
       version: @version,
       elixir: "~> 1.20",
+      test_ignore_filters: ~w(test/test_helper.exs test/support/measurement_fixture.exs),
       name: "Med Fabric Domain",
       description:
         "Pure Elixir clinical evidence constructors and encounter rules for Med Fabric",

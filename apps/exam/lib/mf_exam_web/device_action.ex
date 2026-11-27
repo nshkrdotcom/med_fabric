@@ -2,6 +2,8 @@ defmodule MedFabric.ExamWeb.DeviceAction do
   @moduledoc false
   import Plug.Conn
   alias MedFabric.Exam
+  alias MedFabric.Exam.{AcquisitionReviews, AcquisitionWorkflow}
+  alias MedFabric.Store.{DeviceCommands, Encounters}
   def init(opts), do: opts
 
   def call(conn, operation) do
@@ -13,7 +15,7 @@ defmodule MedFabric.ExamWeb.DeviceAction do
 
     with "clinician" <- get_session(conn, :exam_role),
          true <-
-           MedFabric.Store.Encounters.session_authorized?(
+           Encounters.session_authorized?(
              context.db,
              get_session(conn, :exam_session),
              enc,
@@ -33,7 +35,7 @@ defmodule MedFabric.ExamWeb.DeviceAction do
 
   defp action(%{"action" => "review"} = b, c, e, id, a),
     do:
-      MedFabric.Exam.AcquisitionReviews.review(
+      AcquisitionReviews.review(
         c,
         e,
         id,
@@ -44,10 +46,10 @@ defmodule MedFabric.ExamWeb.DeviceAction do
       )
 
   defp action(%{"action" => "monitor_gain", "gain" => gain}, c, e, id, a),
-    do: MedFabric.Store.DeviceCommands.request(c.db, e, id, a, gain)
+    do: DeviceCommands.request(c.db, e, id, a, gain)
 
   defp action(%{"action" => "stop"}, c, e, id, a),
-    do: MedFabric.Exam.AcquisitionWorkflow.stop(c, e, id, a)
+    do: AcquisitionWorkflow.stop(c, e, id, a)
 
   defp action(%{"action" => "deliver"}, c, e, id, a), do: Exam.deliver(e, id, a, c)
   defp action(_, _, _, _, _), do: {:error, :invalid_action}

@@ -1,8 +1,8 @@
 defmodule MedFabric.Exam.DeliveryWorker do
   @moduledoc "One bounded outbox worker. HTTP runs outside Store transactions and acquisition locks."
   use GenServer
-  alias MedFabric.Store.{Deliveries, Encounters}
   alias MedFabric.Interop.FhirClient
+  alias MedFabric.Store.{Deliveries, Encounters}
   def start_link(context), do: GenServer.start_link(__MODULE__, context)
 
   def init(context) do

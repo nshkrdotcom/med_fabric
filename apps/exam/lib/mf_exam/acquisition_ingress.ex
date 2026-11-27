@@ -3,8 +3,19 @@ defmodule MedFabric.Exam.AcquisitionIngress do
   use GenServer, restart: :temporary
   alias MedEx.{Receipt, SampleFrame, Serialization, StreamWriter}
   alias MedEx.Storage.File, as: Storage
-  alias MedFabric.Exam.{Acquisition, AcquisitionManifest, Barrier, DeviceRootLock}
+  alias MedEx.Wire.FrameV1
+  alias MedFabric.Domain.Review
+
+  alias MedFabric.Exam.{
+    Acquisition,
+    AcquisitionManifest,
+    AcquisitionWorkflow,
+    Barrier,
+    DeviceRootLock
+  }
+
   alias MedFabric.Store.AcquisitionSessions, as: S
+  alias MedFabric.Store.Postgres
   @timeout 30_000
 
   def start_link({context, key}),
@@ -52,23 +63,7 @@ defmodule MedFabric.Exam.AcquisitionIngress do
 
   def quiesce(context, id, streams) do
     Enum.reduce_while(Enum.sort(streams), :ok, fn name, :ok ->
-      case Registry.lookup(context.registry, {id, name}) do
-        [{pid, _}] ->
-          case call(pid, :retire) do
-            :ok -> {:cont, :ok}
-            error -> {:halt, error}
-          end
-
-        [] ->
-          case acquire_gate(context, id, name) do
-            :ok ->
-              DeviceRootLock.release(context.root_owner, {id, name})
-              {:cont, :ok}
-
-            error ->
-              {:halt, error}
-          end
-      end
+      quiesce_stream(context, id, name)
     end)
   end
 
@@ -132,17 +127,7 @@ defmodule MedFabric.Exam.AcquisitionIngress do
 
     case result do
       {:ok, %{receipt: receipt} = value} ->
-        if Map.get(value, :terminal) do
-          with :ok <- retire_writer(%{s | receipt: receipt}) do
-            DeviceRootLock.release(s.context.root_owner, s.key)
-            {:stop, :normal, {:ok, value}, %{s | writer: nil, gate: false, receipt: receipt}}
-          else
-            error -> {:stop, :normal, error, s}
-          end
-        else
-          publish_optional(s, op)
-          {:reply, {:ok, value}, %{s | receipt: Receipt.durable_prefix(receipt)}}
-        end
+        reply_to_effect(s, op, value, receipt)
 
       {:error, {:not_committed, _}} = error ->
         {:reply, error, s}
@@ -181,14 +166,10 @@ defmodule MedFabric.Exam.AcquisitionIngress do
       {:error, :prior_effect_quiescence_required} ->
         with :ok <- DeviceRootLock.recover_gate(context.root_owner, key),
              {:ok, {spec, attempts}} <-
-               S.settlement(context.db, id, fn tx, s ->
-                 {:ok, spec} = Serialization.stream_spec(s.descriptors[name])
-                 {spec, S.attempts(tx, id, name)}
-               end),
+               gate_settlement(context, id, name),
              {:ok, %MedEx.Storage.RecoveredPrefix{} = prefix} <-
-               recover_previous(context, id, name, spec, attempts),
-             :ok <- DeviceRootLock.settle_gate(context.root_owner, key, prefix) do
-          :ok
+               recover_previous(context, id, name, spec, attempts) do
+          DeviceRootLock.settle_gate(context.root_owner, key, prefix)
         end
 
       error ->
@@ -203,23 +184,7 @@ defmodule MedFabric.Exam.AcquisitionIngress do
       fn tx, snapshot ->
         with {:ok, spec} <- Serialization.stream_spec(snapshot.descriptors[name]),
              true <- spec.descriptor_ref == digest do
-          old = S.attempts(tx, bind.id, name)
-
-          attempt =
-            case Enum.find(old, &(&1.state == "terminal")) do
-              nil ->
-                case Acquisition.plan(snapshot(snapshot), :reserve) do
-                  {:ok, _} -> :ok
-                  _ -> S.abort(tx, :inactive)
-                end
-
-                S.reserve_attempt(tx, snapshot, name)
-
-              terminal ->
-                terminal
-            end
-
-          {attempt, spec, Enum.reject(old, &(&1.fence == attempt.fence))}
+          reserve_attempt(tx, snapshot, bind.id, name, spec)
         else
           _ -> S.abort(tx, :invalid_stream)
         end
@@ -231,66 +196,7 @@ defmodule MedFabric.Exam.AcquisitionIngress do
   defp start_reserved(context, bind, name, attempt, spec, prior) do
     with {:ok, predecessor} <- recover_previous(context, bind.id, name, spec, [attempt | prior]),
          true <- is_nil(predecessor) or not predecessor.sealed do
-      if predecessor && predecessor.fence == attempt.fence do
-        {:error, :readmission_required}
-      else
-        previous_receipt = if predecessor, do: predecessor.receipt
-
-        opts = [
-          owner: self(),
-          fence: attempt.fence,
-          stream: spec,
-          artifact_dir: AcquisitionManifest.attempt_dir(context, bind.id, name, attempt.fence),
-          limits: %{checkpoint_ms: :manual},
-          root_owner: context.root_owner
-        ]
-
-        opts =
-          if predecessor && predecessor.fence != attempt.fence,
-            do: Keyword.put(opts, :predecessor, predecessor),
-            else: opts
-
-        result =
-          S.scoped(context.db, bind, fn tx, _ ->
-            with {:ok, writer} <- StreamWriter.start_link(opts),
-                 {:ok, receipt} <- StreamWriter.receipt(writer, attempt.fence, @timeout),
-                 true <- Receipt.durable?(receipt) do
-              S.record_receipt(tx, attempt.fence, receipt)
-              %{writer: writer, receipt: receipt}
-            else
-              _ -> S.abort(tx, :writer_open_unknown)
-            end
-          end)
-
-        case result do
-          {:ok, %{writer: writer, receipt: receipt}} ->
-            if predecessor && predecessor.fence != attempt.fence do
-              :ok =
-                Receipt.handoff(previous_receipt, receipt, %{
-                  authority: :verified_storage,
-                  authenticated: true,
-                  quiescent: true,
-                  previous: previous_receipt,
-                  successor: receipt,
-                  imported: predecessor
-                })
-            end
-
-            handoff =
-              if predecessor && predecessor.fence != attempt.fence,
-                do: %{
-                  "previous" => Receipt.to_map(previous_receipt),
-                  "successor" => Receipt.to_map(receipt),
-                  "imported" => Receipt.to_map(previous_receipt),
-                  "asserted_by" => "authenticated_host"
-                }
-
-            {:ok, %{receipt: receipt, handoff: handoff, terminal: false}, writer}
-
-          error ->
-            error
-        end
-      end
+      open_reserved_writer(context, bind, name, attempt, spec, predecessor)
     else
       false ->
         with {:ok, prefix} <- recover_previous(context, bind.id, name, spec, [attempt | prior]) do
@@ -320,26 +226,12 @@ defmodule MedFabric.Exam.AcquisitionIngress do
     else
       opts = [stream: spec, fence: a.fence, root_owner: context.root_owner]
 
-      opts =
-        case a.receipt do
-          nil ->
-            opts
-
-          wire ->
-            case Receipt.parse(wire) do
-              {:ok, r} -> Keyword.put(opts, :known_receipt, r)
-              _ -> Keyword.put(opts, :known_receipt, :invalid)
-            end
-        end
+      opts = recovery_options(opts, a.receipt)
 
       with {:ok, prefix} <- Storage.recover(dir, opts),
            {:ok, prefix} <- terminal_index(dir, opts, prefix),
            {:ok, _} <-
-             S.settlement(context.db, id, fn tx, _ ->
-               S.record_receipt(tx, a.fence, prefix.receipt, if(prefix.sealed, do: prefix.index))
-               unless prefix.sealed, do: S.mark_attempt(tx, a.fence, "quiescent")
-               prefix
-             end) do
+             settle_recovered(context, id, a.fence, prefix) do
         {:ok, prefix}
       end
     end
@@ -352,91 +244,7 @@ defmodule MedFabric.Exam.AcquisitionIngress do
 
   defp protected(s, op) do
     S.scoped(s.context.db, s.bind, fn tx, current ->
-      operation =
-        case op do
-          {:frame, _} -> :push
-          {:gap, _} -> :gap
-          {:finish, _, _, _} -> :finish
-          :checkpoint -> :checkpoint
-          _ -> :invalid
-        end
-
-      snapshot =
-        Map.merge(snapshot(current), %{
-          writer_open: true,
-          final_covered: operation != :finish or finish_covered?(s, op)
-        })
-
-      with {:ok, _} <- Acquisition.plan(snapshot, operation) do
-        Barrier.hit("effect_admitted", elem(s.key, 1), fn ->
-          to_string(MedFabric.Store.Postgres.backend_id(tx))
-        end)
-
-        Barrier.hit("writer_stall", elem(s.key, 1), fn ->
-          to_string(MedFabric.Store.Postgres.backend_id(tx))
-        end)
-
-        started = System.monotonic_time(:microsecond)
-        result = effect(s, op)
-        elapsed = System.monotonic_time(:microsecond) - started
-
-        if operation == :checkpoint and match?({:ok, %Receipt{}}, result) do
-          :telemetry.execute(
-            [:mf_exam, :acquisition_ingress, :writer_checkpoint],
-            %{duration_us: elapsed},
-            %{stream: elem(s.key, 1), fence: s.attempt.fence}
-          )
-        end
-
-        case result do
-          {:ok, %Receipt{} = receipt} ->
-            durable = Receipt.durable_prefix(receipt)
-
-            case Receipt.observe(s.receipt, durable) do
-              :ok -> :ok
-              _ -> S.abort(tx, :receipt_conflict)
-            end
-
-            S.record_receipt(tx, s.attempt.fence, durable)
-
-            if match?({:frame, _}, op) do
-              {:frame, raw} = op
-              {:ok, frame} = MedEx.Wire.FrameV1.decode(raw)
-              S.transport(tx, s.attempt.fence, frame.sequence, raw)
-            end
-
-            if Receipt.durable?(receipt) do
-              Barrier.hit("after_object_install", elem(s.key, 1))
-
-              Barrier.hit("journal_sync", elem(s.key, 1), fn ->
-                to_string(MedFabric.Store.Postgres.backend_id(tx))
-              end)
-            else
-              Barrier.hit("accepted_before_durable", elem(s.key, 1))
-            end
-
-            %{receipt: receipt, terminal: false, durable: Receipt.durable?(receipt)}
-
-          {:ok, %MedEx.Storage.Terminal{index: index, receipt: receipt, recovered: prefix}} ->
-            with {:ok, ^receipt} <- Receipt.terminal_receipt(index, prefix, s.receipt) do
-              S.record_receipt(tx, s.attempt.fence, receipt, index)
-
-              %{
-                receipt: receipt,
-                terminal: true,
-                durable: true,
-                index_digest: Serialization.digest(index)
-              }
-            else
-              _ -> S.abort(tx, :terminal_conflict)
-            end
-
-          error ->
-            error
-        end
-      else
-        error -> error
-      end
+      protected_effect(tx, current, s, op)
     end)
     |> flatten_result()
   rescue
@@ -449,7 +257,7 @@ defmodule MedFabric.Exam.AcquisitionIngress do
   defp flatten_result(result), do: result
 
   defp effect(s, {:frame, raw}) do
-    with {:ok, f} <- MedEx.Wire.FrameV1.decode(raw),
+    with {:ok, f} <- FrameV1.decode(raw),
          true <- f.stream_number == s.attempt.number and f.source_epoch == s.spec.source_epoch do
       frame =
         struct!(
@@ -521,7 +329,7 @@ defmodule MedFabric.Exam.AcquisitionIngress do
   end
 
   defp finish_covered?(_, _), do: false
-  defp counter(value), do: MedFabric.Domain.Review.counter(value)
+  defp counter(value), do: Review.counter(value)
 
   defp retire_writer(%{writer: nil}), do: :ok
 
@@ -534,20 +342,7 @@ defmodule MedFabric.Exam.AcquisitionIngress do
            opts
          ) do
       {:ok, prefix} ->
-        case S.settlement(s.context.db, s.bind.id, fn tx, _ ->
-               S.record_receipt(
-                 tx,
-                 s.attempt.fence,
-                 prefix.receipt,
-                 if(prefix.sealed, do: prefix.index)
-               )
-
-               unless prefix.sealed, do: S.mark_attempt(tx, s.attempt.fence, "quiescent")
-               :ok
-             end) do
-          {:ok, :ok} -> :ok
-          _ -> {:error, :settlement_unknown}
-        end
+        settle_retired_writer(s, prefix)
 
       _ ->
         {:error, :prior_effect_not_quiescent}
@@ -568,7 +363,7 @@ defmodule MedFabric.Exam.AcquisitionIngress do
       })
 
   defp publish_optional(s, {:frame, raw}) do
-    MedFabric.Exam.AcquisitionWorkflow.publish(s.bind, s.spec, raw)
+    AcquisitionWorkflow.publish(s.bind, s.spec, raw)
   end
 
   defp publish_optional(_, _), do: :ok
@@ -590,4 +385,283 @@ defmodule MedFabric.Exam.AcquisitionIngress do
     if s.writer && Process.alive?(s.writer), do: Process.exit(s.writer, :shutdown)
     :ok
   end
+
+  defp quiesce_stream(context, id, name) do
+    case Registry.lookup(context.registry, {id, name}) do
+      [{pid, _}] ->
+        quiesce_result(call(pid, :retire))
+
+      [] ->
+        quiesce_unowned(context, id, name)
+    end
+  end
+
+  defp quiesce_result(:ok), do: {:cont, :ok}
+  defp quiesce_result(error), do: {:halt, error}
+
+  defp quiesce_unowned(context, id, name) do
+    case acquire_gate(context, id, name) do
+      :ok ->
+        DeviceRootLock.release(context.root_owner, {id, name})
+        {:cont, :ok}
+
+      error ->
+        {:halt, error}
+    end
+  end
+
+  defp reply_to_effect(s, op, value, receipt) do
+    if Map.get(value, :terminal) do
+      case retire_writer(%{s | receipt: receipt}) do
+        :ok ->
+          DeviceRootLock.release(s.context.root_owner, s.key)
+          {:stop, :normal, {:ok, value}, %{s | writer: nil, gate: false, receipt: receipt}}
+
+        error ->
+          {:stop, :normal, error, s}
+      end
+    else
+      publish_optional(s, op)
+      {:reply, {:ok, value}, %{s | receipt: Receipt.durable_prefix(receipt)}}
+    end
+  end
+
+  defp gate_inputs(tx, s, id, name) do
+    {:ok, spec} = Serialization.stream_spec(s.descriptors[name])
+    {spec, S.attempts(tx, id, name)}
+  end
+
+  defp reserve_attempt(tx, snapshot, id, name, spec) do
+    old = S.attempts(tx, id, name)
+
+    attempt =
+      case Enum.find(old, &(&1.state == "terminal")) do
+        nil ->
+          reserve_active_attempt(tx, snapshot, name)
+
+        terminal ->
+          terminal
+      end
+
+    {attempt, spec, Enum.reject(old, &(&1.fence == attempt.fence))}
+  end
+
+  defp reserve_active_attempt(tx, current, name) do
+    case Acquisition.plan(snapshot(current), :reserve) do
+      {:ok, _} -> :ok
+      _ -> S.abort(tx, :inactive)
+    end
+
+    S.reserve_attempt(tx, current, name)
+  end
+
+  defp writer_handoff(predecessor, attempt, previous_receipt, receipt) do
+    if predecessor && predecessor.fence != attempt.fence do
+      :ok =
+        Receipt.handoff(previous_receipt, receipt, %{
+          authority: :verified_storage,
+          authenticated: true,
+          quiescent: true,
+          previous: previous_receipt,
+          successor: receipt,
+          imported: predecessor
+        })
+    end
+
+    if predecessor && predecessor.fence != attempt.fence,
+      do: %{
+        "previous" => Receipt.to_map(previous_receipt),
+        "successor" => Receipt.to_map(receipt),
+        "imported" => Receipt.to_map(previous_receipt),
+        "asserted_by" => "authenticated_host"
+      }
+  end
+
+  defp open_reserved_writer(context, bind, name, attempt, spec, predecessor) do
+    if predecessor && predecessor.fence == attempt.fence do
+      {:error, :readmission_required}
+    else
+      previous_receipt = if predecessor, do: predecessor.receipt
+
+      opts = [
+        owner: self(),
+        fence: attempt.fence,
+        stream: spec,
+        artifact_dir: AcquisitionManifest.attempt_dir(context, bind.id, name, attempt.fence),
+        limits: %{checkpoint_ms: :manual},
+        root_owner: context.root_owner
+      ]
+
+      opts =
+        if predecessor && predecessor.fence != attempt.fence,
+          do: Keyword.put(opts, :predecessor, predecessor),
+          else: opts
+
+      result =
+        S.scoped(context.db, bind, fn tx, _ -> start_writer(tx, opts, attempt) end)
+
+      case result do
+        {:ok, %{writer: writer, receipt: receipt}} ->
+          handoff = writer_handoff(predecessor, attempt, previous_receipt, receipt)
+
+          {:ok, %{receipt: receipt, handoff: handoff, terminal: false}, writer}
+
+        error ->
+          error
+      end
+    end
+  end
+
+  defp start_writer(tx, opts, attempt) do
+    with {:ok, writer} <- StreamWriter.start_link(opts),
+         {:ok, receipt} <- StreamWriter.receipt(writer, attempt.fence, @timeout),
+         true <- Receipt.durable?(receipt) do
+      S.record_receipt(tx, attempt.fence, receipt)
+      %{writer: writer, receipt: receipt}
+    else
+      _ -> S.abort(tx, :writer_open_unknown)
+    end
+  end
+
+  defp record_recovered_prefix(tx, fence, prefix) do
+    S.record_receipt(tx, fence, prefix.receipt, if(prefix.sealed, do: prefix.index))
+    unless prefix.sealed, do: S.mark_attempt(tx, fence, "quiescent")
+    prefix
+  end
+
+  defp admitted_effect(tx, s, op, operation) do
+    Barrier.hit("effect_admitted", elem(s.key, 1), fn ->
+      to_string(Postgres.backend_id(tx))
+    end)
+
+    Barrier.hit("writer_stall", elem(s.key, 1), fn ->
+      to_string(Postgres.backend_id(tx))
+    end)
+
+    started = System.monotonic_time(:microsecond)
+    result = effect(s, op)
+    elapsed = System.monotonic_time(:microsecond) - started
+
+    if operation == :checkpoint and match?({:ok, %Receipt{}}, result) do
+      :telemetry.execute(
+        [:mf_exam, :acquisition_ingress, :writer_checkpoint],
+        %{duration_us: elapsed},
+        %{stream: elem(s.key, 1), fence: s.attempt.fence}
+      )
+    end
+
+    result
+  end
+
+  defp record_effect_receipt(tx, s, op, receipt) do
+    durable = Receipt.durable_prefix(receipt)
+
+    case Receipt.observe(s.receipt, durable) do
+      :ok -> :ok
+      _ -> S.abort(tx, :receipt_conflict)
+    end
+
+    S.record_receipt(tx, s.attempt.fence, durable)
+
+    if match?({:frame, _}, op) do
+      {:frame, raw} = op
+      {:ok, frame} = FrameV1.decode(raw)
+      S.transport(tx, s.attempt.fence, frame.sequence, raw)
+    end
+
+    if Receipt.durable?(receipt) do
+      Barrier.hit("after_object_install", elem(s.key, 1))
+
+      Barrier.hit("journal_sync", elem(s.key, 1), fn ->
+        to_string(Postgres.backend_id(tx))
+      end)
+    else
+      Barrier.hit("accepted_before_durable", elem(s.key, 1))
+    end
+
+    %{receipt: receipt, terminal: false, durable: Receipt.durable?(receipt)}
+  end
+
+  defp record_effect(tx, s, op, result) do
+    case result do
+      {:ok, %Receipt{} = receipt} ->
+        record_effect_receipt(tx, s, op, receipt)
+
+      {:ok, %MedEx.Storage.Terminal{index: index, receipt: receipt, recovered: prefix}} ->
+        case Receipt.terminal_receipt(index, prefix, s.receipt) do
+          {:ok, ^receipt} ->
+            S.record_receipt(tx, s.attempt.fence, receipt, index)
+
+            %{
+              receipt: receipt,
+              terminal: true,
+              durable: true,
+              index_digest: Serialization.digest(index)
+            }
+
+          _ ->
+            S.abort(tx, :terminal_conflict)
+        end
+
+      error ->
+        error
+    end
+  end
+
+  defp protected_effect(tx, current, s, op) do
+    operation = effect_operation(op)
+
+    snapshot =
+      Map.merge(snapshot(current), %{
+        writer_open: true,
+        final_covered: operation != :finish or finish_covered?(s, op)
+      })
+
+    case Acquisition.plan(snapshot, operation) do
+      {:ok, _} ->
+        result = admitted_effect(tx, s, op, operation)
+
+        record_effect(tx, s, op, result)
+
+      error ->
+        error
+    end
+  end
+
+  defp settle_retired_writer(s, prefix) do
+    case S.settlement(s.context.db, s.bind.id, fn tx, _ ->
+           record_recovered_prefix(tx, s.attempt.fence, prefix)
+           :ok
+         end) do
+      {:ok, :ok} -> :ok
+      _ -> {:error, :settlement_unknown}
+    end
+  end
+
+  defp recovery_options(opts, receipt) do
+    case receipt do
+      nil ->
+        opts
+
+      wire ->
+        case Receipt.parse(wire) do
+          {:ok, r} -> Keyword.put(opts, :known_receipt, r)
+          _ -> Keyword.put(opts, :known_receipt, :invalid)
+        end
+    end
+  end
+
+  defp gate_settlement(context, id, name) do
+    S.settlement(context.db, id, fn tx, s -> gate_inputs(tx, s, id, name) end)
+  end
+
+  defp settle_recovered(context, id, fence, prefix) do
+    S.settlement(context.db, id, fn tx, _ -> record_recovered_prefix(tx, fence, prefix) end)
+  end
+
+  defp effect_operation({:frame, _}), do: :push
+  defp effect_operation({:gap, _}), do: :gap
+  defp effect_operation({:finish, _, _, _}), do: :finish
+  defp effect_operation(:checkpoint), do: :checkpoint
+  defp effect_operation(_), do: :invalid
 end

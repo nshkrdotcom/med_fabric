@@ -1,6 +1,7 @@
 defmodule MedFabric.Preview.Application do
   @moduledoc "Supervises bounded disposable media peers behind an authenticated loopback listener."
   use Application
+  alias MedEx.RTC.Provider
 
   def start(_, _) do
     with {:ok, config} <- validate_config(Application.get_env(:mf_preview, :listen)) do
@@ -48,17 +49,10 @@ defmodule MedFabric.Preview.Application do
 
       valid =
         Keyword.keyword?(config) and Enum.all?(Keyword.keys(config), &(&1 in allowed)) and
-          is_integer(values[:port]) and values[:port] in 0..65535 and is_binary(values[:secret]) and
-          byte_size(values[:secret]) in 32..4096 and values[:trusted_clock] == true and
-          is_integer(values[:clock_error_ms]) and values[:clock_error_ms] in 0..2000 and
-          is_integer(values[:max_peers]) and values[:max_peers] in 1..128 and
-          is_integer(values[:max_source_peers]) and values[:max_source_peers] in 1..16 and
-          values[:max_source_peers] <= values[:max_peers] and
-          values[:ice_transport_policy] in [:all, :relay] and is_list(values[:ice_servers]) and
-          length(values[:ice_servers]) <= 8
+          valid_listener?(values) and valid_capacity?(values) and valid_ice?(values)
 
       if valid and
-           MedEx.RTC.Provider.validate_options(
+           Provider.validate_options(
              owner: self(),
              ice_servers: values[:ice_servers],
              ice_transport_policy: values[:ice_transport_policy]
@@ -69,4 +63,21 @@ defmodule MedFabric.Preview.Application do
   end
 
   def validate_config(_), do: {:error, :invalid_preview_configuration}
+
+  defp valid_listener?(values) do
+    is_integer(values[:port]) and values[:port] in 0..65_535 and is_binary(values[:secret]) and
+      byte_size(values[:secret]) in 32..4096 and values[:trusted_clock] == true and
+      is_integer(values[:clock_error_ms]) and values[:clock_error_ms] in 0..2000
+  end
+
+  defp valid_capacity?(values) do
+    is_integer(values[:max_peers]) and values[:max_peers] in 1..128 and
+      is_integer(values[:max_source_peers]) and values[:max_source_peers] in 1..16 and
+      values[:max_source_peers] <= values[:max_peers]
+  end
+
+  defp valid_ice?(values) do
+    values[:ice_transport_policy] in [:all, :relay] and is_list(values[:ice_servers]) and
+      length(values[:ice_servers]) <= 8
+  end
 end

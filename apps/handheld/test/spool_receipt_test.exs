@@ -1,8 +1,8 @@
 defmodule MedExHandheld.SpoolReceiptTest do
   use ExUnit.Case, async: true
   alias MedEx.Receipt
-  alias MedExHandheld.{Paired, Spool}
   alias MedEx.Wire.FrameV1
+  alias MedExHandheld.{Paired, Spool}
 
   setup do
     suffix = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)

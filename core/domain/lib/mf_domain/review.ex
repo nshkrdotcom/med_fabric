@@ -78,67 +78,67 @@ defmodule MedFabric.Domain.Review do
     valid =
       Enum.all?(Map.keys(choice), &(&1 in allowed)) and
         text?(Map.get(choice, "note", ""), 2000, true) and is_list(metrics) and
-        case choice["decision"] do
-          d when d in ["reject", "repeat"] ->
-            metrics == [] and
-              (d != "repeat" or source.kind == :acquisition)
-
-          "accept" ->
-            source.kind == :manual and metrics == [] and
-              Evidence.validate(source.body) == :ok
-
-          "accept_metrics" ->
-            source.kind == :acquisition and source.body["profile"] == "plx_spot_check" and
-              Enum.sort(metrics) in [["pulse_rate"], ["spo2"], ["pulse_rate", "spo2"]] and
-              Enum.any?(
-                source.body["inventory"],
-                &(&1["event"]["event_id"] == choice["event_id"])
-              )
-
-          d when d in ["complete", "partial"] ->
-            source.kind == :acquisition and
-              source.body["profile"] in ["paired_exam", "browser_microphone"] and metrics == [] and
-              valid_ranges?(source.body, choice["ranges"]) and
-              if(d == "complete",
-                do: source.body["defects"] == [],
-                else:
-                  source.body["defects"] != [] and
-                    choice["acknowledged"] == source.body["defects"] and
-                    Map.get(choice, "note", "") != ""
-              )
-
-          _ ->
-            false
-        end
+        valid_decision?(source, choice, metrics)
 
     if valid, do: :ok, else: {:error, :invalid_review}
   end
 
+  defp valid_decision?(source, %{"decision" => d}, metrics) when d in ["reject", "repeat"],
+    do: metrics == [] and (d != "repeat" or source.kind == :acquisition)
+
+  defp valid_decision?(source, %{"decision" => "accept"}, metrics),
+    do: source.kind == :manual and metrics == [] and Evidence.validate(source.body) == :ok
+
+  defp valid_decision?(source, %{"decision" => "accept_metrics"} = choice, metrics) do
+    source.kind == :acquisition and source.body["profile"] == "plx_spot_check" and
+      Enum.sort(metrics) in [["pulse_rate"], ["spo2"], ["pulse_rate", "spo2"]] and
+      Enum.any?(source.body["inventory"], &(&1["event"]["event_id"] == choice["event_id"]))
+  end
+
+  defp valid_decision?(source, %{"decision" => d} = choice, metrics)
+       when d in ["complete", "partial"] do
+    source.kind == :acquisition and
+      source.body["profile"] in ["paired_exam", "browser_microphone"] and metrics == [] and
+      valid_ranges?(source.body, choice["ranges"]) and valid_defects?(source.body, choice, d)
+  end
+
+  defp valid_decision?(_, _, _), do: false
+
+  defp valid_defects?(body, _choice, "complete"), do: body["defects"] == []
+
+  defp valid_defects?(body, choice, "partial"),
+    do:
+      body["defects"] != [] and choice["acknowledged"] == body["defects"] and
+        Map.get(choice, "note", "") != ""
+
   def valid_ranges?(manifest, ranges) when is_list(ranges) and length(ranges) in 1..256 do
-    Enum.all?(ranges, fn
-      %{"stream" => name, "first" => first, "end" => ending} = range when map_size(range) == 3 ->
-        with {:ok, a} <- counter(first),
-             {:ok, b} <- counter(ending),
-             true <- a < b,
-             %{"index" => index} <- manifest["streams"][name] do
-          segments = Enum.drop_while(index["segments"], &(uint(&1["end_sample"]) <= a))
-          spans = index["spans"] || []
-
-          covers?(segments, a, b, nil) and
-            not Enum.any?(spans, fn span ->
-              span["code"] in ["source_gap", "unaccounted_loss"] and
-                uint(span["first_sample"]) < b and uint(span["end_sample"]) > a
-            end)
-        else
-          _ -> false
-        end
-
-      _ ->
-        false
-    end)
+    Enum.all?(ranges, &valid_range?(manifest, &1))
   end
 
   def valid_ranges?(_, _), do: false
+
+  defp valid_range?(manifest, %{"stream" => name, "first" => first, "end" => ending} = range)
+       when map_size(range) == 3 do
+    with {:ok, a} <- counter(first),
+         {:ok, b} <- counter(ending),
+         true <- a < b,
+         %{"index" => index} <- manifest["streams"][name] do
+      segments = Enum.drop_while(index["segments"], &(uint(&1["end_sample"]) <= a))
+      spans = index["spans"] || []
+
+      covers?(segments, a, b, nil) and
+        not Enum.any?(spans, &loss_overlap?(&1, a, b))
+    else
+      _ -> false
+    end
+  end
+
+  defp valid_range?(_, _), do: false
+
+  defp loss_overlap?(span, a, b),
+    do:
+      span["code"] in ["source_gap", "unaccounted_loss"] and
+        uint(span["first_sample"]) < b and uint(span["end_sample"]) > a
 
   defp covers?(_, a, b, _) when a >= b, do: true
 

@@ -10,7 +10,7 @@ defmodule MedExHandheld.Transport do
          {:ok, %URI{scheme: "wss", host: host, userinfo: nil, query: nil, fragment: nil} = uri} <-
            URI.new(value),
          true <- is_binary(host) and byte_size(host) in 1..253,
-         true <- uri.port == nil or uri.port in 1..65535,
+         true <- uri.port == nil or uri.port in 1..65_535,
          true <-
            uri.path == nil or
              (String.starts_with?(uri.path, "/") and

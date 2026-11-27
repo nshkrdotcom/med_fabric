@@ -2,8 +2,8 @@ defmodule MedExHandheld.Paired do
   @moduledoc "Reference peripheral acquisition runs independently of server connectivity."
   alias MedEx.{Receipt, Serialization, StreamCursor, StreamSpec}
   alias MedEx.Wire.{Control, Credit, FrameV1}
-  alias MedExHandheld.Spool.Plan
   alias MedExHandheld.{Monitor, ReferencePeripheral, Spool, Transport}
+  alias MedExHandheld.Spool.Plan
 
   def sources(c) do
     for {n, s} <- [{"audio", 1}, {"ecg", 2}], into: %{} do
@@ -353,22 +353,11 @@ defmodule MedExHandheld.Paired do
         System.monotonic_time(:millisecond) >= stream.deadline ->
           {:error, :upload_deadline}
 
-        sent == produced and mark["done"] and Credit.stats(stream.ledger).outstanding_frames == 0 ->
+        ready_to_finish?(stream, mark, sent, produced) ->
           finish_upload(stream, mark)
 
         sent != produced ->
-          case send_record(stream) do
-            {:ok, next} ->
-              drain(next)
-
-            {:error, :credit_exhausted} ->
-              if Credit.stats(stream.ledger).outstanding_frames == 0,
-                do: {:error, :insufficient_negotiated_credit},
-                else: wait_reply(stream, mark)
-
-            error ->
-              error
-          end
+          drain_record(stream, mark)
 
         true ->
           wait_reply(stream, mark)
@@ -416,10 +405,12 @@ defmodule MedExHandheld.Paired do
       pending and stream.checkpoint == nil and
         (mark["done"] or System.monotonic_time(:millisecond) - stream.checkpoint_at >= 200)
 
+    timeout = if(pending, do: 250, else: 10)
+
     with {:ok, stream} <- if(checkpoint_due, do: request_checkpoint(stream), else: {:ok, stream}) do
-      case Transport.recv(stream.socket, if(pending, do: 250, else: 10)) do
+      case Transport.recv(stream.socket, timeout) do
         {:error, :timeout} -> drain(stream)
-        reply -> with {:ok, next} <- handle_reply(stream, reply), do: drain(next)
+        reply -> drain_reply(stream, reply)
       end
     end
   end
@@ -455,54 +446,10 @@ defmodule MedExHandheld.Paired do
         {:error, :authority_expired}
 
       reply["type"] == "accepted" ->
-        with {:ok, operation} <-
-               Credit.lookup(stream.ledger, stream.binding, reply["operation_id"]),
-             true <- operation_fingerprint(reply, operation.id) == operation.fingerprint,
-             {:ok, accepted} <- Receipt.parse(reply["receipt"]),
-             :ok <- Receipt.validate_identity(accepted, stream.durable),
-             true <-
-               accepted.accepted_sequence >= operation.sequence and
-                 accepted.accepted_sample >= operation.sample,
-             true <-
-               accepted.accepted_sequence <= stream.cursor.next_sequence and
-                 accepted.accepted_sample <= stream.cursor.next_sample do
-          {:ok, stream}
-        else
-          false -> {:error, :invalid_acceptance}
-          error -> error
-        end
+        accept_reply(stream, reply)
 
       reply["type"] in ["durable", "stream_finished"] ->
-        with {:ok, receipt} <- Receipt.parse(reply["receipt"]),
-             true <-
-               receipt_operation?(stream, reply["operation_id"]) or
-                 Receipt.exact_prefix?(stream.durable, receipt),
-             true <-
-               receipt.durable_sequence <= stream.cursor.next_sequence and
-                 receipt.durable_sample <= stream.cursor.next_sample,
-             :ok <- Spool.ack(stream.spool, stream.name, stream.binding, receipt),
-             {:ok, ledger, _released} <-
-               Credit.acknowledge(stream.ledger, stream.binding, receipt) do
-          next = %{
-            stream
-            | durable: receipt,
-              ledger: ledger,
-              checkpoint:
-                if(
-                  reply["operation_id"] == stream.checkpoint or
-                    Credit.stats(ledger).outstanding_frames == 0,
-                  do: nil,
-                  else: stream.checkpoint
-                )
-          }
-
-          if reply["type"] == "stream_finished",
-            do: {:interrupted, :premature_terminal},
-            else: {:ok, next}
-        else
-          false -> {:error, :uncovered_receipt}
-          error -> error
-        end
+        durable_response(stream, reply)
 
       reply["type"] == "refused" ->
         with {:ok, operation} <-
@@ -592,5 +539,83 @@ defmodule MedExHandheld.Paired do
     end
   rescue
     ArgumentError -> {:error, :authority_expired}
+  end
+
+  defp drain_record(stream, mark) do
+    case send_record(stream) do
+      {:ok, next} ->
+        drain(next)
+
+      {:error, :credit_exhausted} ->
+        if Credit.stats(stream.ledger).outstanding_frames == 0,
+          do: {:error, :insufficient_negotiated_credit},
+          else: wait_reply(stream, mark)
+
+      error ->
+        error
+    end
+  end
+
+  defp ready_to_finish?(stream, mark, sent, produced),
+    do: sent == produced and mark["done"] and Credit.stats(stream.ledger).outstanding_frames == 0
+
+  defp drain_reply(stream, reply) do
+    with {:ok, next} <- handle_reply(stream, reply), do: drain(next)
+  end
+
+  defp accept_reply(stream, reply) do
+    with {:ok, operation} <-
+           Credit.lookup(stream.ledger, stream.binding, reply["operation_id"]),
+         true <- operation_fingerprint(reply, operation.id) == operation.fingerprint,
+         {:ok, accepted} <- Receipt.parse(reply["receipt"]),
+         :ok <- Receipt.validate_identity(accepted, stream.durable),
+         true <-
+           accepted.accepted_sequence >= operation.sequence and
+             accepted.accepted_sample >= operation.sample,
+         true <-
+           accepted.accepted_sequence <= stream.cursor.next_sequence and
+             accepted.accepted_sample <= stream.cursor.next_sample do
+      {:ok, stream}
+    else
+      false -> {:error, :invalid_acceptance}
+      error -> error
+    end
+  end
+
+  defp advance_durable_reply(stream, reply, receipt, ledger) do
+    next = %{
+      stream
+      | durable: receipt,
+        ledger: ledger,
+        checkpoint:
+          if(
+            reply["operation_id"] == stream.checkpoint or
+              Credit.stats(ledger).outstanding_frames == 0,
+            do: nil,
+            else: stream.checkpoint
+          )
+    }
+
+    if reply["type"] == "stream_finished",
+      do: {:interrupted, :premature_terminal},
+      else: {:ok, next}
+  end
+
+  defp durable_response(stream, reply) do
+    with {:ok, receipt} <- Receipt.parse(reply["receipt"]),
+         true <-
+           receipt_operation?(stream, reply["operation_id"]) or
+             Receipt.exact_prefix?(stream.durable, receipt),
+         true <-
+           receipt.durable_sequence <= stream.cursor.next_sequence and
+             receipt.durable_sample <= stream.cursor.next_sample,
+         :ok <- Spool.ack(stream.spool, stream.name, stream.binding, receipt),
+         {:ok, ledger, _released} <-
+           Credit.acknowledge(stream.ledger, stream.binding, receipt) do
+      advance_durable_reply(stream, reply, receipt, ledger)
+    else
+      false -> {:error, :uncovered_receipt}
+      error -> error
+    end
   end
 end

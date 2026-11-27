@@ -1,5 +1,6 @@
 defmodule MedFabric.Store.Records do
   @moduledoc "Native evidence and atomic review, observation and delivery-intent persistence. No external mapping or network work."
+  alias MedFabric.Domain.Evidence
   alias MedFabric.Store.AcquisitionSessions, as: S
 
   def member?(db, id, actor, role, access \\ :mutate)
@@ -26,7 +27,7 @@ defmodule MedFabric.Store.Records do
       S.authorize_encounter!(tx, enc, actor, :clinician, :mutate)
       S.writable!(tx)
 
-      unless MedFabric.Domain.Evidence.validate(evidence) == :ok and
+      unless Evidence.validate(evidence) == :ok and
                evidence["provenance"]["actor"] == actor,
              do: S.abort(tx, :invalid_manual_evidence)
 

@@ -8,6 +8,12 @@ defmodule MedFabric.Preview.Timeline do
     origin = state.origin || sample
     ticks = (sample - origin) * 48_000 * den
 
+    plan_tick(state, sample, num, origin, ticks)
+  end
+
+  def plan(_, _, _), do: {:error, :invalid_media_time}
+
+  defp plan_tick(state, sample, num, origin, ticks) do
     cond do
       state.last != nil and sample <= state.last ->
         {:error, :source_reset}
@@ -26,6 +32,5 @@ defmodule MedFabric.Preview.Timeline do
     end
   end
 
-  def plan(_, _, _), do: {:error, :invalid_media_time}
   def submitted(plan), do: %{origin: plan.origin, last: plan.sample, emitted: plan.sequence + 1}
 end

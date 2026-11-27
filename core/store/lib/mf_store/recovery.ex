@@ -1,7 +1,7 @@
 defmodule MedFabric.Store.Recovery do
   @moduledoc "Checksummed current-revision recovery inventory. Missing later native facts never become an operator-approved absence."
+  alias MedEx.{CanonicalJSON, Receipt}
   alias MedFabric.Store.AcquisitionSessions, as: S
-  alias MedEx.{Receipt, CanonicalJSON}
   @maximum_inventory 16_777_216
 
   def block(db, cut_point) when is_binary(cut_point) do
@@ -126,41 +126,45 @@ defmodule MedFabric.Store.Recovery do
   def reconcile(db, bytes, digest, proof) do
     with {:ok, inventory} <- inspect_inventory(bytes, digest), :ok <- root_proof(proof) do
       Postgrex.transaction(db, fn tx ->
-        [[uuid, cut, state, migration]] =
-          S.rows(
-            tx,
-            "SELECT deployment_uuid::text,restored_cut_point,recovery_state,migration_sha256 FROM deployment_identity WHERE singleton FOR UPDATE",
-            []
-          )
-
-        unless state == "blocked" and inventory["deployment_uuid"] == uuid and
-                 inventory["migration_sha256"] == migration and lsn?(cut),
-               do: S.abort(tx, :restore_identity_conflict)
-
-        unless S.rows(tx, "SELECT $1::text::pg_lsn >= $2::text::pg_lsn", [
-                 inventory["cut_point"],
-                 cut
-               ]) == [
-                 [true]
-               ],
-               do: S.abort(tx, :authority_precedes_restored_cut_point)
-
-        require_quiesced!(tx)
-
-        unless catalog(tx) == inventory["catalog"],
-          do: S.abort(tx, :missing_or_changed_post_cut_point_facts)
-
-        verify_artifacts!(tx, proof)
-
-        S.rows(
-          tx,
-          "UPDATE deployment_identity SET recovery_state='current',reconciliation_digest=$1 WHERE singleton",
-          [digest]
-        )
-
-        digest
+        reconcile_inventory(tx, inventory, digest, proof)
       end)
     end
+  end
+
+  defp reconcile_inventory(tx, inventory, digest, proof) do
+    [[uuid, cut, state, migration]] =
+      S.rows(
+        tx,
+        "SELECT deployment_uuid::text,restored_cut_point,recovery_state,migration_sha256 FROM deployment_identity WHERE singleton FOR UPDATE",
+        []
+      )
+
+    unless state == "blocked" and inventory["deployment_uuid"] == uuid and
+             inventory["migration_sha256"] == migration and lsn?(cut),
+           do: S.abort(tx, :restore_identity_conflict)
+
+    unless S.rows(tx, "SELECT $1::text::pg_lsn >= $2::text::pg_lsn", [
+             inventory["cut_point"],
+             cut
+           ]) == [
+             [true]
+           ],
+           do: S.abort(tx, :authority_precedes_restored_cut_point)
+
+    require_quiesced!(tx)
+
+    unless catalog(tx) == inventory["catalog"],
+      do: S.abort(tx, :missing_or_changed_post_cut_point_facts)
+
+    verify_artifacts!(tx, proof)
+
+    S.rows(
+      tx,
+      "UPDATE deployment_identity SET recovery_state='current',reconciliation_digest=$1 WHERE singleton",
+      [digest]
+    )
+
+    digest
   end
 
   defp require_quiesced!(tx) do
@@ -250,20 +254,7 @@ defmodule MedFabric.Store.Recovery do
     unless length(prefixes) == length(expected), do: S.abort(tx, :artifact_inventory_incomplete)
 
     Enum.zip(expected, prefixes)
-    |> Enum.each(fn
-      {[fence, receipt, digest], %MedEx.Storage.RecoveredPrefix{} = prefix} ->
-        provenance = prefix.provenance
-
-        unless prefix.fence == fence and Receipt.exact_prefix?(receipt, prefix.receipt) and
-                 prefix.index_digest == digest and
-                 provenance[:scope] == :full_journal and provenance[:receipt] == prefix.receipt and
-                 provenance[:root_owner] == proof.root_owner and
-                 provenance[:root_token] == proof.root_token and provenance[:root] == proof.root,
-               do: S.abort(tx, :artifact_inventory_conflict)
-
-      _ ->
-        S.abort(tx, :artifact_inventory_conflict)
-    end)
+    |> Enum.each(&verify_prefix!(tx, proof, &1))
 
     manifests =
       S.rows(
@@ -282,6 +273,23 @@ defmodule MedFabric.Store.Recovery do
         do: S.abort(tx, :manifest_inventory_conflict)
     end)
   end
+
+  defp verify_prefix!(
+         tx,
+         proof,
+         {[fence, receipt, digest], %MedEx.Storage.RecoveredPrefix{} = prefix}
+       ) do
+    provenance = prefix.provenance
+
+    unless prefix.fence == fence and Receipt.exact_prefix?(receipt, prefix.receipt) and
+             prefix.index_digest == digest and
+             provenance[:scope] == :full_journal and provenance[:receipt] == prefix.receipt and
+             provenance[:root_owner] == proof.root_owner and
+             provenance[:root_token] == proof.root_token and provenance[:root] == proof.root,
+           do: S.abort(tx, :artifact_inventory_conflict)
+  end
+
+  defp verify_prefix!(tx, _, _), do: S.abort(tx, :artifact_inventory_conflict)
 
   defp lsn?(value),
     do: is_binary(value) and Regex.match?(~r/\A[0-9A-F]{1,8}\/[0-9A-F]{1,8}\z/, value)
