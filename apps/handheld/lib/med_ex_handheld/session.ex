@@ -139,13 +139,6 @@ defmodule MedExHandheld.Session do
         {Spool, root: root, limit: config["spool_limit"] || 67_108_864}
       )
 
-    Spool.write!(
-      Path.join(root, "identity.json"),
-      JSON.encode!(
-        Map.take(config, ~w(encounter device acquisition profile boot origin_us api_revision))
-      )
-    )
-
     for {_, {_, spec}} <- sources, do: :ok = Spool.register(spool, spec)
 
     monitor = start_monitor(config, sources, resources, hub)
@@ -153,6 +146,23 @@ defmodule MedExHandheld.Session do
     {:ok, pool} = Supervisor.start_child(resources, {Task.Supervisor, []})
     marker = Path.join(root, "source_started.json")
     resuming = File.exists?(marker)
+
+    # Admission and local setup may take long enough for the initial clock to
+    # leave several source frames overdue. Anchor a fresh capture only once its
+    # producers can start; a resumed capture must retain its original timeline.
+    config =
+      if resuming,
+        do: config,
+        else: Map.put(config, "origin_us", System.system_time(:microsecond))
+
+    unless resuming do
+      Spool.write!(
+        Path.join(root, "identity.json"),
+        JSON.encode!(
+          Map.take(config, ~w(encounter device acquisition profile boot origin_us api_revision))
+        )
+      )
+    end
 
     mark_source_start(config, spool, sources, marker, resuming)
 
