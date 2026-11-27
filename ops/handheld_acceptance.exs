@@ -1653,7 +1653,7 @@ defmodule MedFabric.HandheldAcceptance do
     network_denials!(lab)
     {lab, reset} = paired_case!(lab, "source-reset", %{"seconds" => 4, "reset" => true})
     check!(reset.coverage["ecg"].samples == 75, "ECG reset cutoff differs")
-    paired_restart!(lab)
+    paired_restart!(lab, reserved_repeat!(lab, reset.manifest_digest))
 
     measured_bounds!(lab)
     lab
@@ -1759,8 +1759,22 @@ defmodule MedFabric.HandheldAcceptance do
     end)
   end
 
-  defp paired_restart!(lab) do
-    {cfg, child} = client!(lab, "paired_exam", "handheld-restart", %{"seconds" => 12})
+  defp reserved_repeat!(lab, manifest_digest) do
+    repeat =
+      sql!(lab, """
+      SELECT a.id
+      FROM reviews r JOIN acquisitions a ON a.id=r.repeat_id AND a.parent_acquisition_id=r.acquisition_id
+      WHERE r.manifest_digest='#{manifest_digest}' AND a.state='reserved' AND a.profile='paired_exam'
+      """)
+
+    check!(Regex.match?(~r/\A[0-9a-f]{64}\z/, repeat), "Expected one reserved repeat acquisition")
+    repeat
+  end
+
+  defp paired_restart!(lab, repeat) do
+    {cfg, child} =
+      client!(lab, "paired_exam", "handheld-restart", %{"seconds" => 12, "acquisition" => repeat})
+
     root = at(lab, "spool/#{cfg["acquisition"]}")
     names = ~w(audio ecg)
 
