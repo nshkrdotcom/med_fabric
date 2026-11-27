@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.3.0 - 2026-11-26
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.3.0] - 2026-11-26
 
 ### Breaking changes
 
@@ -20,17 +25,17 @@
 - Update receipt/reclaim, malformed state, asynchronous monitor and source tests.
 - Document source continuity, retained evidence and native 29-minute qualification.
 
-## 0.2.1 — 2026-11-26
+## [0.2.1] - 2026-11-26
 
 - Keep distinct monitor batches captured in the same millisecond and preserve unread audio across gap-only batches.
 - Use MedEx receipt progression before verifying local spool coverage and reclaiming records.
 - Isolate local monitor processing from authoritative paired capture. Durable spool batches, upload and operator stop continue through a stalled or failed monitor.
 
-## 0.2.0 - 2026-11-25
+## [0.2.0] - 2026-11-25
 
 - Align base SDK requirement to `med_ex ~> 0.3.0`.
 
-## 0.1.1 - 2026-11-25
+## [0.1.1] - 2026-11-25
 
 - Replay multi-sequence gaps and stop production on verified premature terminal receipts.
 - Own live per-stream watermarks in `Spool`, replace per-ACK directory scans with O(k) sequence-range reclamation, recover past reclaimed prefixes from validated persisted receipts, and negotiate up to 15-frame pipelined credit with single-credit fallback.
@@ -40,9 +45,15 @@
 
 All notable changes to `mf_handheld` will be documented in this file.
 
-## 0.1.0 - 2026-11-24
+## [0.1.0] - 2026-11-24
 
 - Initial Hex release of the standalone Med Fabric Handheld client (`mf_handheld`).
 - Synthetic RDP1 acoustic/ECG and PLXS pulse-oximetry peripheral drivers with local clock and command journal.
 - Bounded disk spool with Linux `flock`/fsync durability and resumable Gun WSS/TLS transport against `mf_exam`.
 - Consumes public `med_ex ~> 0.2.0` from Hex with standalone `mix.exs`, HexDocs guides, and Mix release support.
+
+[0.3.0]: https://github.com/nshkrdotcom/med_fabric/compare/mf_handheld-v0.2.1...mf_handheld-v0.3.0
+[0.2.1]: https://github.com/nshkrdotcom/med_fabric/compare/mf_handheld-v0.2.0...mf_handheld-v0.2.1
+[0.2.0]: https://github.com/nshkrdotcom/med_fabric/compare/mf_handheld-v0.1.1...mf_handheld-v0.2.0
+[0.1.1]: https://github.com/nshkrdotcom/med_fabric/compare/mf_handheld-v0.1.0...mf_handheld-v0.1.1
+[0.1.0]: https://github.com/nshkrdotcom/med_fabric/releases/tag/mf_handheld-v0.1.0
