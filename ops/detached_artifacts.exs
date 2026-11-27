@@ -337,14 +337,26 @@ defmodule MedFabric.DetachedArtifacts do
     declared =
       metadata["files"] |> Enum.map(&(to_string(&1) |> String.trim_trailing("/"))) |> Enum.sort()
 
+    # Hex lists recursively selected directories in metadata while the tar
+    # can represent them solely by their contained files.
+    archive_paths = Enum.reduce(Map.keys(modes), MapSet.new(), &include_parents/2)
+
     ensure!(
       length(Enum.uniq(declared)) == length(declared) and
-        Enum.all?(declared, &Map.has_key?(modes, &1)) and
+        Enum.all?(declared, &MapSet.member?(archive_paths, &1)) and
         Enum.sort(Enum.filter(declared, &Map.has_key?(files, &1))) == Enum.sort(Map.keys(files)),
       "Hex package inventory differs for #{name}"
     )
 
     {metadata, files}
+  end
+
+  defp include_parents(".", paths), do: paths
+
+  defp include_parents(path, paths) do
+    if MapSet.member?(paths, path),
+      do: paths,
+      else: include_parents(Path.dirname(path), MapSet.put(paths, path))
   end
 
   defp requirements!(entries) do

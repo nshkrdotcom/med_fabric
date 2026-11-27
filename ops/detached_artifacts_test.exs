@@ -20,6 +20,8 @@ defmodule MedFabric.DetachedArtifactsTest do
         File.write!(Path.join(package, "mix.exs"), "# Exact archived source for #{name}\n")
         File.chmod!(Path.join(package, "mix.exs"), 0o644)
 
+        {files, directories} = source_files(name, package)
+
         requirements =
           case name do
             "mf_preview" -> ~w(med_ex med_ex_opus med_ex_rtc)
@@ -45,7 +47,7 @@ defmodule MedFabric.DetachedArtifactsTest do
           {"app", name},
           {"version", declaration["version"]},
           {"requirements", requirements},
-          {"files", ["mix.exs"]}
+          {"files", files ++ directories}
         ]
 
         File.write!(
@@ -58,8 +60,7 @@ defmodule MedFabric.DetachedArtifactsTest do
             "-czf",
             Path.join(package, "contents.tar.gz"),
             "-C",
-            package,
-            "mix.exs"
+            package | files
           ])
 
         archive = Path.join(root, "#{name}.tar")
@@ -123,12 +124,51 @@ defmodule MedFabric.DetachedArtifactsTest do
     %{root: root, manifest: manifest, work: work}
   end
 
+  defp source_files("med_ex_opus", package) do
+    relative = "lib/med_ex/opus/provider.ex"
+    path = Path.join(package, relative)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, "# Packed without explicit directory entries\n")
+    {["mix.exs", relative], ~w(lib lib/med_ex lib/med_ex/opus)}
+  end
+
+  defp source_files(_, _), do: {["mix.exs"], []}
+
   test "the six actual archive inventories and prepared identities are recorded", c do
     inputs = Artifacts.inputs!(@matrix, c.manifest, c.work)
     assert map_size(inputs["packages"]) == 6
     assert inputs["packages"]["mf_exam"]["prepared"]["identity"] == String.duplicate("b", 64)
     assert inputs["packages"]["mf_preview"]["files"]["mix.exs"]["bytes"] > 0
     assert inputs["packages"]["med_ex_opus"]["prepared"] == nil
+
+    assert Map.keys(inputs["packages"]["med_ex_opus"]["files"]) |> Enum.sort() ==
+             ~w(lib/med_ex/opus/provider.ex mix.exs)
+  end
+
+  test "a declared directory needs an archive entry or an archived descendant", c do
+    package = Path.join(c.root, "med_ex_opus")
+    metadata = Path.join(package, "metadata.config")
+    {:ok, entries} = :file.consult(String.to_charlist(metadata))
+    {"files", files} = List.keyfind(entries, "files", 0)
+    entries = List.keyreplace(entries, "files", 0, {"files", ["not-present" | files]})
+
+    File.write!(metadata, Enum.map(entries, &:io_lib.format(~c"~tp.~n", [&1])))
+    archive = Path.join(c.root, "med_ex_opus.tar")
+
+    {_, 0} =
+      System.cmd("tar", ["-cf", archive, "-C", package, "metadata.config", "contents.tar.gz"])
+
+    manifest =
+      c.manifest
+      |> File.read!()
+      |> JSON.decode!()
+      |> put_in(["packages", "med_ex_opus", "sha256"], sha(File.read!(archive)))
+
+    File.write!(c.manifest, JSON.encode!(manifest))
+
+    assert_raise RuntimeError, ~r/Hex package inventory differs for med_ex_opus/, fn ->
+      Artifacts.inputs!(@matrix, c.manifest, c.work)
+    end
   end
 
   test "a matching version cannot substitute different tar bytes", c do
