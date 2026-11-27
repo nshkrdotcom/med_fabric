@@ -420,43 +420,38 @@ defmodule MedFabric.BuildSources do
   end
 
   defp artifact_identity(path) do
-    marker = Path.join(path, "weld.provenance.json")
+    case Enum.reverse(Path.split(path)) do
+      ["project", "med_ex", "full", "v2", ".weld" | _] ->
+        frozen_identity!(path, "full")
 
-    if File.regular?(marker) do
-      case read_object!(File.read!(marker), marker) do
-        %{"kind" => "full", "artifact_id" => id} when is_binary(id) and id != "" ->
-          lock = Path.join(path, "projection.lock.json")
+      ["project", identity, "med_ex", "bundles", "v2", ".weld" | _] ->
+        descriptor = Path.join(Path.dirname(path), "bundle.json")
+        metadata = read_object!(File.read!(descriptor), descriptor)
 
-          files =
-            case read_object!(File.read!(lock), lock) do
-              %{"projection" => %{"verification_files" => files}} when is_list(files) -> files
-              _ -> Mix.raise("Invalid frozen projection inventory at #{lock}")
-            end
+        unless Regex.match?(~r/\A[0-9a-f]{64}\z/, identity) and
+                 metadata["schema"] == "weld.bundle/2" and
+                 metadata["artifact"] == "med_ex" and metadata["bundle_id"] == identity,
+               do: Mix.raise("Invalid prepared projection identity at #{descriptor}")
 
-          # Freeze actual inputs, including additions to compiler/asset inputs
-          # that are absent from a stale marker. Avoid docs and Mix build output
-          # outside the advertised inventory.
-          extra =
-            Enum.flat_map(
-              ~w(lib src priv components config build_support Makefile c_src),
-              &frozen_files(path, &1)
-            )
+        frozen_identity!(path, {identity, digest(File.read!(descriptor))})
 
-          inventory =
-            (files ++ extra ++ ~w(weld.provenance.json projection.lock.json mix.exs))
-            |> Enum.uniq()
-            |> Enum.sort()
-            |> Enum.map(&frozen_input!(path, &1))
-
-          {id, digest(:erlang.term_to_binary(inventory))}
-
-        %{"kind" => "live"} ->
-          nil
-
-        _ ->
-          Mix.raise("Invalid projection identity at #{marker}")
-      end
+      _ ->
+        nil
     end
+  end
+
+  defp frozen_identity!(path, identity) do
+    # Unlike the old embedded report, the managed v2 path owns the entire
+    # observed project. Include actual additions, bytes and executable modes.
+    inventory =
+      path
+      |> File.ls!()
+      |> Enum.reject(&(&1 in ["_build", "deps", "tmp", "doc"]))
+      |> Enum.flat_map(&frozen_files(path, &1))
+      |> Enum.sort()
+      |> Enum.map(&frozen_input!(path, &1))
+
+    {identity, digest(:erlang.term_to_binary(inventory))}
   end
 
   defp frozen_files(root, relative) do

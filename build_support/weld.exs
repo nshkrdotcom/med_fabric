@@ -18,17 +18,26 @@ release_docs = ["apps/exam/CHANGELOG.md", "apps/exam/LICENSE"]
 exam_docs = guide_paths ++ release_docs
 
 [
-  workspace: [root: "..", project_globs: ["apps/exam", "core/*"]],
+  schema: 2,
+  workspace: [root: "..", projects: ["apps/exam", "core/*"]],
   artifacts: [
     mf_exam: [
-      mode: :monolith,
-      monolith_opts: [readme: "apps/exam/README.md"],
+      layout: :flat,
+      flat: [readme: "apps/exam/README.md"],
       roots: ["apps/exam"],
-      structural_inputs: [
-        "apps/exam/VERSION",
-        "build_support/docs_hook.html",
-        "core/store/priv/sql/001_schema_v2.sql"
-      ],
+      inputs:
+        Enum.map(
+          [
+            "apps/exam/VERSION",
+            "build_support/docs_hook.html",
+            "core/store/priv/sql/001_schema_v2.sql",
+            "config/sources.exs",
+            "core/domain/VERSION",
+            "core/store/VERSION",
+            "core/interop/VERSION"
+          ],
+          &[path: &1, type: :file]
+        ),
       package: [
         name: "mf_exam",
         otp_app: :mf_exam,
@@ -37,32 +46,32 @@ exam_docs = guide_paths ++ release_docs
         description: "Connected remote clinical examination server built on MedEx",
         licenses: ["MIT"],
         links: %{"Source" => source_url},
-        development_dependencies: [{:ex_doc, "~> 0.40.5", only: :dev, runtime: false}],
-        docs: [
-          main: "readme",
-          logo: "apps/exam/assets/exam.svg",
-          assets: %{"apps/exam/assets" => "assets"},
-          source_url: source_url,
-          source_ref: "mf_exam-v#{version}",
-          extra_titles:
-            Map.new(
-              guides ++
-                [
-                  {"README.md", "Overview"},
-                  {"apps/exam/CHANGELOG.md", "Changelog"},
-                  {"apps/exam/LICENSE", "License"}
-                ]
-            ),
-          groups_for_extras: [
-            Overview: ["README.md"],
-            Guides: guide_paths,
-            Release: release_docs
-          ],
-          mermaid: true,
-          hook_file: "build_support/docs_hook.html"
-        ]
+        dev_deps: [{:ex_doc, "~> 0.40.5", only: :dev, runtime: false}]
       ],
-      output: [docs: exam_docs, assets: ["apps/exam/assets"]]
+      docs: [
+        main: "readme",
+        logo: "apps/exam/assets/exam.svg",
+        assets: %{"apps/exam/assets" => "assets"},
+        source_url: source_url,
+        source_ref: "mf_exam-v#{version}",
+        extra_titles:
+          Map.new(
+            guides ++
+              [
+                {"README.md", "Overview"},
+                {"apps/exam/CHANGELOG.md", "Changelog"},
+                {"apps/exam/LICENSE", "License"}
+              ]
+          ),
+        groups_for_extras: [
+          Overview: ["README.md"],
+          Guides: guide_paths,
+          Release: release_docs
+        ],
+        mermaid: true,
+        hook_file: "build_support/docs_hook.html"
+      ],
+      files: [docs: exam_docs, assets: ["apps/exam/assets"]]
     ]
   ]
 ]

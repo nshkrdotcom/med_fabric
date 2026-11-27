@@ -19,15 +19,15 @@ Never reuse an existing publication. Preserve factual historical changelogs.
 
 Freeze both clean source SHAs, executable Git modes and six version identities.
 Read installed Weld and Hex task help; MedEx's private maintainer project requires Weld
-~> 0.19.0. Use the pinned `.tool-versions`. Record actual compiler/native archive,
+~> 0.20.1. Use the pinned `.tool-versions`. Record actual compiler/native archive,
 OS/filesystem, browser, PostgreSQL and HAPI versions. Do not print secrets.
 
 Use `med_ex/tools/maintainer` as the Weld invoker for both repositories, passing
 each repository's absolute `build_support/weld.exs` manifest and sole artifact
-(`med_ex` or `mf_exam`): `weld.setup`, `weld.project`,
-`weld.verify`, `release.prepare`, `release.status`. Verify current task syntax
+(`med_ex` or `mf_exam`): `mix weld setup`, `mix weld project`,
+`mix weld verify`, `mix weld prepare`, `mix weld status`. Verify current task syntax
 first. Preserve exact prepared identity and archive; never edit generated files,
-CURRENT, tags or stale-check controls to bypass a failure.
+the v2 current pointer, tags or stale-check controls to bypass a failure.
 
 For each direct package, resolve the exact candidate closure, run formatting,
 warning-free compilation, all tests, Credo, Dialyzer and ExDoc warnings-as-errors,
@@ -46,7 +46,7 @@ substitute a guessed version or checksum. Changed lock/content invalidates proof
 `ops/qc_native.sh` requires `--artifacts MANIFEST.json` for the full suite and
 each 1740-second soak. `ops/qc_detached_release.sh REPORT.json --artifacts
 MANIFEST.json` accepts the same input. The manifest is qualification evidence,
-not a builder: obtain the actual six archives and both prepared `release.json`
+not a builder: obtain the actual six archives and both prepared `bundle.json`
 files through the construction steps above first. The scripts do not rebuild a
 candidate or substitute a checkout package.
 
@@ -60,7 +60,7 @@ names from the release matrix. Each package entry contains:
 | `sha256` | Lowercase 64-character outer SHA-256 of those exact tar bytes |
 | `source_revision` | Lowercase 40-character frozen Git revision; one revision per repository |
 | `build` | `weld` for `med_ex` and `mf_exam`; `mix` for the four direct packages |
-| `prepared_release` | For the two Weld entries only: the actual prepared `release.json` path |
+| `prepared_release` | For the two Weld entries only: the actual prepared `bundle.json` path |
 
 The verifier reads the version and construction from the checked-in release
 matrix. It checks each archive's actual metadata, declared file inventory,

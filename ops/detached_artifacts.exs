@@ -91,13 +91,21 @@ defmodule MedFabric.DetachedArtifacts do
             release = read_json!(path)
 
             ensure!(
-              release["artifact"] == name and hex?(release["identity"], 64) and
-                release["source_revision"] == entry["source_revision"] and
-                get_in(release, ["integrity", "archive_sha256"]) == entry["sha256"],
+              release["schema"] == "weld.bundle/2" and release["artifact"] == name and
+                release["package"] == name and release["version"] == declaration["version"] and
+                release["layout"] == if(name == "med_ex", do: "components", else: "flat") and
+                hex?(release["bundle_id"], 64) and
+                get_in(release, ["source", "commit"]) == entry["source_revision"] and
+                release["archive_sha256"] == entry["sha256"] and
+                get_in(release, ["files", "package"]) == %{
+                  "path" => "package.tar",
+                  "sha256" => entry["sha256"],
+                  "size" => File.stat!(archive).size
+                },
               "Prepared Weld identity does not own the exact #{name} archive"
             )
 
-            %{"identity" => release["identity"], "release_sha256" => sha(File.read!(path))}
+            %{"identity" => release["bundle_id"], "release_sha256" => sha(File.read!(path))}
           end
 
         {metadata, files} = archive!(archive, name, work)

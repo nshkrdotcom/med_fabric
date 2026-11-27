@@ -65,7 +65,7 @@ defmodule MedFabric.BuildSourcesTest do
   end
 
   test "direct, live and full paths each isolate lock, build and dependency roots", c do
-    candidates = ["sdk-a", ".weld/live/med_ex", ".weld/full/med_ex/project"]
+    candidates = ["sdk-a", ".weld/v2/live/med_ex", ".weld/v2/full/med_ex/project"]
 
     paths =
       for candidate <- candidates do
@@ -119,37 +119,26 @@ defmodule MedFabric.BuildSourcesTest do
   end
 
   test "full content identity and the committed default lock invalidate mutable state", c do
-    sdk = make_project(c.root, "sdk")
-    marker = Path.join(sdk, "weld.provenance.json")
-    select(c, %{"med_ex" => %{"path" => "sdk"}})
-    File.write!(marker, JSON.encode!(%{"kind" => "full", "artifact_id" => "first"}))
-
-    lock = Path.join(sdk, "projection.lock.json")
-
-    File.write!(
-      lock,
-      JSON.encode!(%{"projection" => %{"verification_files" => ["mix.exs", "asset.js"]}})
-    )
-
+    candidate = ".weld/v2/full/med_ex/project"
+    sdk = make_project(c.root, candidate)
+    select(c, %{"med_ex" => %{"path" => candidate}})
     asset = Path.join(sdk, "asset.js")
     File.write!(asset, "old")
     {_, first} = Sources.resolve(@defaults, c.project, c.root)
-    # Same bytes count, timestamp and provenance still require a new build root.
     mtime = File.stat!(asset).mtime
     File.write!(asset, "new")
     File.touch!(asset, mtime)
-    assert first != elem(Sources.resolve(@defaults, c.project, c.root), 1)
-
-    File.write!(marker, JSON.encode!(%{"kind" => "full", "artifact_id" => "second"}))
     {_, second} = Sources.resolve(@defaults, c.project, c.root)
     assert first != second
     File.write!(Path.join(c.project, "mix.lock"), "%{different: :lock}\n")
-    {_, third} = Sources.resolve(@defaults, c.project, c.root)
-    assert third != second
-    File.write!(marker, JSON.encode!(%{"kind" => "live"}))
-    {_, live} = Sources.resolve(@defaults, c.project, c.root)
-    File.write!(Path.join(sdk, "lib.ex"), "defmodule ChangedSource do end\n")
-    assert live == elem(Sources.resolve(@defaults, c.project, c.root), 1)
+    assert second != elem(Sources.resolve(@defaults, c.project, c.root), 1)
+
+    live = ".weld/v2/live/med_ex"
+    live_sdk = make_project(c.root, live)
+    select(c, %{"med_ex" => %{"path" => live}})
+    {_, live_context} = Sources.resolve(@defaults, c.project, c.root)
+    File.write!(Path.join(live_sdk, "lib.ex"), "defmodule ChangedSource do end\n")
+    assert live_context == elem(Sources.resolve(@defaults, c.project, c.root), 1)
   end
 
   test "mutable paths preserve ordinary source compiles and isolate dependency or ABI changes",
@@ -169,15 +158,10 @@ defmodule MedFabric.BuildSourcesTest do
     assert graph != elem(Sources.resolve(@defaults, c.project, c.root), 1)
   end
 
-  test "frozen native inputs invalidate builds even when absent from a stale inventory", c do
-    sdk = make_project(c.root, "sdk")
-    select(c, %{"med_ex" => %{"path" => "sdk"}})
-    File.write!(Path.join(sdk, "weld.provenance.json"), ~s({"kind":"full","artifact_id":"id"}))
-
-    File.write!(
-      Path.join(sdk, "projection.lock.json"),
-      JSON.encode!(%{"projection" => %{"verification_files" => ["mix.exs"]}})
-    )
+  test "frozen native inputs invalidate builds even when added after projection", c do
+    candidate = ".weld/v2/full/med_ex/project"
+    sdk = make_project(c.root, candidate)
+    select(c, %{"med_ex" => %{"path" => candidate}})
 
     for relative <- ["Makefile", "c_src/encoder.c", "c_src/vendor/SHA256SUMS"] do
       {_, before} = Sources.resolve(@defaults, c.project, c.root)
@@ -240,23 +224,28 @@ defmodule MedFabric.BuildSourcesTest do
     refute first == Sources.build_identity()
   end
 
-  test "frozen inventory prevents path escape or mutable symlinks from seeding builds", c do
-    sdk = make_project(c.root, "sdk")
-    select(c, %{"med_ex" => %{"path" => "sdk"}})
-    File.write!(Path.join(sdk, "weld.provenance.json"), ~s({"kind":"full","artifact_id":"id"}))
-    lock = Path.join(sdk, "projection.lock.json")
+  test "frozen inventory refuses symlinks and detects prepared descriptor changes", c do
+    id = String.duplicate("a", 64)
+    candidate = ".weld/v2/bundles/med_ex/#{id}/project"
+    sdk = make_project(c.root, candidate)
+    select(c, %{"med_ex" => %{"path" => candidate}})
+    descriptor = Path.join(Path.dirname(sdk), "bundle.json")
+    record = %{"schema" => "weld.bundle/2", "artifact" => "med_ex", "bundle_id" => id}
+    File.write!(descriptor, JSON.encode!(record))
+    {_, before} = Sources.resolve(@defaults, c.project, c.root)
+    File.write!(descriptor, JSON.encode!(Map.put(record, "other", true)))
+    assert before != elem(Sources.resolve(@defaults, c.project, c.root), 1)
+    File.ln_s!(c.root, Path.join(sdk, "link"))
 
-    for file <- ["../secret", "link/file"] do
-      if file == "link/file" do
-        File.write!(Path.join(c.root, "file"), "outside")
-        File.ln_s!(c.root, Path.join(sdk, "link"))
-      end
+    assert_raise Mix.Error, ~r/Invalid frozen projection input/, fn ->
+      Sources.resolve(@defaults, c.project, c.root)
+    end
 
-      File.write!(lock, JSON.encode!(%{"projection" => %{"verification_files" => [file]}}))
+    File.rm!(Path.join(sdk, "link"))
+    File.write!(descriptor, JSON.encode!(Map.put(record, "bundle_id", String.duplicate("b", 64))))
 
-      assert_raise Mix.Error, ~r/Invalid frozen projection input/, fn ->
-        Sources.resolve(@defaults, c.project, c.root)
-      end
+    assert_raise Mix.Error, ~r/Invalid prepared projection identity/, fn ->
+      Sources.resolve(@defaults, c.project, c.root)
     end
   end
 

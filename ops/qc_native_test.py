@@ -1,5 +1,6 @@
 """Test native-runner source selection without starting services or the BEAM."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -21,12 +22,14 @@ class NativeSourceSelectionTest(unittest.TestCase):
         for app in ("exam", "handheld"):
             (self.root / "apps" / app).mkdir(parents=True)
 
-        releases = self.root / "_build/foundation-release-evidence/weld/med_ex"
+        state = self.root / "sdk/.weld/v2"
         identity = "a" * 64
-        self.candidate = releases / identity / "project"
+        self.candidate = state / "bundles/med_ex" / identity / "project"
+        self.current = state / "current/med_ex"
+        self.current.parent.mkdir(parents=True)
         self.candidate.mkdir(parents=True)
         (self.candidate / "mix.exs").write_text("# Candidate fixture\n")
-        (releases / "CURRENT").write_text(f"weld.release/v1 {identity}\n")
+        self.current.write_text(json.dumps({"schema": "weld.current/2", "artifact": "med_ex", "bundle_id": identity}))
         self.volume = self.root / "volume"
         self.volume.mkdir()
         tools = self.root / "tools"
@@ -88,6 +91,9 @@ printf '%s\n' "$MF_SOURCE_QC_PROFILE" >> "$QC_TEST_LOG"
 
     def test_explicit_candidate_is_still_selected(self):
         self.run_soak("candidate", "--med-ex-project", str(self.candidate))
+
+    def test_explicit_v2_current_pointer_is_selected(self):
+        self.run_soak("candidate", "--med-ex-project", str(self.current))
 
     def test_full_gate_requires_all_six_exact_archives_before_tools_run(self):
         result = subprocess.run(

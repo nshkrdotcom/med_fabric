@@ -4,7 +4,7 @@ umask 077
 usage() {
   echo 'Usage: ops/qc_native.sh [--suite all|paired|soak] [--preview off|isolated] [--evidence NEW_DIR]'
   echo '       [--volume EXISTING_EXT4_DIR] [--artifacts MANIFEST.json] [--seconds N] [--keep-failure]'
-  echo '       [--med-ex-project PROJECT_OR_WELD_RELEASE_DIR] (short source diagnostics only)'
+  echo '       [--med-ex-project PROJECT_OR_V2_BUNDLE_OR_CURRENT] (short source diagnostics only)'
   echo 'Soak defaults to 29 minutes. Use --suite soak --seconds 60 for a short diagnostic.'
   echo 'Default runs use locked Hex packages; candidate projects require --med-ex-project.'
 }
@@ -74,11 +74,12 @@ if [[ "$suite" != all ]]; then
 fi
 [[ -z "$volume" || -d "$volume" ]] || { echo 'Volume must be a directory.' >&2; exit 2; }
 if [[ -n "$candidate" ]]; then
-  if [[ ! -f "$candidate/mix.exs" && -f "$candidate/CURRENT" ]]; then
-    read -r schema identity rest < "$candidate/CURRENT"
-    [[ "$schema" == weld.release/v1 && "$identity" =~ ^[0-9a-f]{64}$ && -z "$rest" ]] ||
-      { echo 'Invalid Weld CURRENT pointer.' >&2; exit 2; }
-    candidate="$candidate/$identity/project"
+  if [[ -f "$candidate" && $(basename -- "$(dirname -- "$candidate")") == current ]]; then
+    identity=$(jq -er 'select(.schema == "weld.current/2" and .artifact == "med_ex" and (keys == ["artifact","bundle_id","schema"])) | .bundle_id | select(test("^[0-9a-f]{64}$"))' "$candidate") ||
+      { echo 'Invalid Weld v2 current pointer.' >&2; exit 2; }
+    candidate="$(dirname -- "$(dirname -- "$candidate")")/bundles/med_ex/$identity/project"
+  elif [[ -f "$candidate/bundle.json" ]]; then
+    candidate="$candidate/project"
   fi
   [[ -f "$candidate/mix.exs" ]] || { echo 'Select a Mix project or a Weld release directory.' >&2; exit 2; }
 fi
@@ -110,12 +111,14 @@ fi
 if [[ -n "$candidate" ]]; then
   printf 'MedEx project: %s\n' "$candidate"
   jq -cn --arg path "$candidate" '{med_ex:{path:$path}}' > .mix_sources.json
-  if [[ -f "$candidate/weld.provenance.json" ]]; then
-    cp "$candidate/weld.provenance.json" "$evidence/med-ex-provenance.json"
-    release=$(dirname -- "$candidate")/release.json
-    if [[ -f "$release" ]]; then
-      jq '{identity, source_revision, content_sha256, weld_version}' "$release" > "$evidence/med-ex-release.json"
-    fi
+  bundle=$(dirname -- "$candidate")
+  if [[ -f "$bundle/bundle.json" ]]; then
+    cp "$bundle/bundle.json" "$evidence/med-ex-bundle.json"
+    for record in inventory qualification; do
+      if [[ -f "$bundle/$record.json" ]]; then
+        cp "$bundle/$record.json" "$evidence/med-ex-$record.json"
+      fi
+    done
   fi
 fi
 

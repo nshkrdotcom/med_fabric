@@ -81,10 +81,21 @@ defmodule MedFabric.DetachedArtifactsTest do
             File.write!(
               Path.join(root, release),
               JSON.encode!(%{
+                "schema" => "weld.bundle/2",
                 "artifact" => name,
-                "identity" => String.duplicate("b", 64),
-                "source_revision" => entry["source_revision"],
-                "integrity" => %{"archive_sha256" => entry["sha256"]}
+                "package" => name,
+                "version" => declaration["version"],
+                "layout" => if(name == "med_ex", do: "components", else: "flat"),
+                "bundle_id" => String.duplicate("b", 64),
+                "source" => %{"commit" => entry["source_revision"]},
+                "archive_sha256" => entry["sha256"],
+                "files" => %{
+                  "package" => %{
+                    "path" => "package.tar",
+                    "sha256" => entry["sha256"],
+                    "size" => File.stat!(archive).size
+                  }
+                }
               })
             )
 
@@ -135,7 +146,7 @@ defmodule MedFabric.DetachedArtifactsTest do
       release
       |> File.read!()
       |> JSON.decode!()
-      |> Map.put("source_revision", String.duplicate("c", 40))
+      |> put_in(["source", "commit"], String.duplicate("c", 40))
 
     File.write!(release, JSON.encode!(changed))
 
