@@ -70,15 +70,31 @@ defmodule MedExHandheld.PLXAdapterTest do
   test "the PLX wire body is the canonical SDK event with exact source bytes and explicit time qualification" do
     config = %{"device" => "gateway", "acquisition" => "collection", "boot" => "boot"}
     raw = List.last(MedExHandheld.PLXPeripheral.new().records)
-    wire = MedExHandheld.PLXPeripheral.event(raw, "event", 1, "previous", config, :fixed_fixture_utc)
+
+    wire =
+      MedExHandheld.PLXPeripheral.event(raw, "event", 1, "previous", config, :fixed_fixture_utc)
+
     assert {:ok, event} = MedEx.Serialization.measurement(wire)
     assert event.acquisition_id == "collection" and event.source_ref == "gateway"
     assert event.raw == {:bytes, raw}
     assert event.metrics["spo2"] == {:value, 98, 0, "%"}
     assert event.device_time.clock_id == "unix_us" and event.device_time.uncertainty_ticks == 0
     assert %{name: "repeat_of", origin: :observed, value: "previous"} in event.provenance
-    binding = %{"acquisition" => "collection", "profile" => "plx_spot_check", "generation" => "1", "connection" => "connection"}
-    assert {:ok, bytes} = MedEx.Wire.Control.encode("measurement", %{"binding" => binding, "operation_id" => "put-event", "event" => wire})
+
+    binding = %{
+      "acquisition" => "collection",
+      "profile" => "plx_spot_check",
+      "generation" => "1",
+      "connection" => "connection"
+    }
+
+    assert {:ok, bytes} =
+             MedEx.Wire.Control.encode("measurement", %{
+               "binding" => binding,
+               "operation_id" => "put-event",
+               "event" => wire
+             })
+
     assert {:ok, %{"event" => ^wire}} = MedEx.Wire.Control.decode(bytes, ["measurement"])
     unknown = MedExHandheld.PLXPeripheral.event(raw, "unknown-time", 2, nil, config)
     assert {:ok, %{device_time: :unknown}} = MedEx.Serialization.measurement(unknown)

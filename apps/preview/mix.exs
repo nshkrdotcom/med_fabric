@@ -20,7 +20,14 @@ defmodule MedFabric.Preview.MixProject do
       source_url: @source_url,
       homepage_url: @source_url,
       dialyzer: [plt_add_apps: [:mix]],
-      aliases: [quality: ["format --check-formatted", "compile --warnings-as-errors", "credo --strict", "dialyzer"]],
+      aliases: [
+        quality: [
+          "format --check-formatted",
+          "compile --warnings-as-errors",
+          "credo --strict",
+          "dialyzer"
+        ]
+      ],
       deps: deps,
       docs: docs(),
       package: package()

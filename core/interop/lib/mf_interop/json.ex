@@ -46,12 +46,16 @@ defmodule MedFabric.Interop.JSON do
     Decimal.to_string(value, :normal)
   end
 
-  defp encode_value(value,encoder) when is_map(value) do
-    pairs=value |> Enum.sort_by(&elem(&1,0)) |> Enum.map(fn
-      {key,v} when is_binary(key)->[Elixir.JSON.encode!(key),":",encode_value(v,encoder)]
-      _->raise ArgumentError,"FHIR JSON keys must be strings"
-    end)
-    ["{",Enum.intersperse(pairs,","),"}"]
+  defp encode_value(value, encoder) when is_map(value) do
+    pairs =
+      value
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.map(fn
+        {key, v} when is_binary(key) -> [Elixir.JSON.encode!(key), ":", encode_value(v, encoder)]
+        _ -> raise ArgumentError, "FHIR JSON keys must be strings"
+      end)
+
+    ["{", Enum.intersperse(pairs, ","), "}"]
   end
 
   defp encode_value(value, encoder), do: Elixir.JSON.protocol_encode(value, encoder)

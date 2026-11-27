@@ -35,11 +35,14 @@ defmodule MedFabric.Exam.ClockObservations do
   def now, do: System.monotonic_time(:microsecond)
 
   def freeze(name, spec, facts) do
-    frozen = Enum.find_value(Enum.reverse(facts), fn
-      %{"type" => "clock_freeze", "body" => body} -> body
-      _ -> nil
-    end)
-    with %{"host_generation" => generation, "host_monotonic_us" => host_now} <- frozen, %{"body" => a} <-
+    frozen =
+      Enum.find_value(Enum.reverse(facts), fn
+        %{"type" => "clock_freeze", "body" => body} -> body
+        _ -> nil
+      end)
+
+    with %{"host_generation" => generation, "host_monotonic_us" => host_now} <- frozen,
+         %{"body" => a} <-
            Enum.find(facts, &(&1["type"] == "anchor" and &1["body"]["stream"] == name)),
          "fixture_acquisition_tick" <- a["method"],
          probes when probes != [] <-

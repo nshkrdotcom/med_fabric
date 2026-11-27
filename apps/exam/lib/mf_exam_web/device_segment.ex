@@ -26,9 +26,9 @@ defmodule MedFabric.ExamWeb.DeviceSegment do
   end
 
   defp respond(c, %{stream_id: "audio", sample_rate: {rate, 1}} = s, _, raw) do
-    case MedEx.Format.Wav.header(s.encoding,length(s.channels),rate,byte_size(raw)) do
-      {:ok,header}->c |> put_resp_content_type("audio/wav") |> send_resp(200,header<>raw)
-      _->send_resp(c,415,"Unsupported playback projection")
+    case MedEx.Format.Wav.header(s.encoding, length(s.channels), rate, byte_size(raw)) do
+      {:ok, header} -> c |> put_resp_content_type("audio/wav") |> send_resp(200, header <> raw)
+      _ -> send_resp(c, 415, "Unsupported playback projection")
     end
   end
 

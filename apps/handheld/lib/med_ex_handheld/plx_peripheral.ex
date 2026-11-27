@@ -35,6 +35,7 @@ defmodule MedExHandheld.PLXPeripheral do
     {:ok, indication} = MedExHandheld.PLXAdapter.spot_check(raw)
     {device_time, basis} = source_time(indication.source_time, time_policy)
     features = Base.encode64(read_features())
+
     facts = [
       %{name: "source", origin: :observed, value: "synthetic-plx"},
       %{name: "simulated", origin: :observed, value: true},
@@ -44,16 +45,41 @@ defmodule MedExHandheld.PLXPeripheral do
       %{name: "time_basis", origin: :claimed, value: basis},
       %{name: "peripheral_redelivery", origin: :observed, value: "ambiguous_without_record_id"}
     ]
-    facts = if repeat_of == nil, do: facts, else: facts ++ [%{name: "repeat_of", origin: :observed, value: repeat_of}]
+
+    facts =
+      if repeat_of == nil,
+        do: facts,
+        else: facts ++ [%{name: "repeat_of", origin: :observed, value: repeat_of}]
+
     event = %MedEx.MeasurementEvent{
-      event_id: id, acquisition_id: config["acquisition"], source_ref: config["device"],
-      boot_id: config["boot"], stream_id: "plx", source_epoch: 0, gateway_sequence: sequence,
-      descriptor_ref: MedEx.Serialization.digest(%{"schema" => "plxs-1.0.1", "features" => features, "source" => "synthetic-plx"}),
-      metrics: %{"spo2" => metric(indication.spo2, "%"), "pulse_rate" => metric(indication.pulse_rate, "/min")},
-      raw: {:bytes, raw}, source_record_id: nil,
-      device_status: %{"measurement" => status(indication.measurement_status), "device" => status(indication.device_status)},
-      device_time: device_time, receipt_time: :unknown, provenance: facts
+      event_id: id,
+      acquisition_id: config["acquisition"],
+      source_ref: config["device"],
+      boot_id: config["boot"],
+      stream_id: "plx",
+      source_epoch: 0,
+      gateway_sequence: sequence,
+      descriptor_ref:
+        MedEx.Serialization.digest(%{
+          "schema" => "plxs-1.0.1",
+          "features" => features,
+          "source" => "synthetic-plx"
+        }),
+      metrics: %{
+        "spo2" => metric(indication.spo2, "%"),
+        "pulse_rate" => metric(indication.pulse_rate, "/min")
+      },
+      raw: {:bytes, raw},
+      source_record_id: nil,
+      device_status: %{
+        "measurement" => status(indication.measurement_status),
+        "device" => status(indication.device_status)
+      },
+      device_time: device_time,
+      receipt_time: :unknown,
+      provenance: facts
     }
+
     :ok = MedEx.MeasurementEvent.validate(event)
     wire = MedEx.Serialization.to_map(event)
     {:ok, ^event} = MedEx.Serialization.measurement(wire)
@@ -64,8 +90,15 @@ defmodule MedExHandheld.PLXPeripheral do
     {:ok, date} = Date.new(y, m, d)
     {:ok, time} = Time.new(h, min, s)
     at = DateTime.new!(date, time, "Etc/UTC")
-    {%{clock_id: "unix_us", boot_id: "fixture", ticks: DateTime.to_unix(at, :microsecond), uncertainty_ticks: 0}, "qualified_fixture_utc"}
+
+    {%{
+       clock_id: "unix_us",
+       boot_id: "fixture",
+       ticks: DateTime.to_unix(at, :microsecond),
+       uncertainty_ticks: 0
+     }, "qualified_fixture_utc"}
   end
+
   defp source_time(_, _), do: {:unknown, "unknown"}
   defp metric({:finite, m, e}, unit), do: {:value, m, e, unit}
   defp metric({:special, reason}, _), do: {:missing, to_string(reason)}

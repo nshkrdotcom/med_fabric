@@ -59,7 +59,8 @@ defmodule MedFabric.Store.MixProject do
       assets: %{"assets" => "assets"},
       source_url: @source_url,
       source_ref: "mf_exam-v#{@release_version}",
-      source_url_pattern: "#{@source_url}/blob/mf_exam-v#{@release_version}/core/store/%{path}#L%{line}",
+      source_url_pattern:
+        "#{@source_url}/blob/mf_exam-v#{@release_version}/core/store/%{path}#L%{line}",
       extras: [
         {"README.md", filename: "readme", title: "Overview"},
         {"CHANGELOG.md", title: "Changelog"},

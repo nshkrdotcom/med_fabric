@@ -15,9 +15,12 @@ defmodule MedFabric.Domain.MixProject do
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40.5", only: :dev, runtime: false}
     ]
-    {deps, paths} = if Code.ensure_loaded?(MedFabric.BuildSources),
-      do: MedFabric.BuildSources.resolve(defaults, __DIR__, Path.expand("../..", __DIR__)),
-      else: {defaults, []}
+
+    {deps, paths} =
+      if Code.ensure_loaded?(MedFabric.BuildSources),
+        do: MedFabric.BuildSources.resolve(defaults, __DIR__, Path.expand("../..", __DIR__)),
+        else: {defaults, []}
+
     [
       app: :mf_domain,
       version: @version,

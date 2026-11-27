@@ -377,7 +377,7 @@ defmodule MedFabric.HandheldAcceptance do
     lab = if "spot-check" in required, do: hapi!(lab), else: lab
     lab = if lab.preview?, do: start_preview!(lab), else: lab
 
-    lab = put_in(lab.cfg["checkpoint_timings"], at(lab, "artifact/checkpoint-timings.jsonl"))
+    lab = put_in(lab.cfg["checkpoint_timings"], at(lab, "barriers/checkpoint-timings.jsonl"))
 
     save(at(lab, "server.json"), lab.cfg)
     lab = start_server!(lab)
@@ -577,36 +577,69 @@ defmodule MedFabric.HandheldAcceptance do
   defp log_contains?(child, text),
     do: File.regular?(child.log) and String.contains?(File.read!(child.log), text)
 
+  # Host root is unmapped in an unprivileged user namespace. Build the
+  # artifact's ancestor chain inside that namespace and mount other paths read-only.
+  defp sandbox_root(lab_dir) do
+    lab_dir
+    |> Path.split()
+    |> Enum.reduce({[], nil}, fn
+      "/", {args, nil} ->
+        {args, "/"}
+
+      name, {args, parent} ->
+        siblings =
+          if parent in ["/tmp", "/var/tmp"] do
+            []
+          else
+            (File.ls!(parent) -- [name])
+            |> Enum.sort()
+            |> Enum.flat_map(&sandbox_sibling(Path.join(parent, &1)))
+          end
+
+        next = Path.join(parent, name)
+        {args ++ siblings ++ ["--dir", next], next}
+    end)
+    |> elem(0)
+  end
+
+  defp sandbox_sibling(path) when path in ["/dev", "/proc"], do: []
+
+  defp sandbox_sibling(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :symlink}} -> ["--symlink", File.read_link!(path), path]
+      {:ok, %{type: type}} when type in [:regular, :directory] -> ["--ro-bind", path, path]
+      _ -> []
+    end
+  end
+
   defp isolate!(lab, role, exe, args, config, env \\ nil) do
     cwd =
       if lab.installed_consumers,
         do: Path.join(lab.installed_consumers, role),
         else: Path.join([@root, "apps", role])
 
-    base = [
-      "--die-with-parent",
-      "--unshare-pid",
-      "--ro-bind",
-      "/",
-      "/",
-      "--dev-bind",
-      "/dev",
-      "/dev",
-      "--proc",
-      "/proc",
-      "--bind",
-      cwd,
-      cwd,
-      "--tmpfs",
-      lab.dir,
-      "--dir",
-      at(lab, "runtime-tmp"),
-      "--tmpfs",
-      at(lab, "runtime-tmp"),
-      "--setenv",
-      "TMPDIR",
-      at(lab, "runtime-tmp")
-    ]
+    base =
+      ["--die-with-parent", "--unshare-pid"] ++
+        sandbox_root(lab.dir) ++
+        [
+          "--dev-bind",
+          "/dev",
+          "/dev",
+          "--proc",
+          "/proc",
+          "--bind",
+          cwd,
+          cwd,
+          "--tmpfs",
+          lab.dir,
+          "--dir",
+          at(lab, "runtime-tmp"),
+          "--tmpfs",
+          at(lab, "runtime-tmp"),
+          "--setenv",
+          "TMPDIR",
+          at(lab, "runtime-tmp")
+        ]
 
     {files, dirs} =
       case role do
@@ -621,6 +654,7 @@ defmodule MedFabric.HandheldAcceptance do
           cfg = read(config)
           spool = "spool/" <> cfg["acquisition"]
           File.mkdir_p!(at(lab, spool))
+          File.chmod!(at(lab, spool), 0o700)
 
           {[Path.relative_to(config, lab.dir), "ca.pem", Path.basename(cfg["credential_file"])],
            [spool]}
@@ -640,7 +674,7 @@ defmodule MedFabric.HandheldAcceptance do
     env = if lab.installed_consumers, do: Map.put(env, "MIX_ENV", "prod"), else: env
 
     env =
-      if lab.installed_consumers and role == "exam" do
+      if not is_nil(lab.installed_consumers) and role == "exam" do
         # The composed application's bootstrap reapplies its packaged config.
         # Supply the complete disposable deployment through that public runtime
         # boundary before Mix and the application evaluate either config entry.
@@ -709,7 +743,9 @@ defmodule MedFabric.HandheldAcceptance do
       lab,
       role <> "-" <> Path.basename(exe),
       "bwrap",
-      base ++ mounts ++ ["--", "sh", "-c", script, "lab-role", lab.dir, role, exe | args],
+      base ++
+        mounts ++
+        ["--remount-ro", "/", "--", "sh", "-c", script, "lab-role", lab.dir, role, exe | args],
       cwd,
       env
     )
@@ -934,13 +970,13 @@ defmodule MedFabric.HandheldAcceptance do
         count!(
           lab,
           "acquisition_facts",
-          "acquisition_id='#{id}' AND kind='command_outcome_unknown'"
+          "acquisition_id='#{id}' AND kind='command_applied'"
         ) >
           0
       end,
       30_000,
       child,
-      "unknown command outcome"
+      "applied monitor command"
     )
 
     armed = barrier(lab, "writer_stall.ecg")
@@ -1038,6 +1074,8 @@ defmodule MedFabric.HandheldAcceptance do
         child,
         "stalled monitor command remains unknown"
       )
+
+      record(%{unknown_command_outcome_exercised: true})
 
       dir = Path.dirname(marker)
       File.write!(Path.join(dir, "check-monitor-queue"), "")
@@ -1532,7 +1570,6 @@ defmodule MedFabric.HandheldAcceptance do
     {lab, _} =
       paired_case!(lab, "baseline", %{
         "seconds" => 60,
-        "lose_command_ack" => true,
         "trace_monitor" => true
       })
 
@@ -1635,7 +1672,13 @@ defmodule MedFabric.HandheldAcceptance do
     sql!(lab, "UPDATE device_credentials SET revoked=true WHERE device_id='secondary-gateway'")
 
     ProcessLab.wait!(
-      fn -> sql!(lab, "SELECT state FROM acquisitions WHERE id='#{id}'") == "interrupted" end,
+      fn ->
+        count!(
+          lab,
+          "acquisition_manifests m JOIN acquisition_sessions s ON s.id=m.acquisition_id",
+          "m.acquisition_id='#{id}' AND s.authority_state='expired' AND m.body->'defects' @> '[{\"code\":\"interrupted\"}]'::jsonb"
+        ) == 1
+      end,
       30_000,
       nil,
       "credential revocation"

@@ -4,23 +4,37 @@ defmodule MedExHandheld.SpoolReceiptTest do
   alias MedExHandheld.{Paired, Spool}
   alias MedEx.Wire.FrameV1
 
-  setup %{tmp_dir: dir} do
-    {_, spec} = Paired.sources(%{"device" => "fixture", "acquisition" => "acq", "seed" => 1})["audio"]
+  setup do
+    suffix = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    dir = Path.join(System.tmp_dir!(), "mf-spool-" <> suffix)
+    File.mkdir!(dir)
+    File.chmod!(dir, 0o700)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    {_, spec} =
+      Paired.sources(%{
+        "device" => "fixture",
+        "acquisition" => "acq",
+        "boot" => "gateway-boot",
+        "seed" => 1
+      })["audio"]
+
     pid = start_supervised!({Spool, root: dir, limit: 1_048_576})
     assert :ok = Spool.register(pid, spec)
     {:ok, spool: pid, spec: spec, root: dir}
   end
 
-  @moduletag :tmp_dir
   test "activation validates durable truth and coverage before replacing recovery state", c do
     initial = receipt(c.spec, 0, 0, 1)
     reply = reply(initial, 1, "connection-a")
     assert {:ok, _} = Spool.activate(c.spool, "audio", c.spec, reply)
     persisted = File.read!(Path.join([c.root, "audio", "ack.json"]))
+
     for bad <- [nil, [], %{}, Map.put(initial, "accepted_sample", "1"), receipt(c.spec, 9, 9, 2)] do
       assert {:error, _} = Spool.activate(c.spool, "audio", c.spec, %{reply | "receipt" => bad})
       assert File.read!(Path.join([c.root, "audio", "ack.json"])) == persisted
     end
+
     put(c, 0, 0)
     assert :ok = Spool.ack(c.spool, "audio", reply["binding"], receipt(c.spec, 1, 1, 2))
     assert :absent = Spool.get(c.spool, "audio", {0, 0})
@@ -31,7 +45,10 @@ defmodule MedExHandheld.SpoolReceiptTest do
     initial = reply(receipt(c.spec, 0, 0, 1), 1, "old")
     assert {:ok, _} = Spool.activate(c.spool, "audio", c.spec, initial)
     assert :ok = Spool.invalidate(c.spool, initial["binding"])
-    assert {:error, :stale_binding} = Spool.ack(c.spool, "audio", initial["binding"], receipt(c.spec, 1, 1, 2))
+
+    assert {:error, :stale_binding} =
+             Spool.ack(c.spool, "audio", initial["binding"], receipt(c.spec, 1, 1, 2))
+
     assert {:ok, _} = Spool.get(c.spool, "audio", {0, 0})
     fresh = reply(receipt(c.spec, 1, 1, 2), 1, "fresh")
     assert {:ok, _} = Spool.activate(c.spool, "audio", c.spec, fresh)
@@ -39,8 +56,23 @@ defmodule MedExHandheld.SpoolReceiptTest do
   end
 
   test "sample-only gap and following frame share sequence without sharing storage key", c do
-    gap = MedEx.CanonicalJSON.encode(%{"id" => "loss", "irreversible" => true, "cause" => "source_loss", "first" => "0", "end" => "4", "first_sequence" => "0", "next_sequence" => "0"})
-    assert :ok = Spool.put_batch_and_advance(c.spool, c.root, "audio", [{0, gap, 0, 4}, {0, frame(0, 4), 1, 5}])
+    gap =
+      MedEx.CanonicalJSON.encode(%{
+        "id" => "loss",
+        "irreversible" => true,
+        "cause" => "source_loss",
+        "first" => "0",
+        "end" => "4",
+        "first_sequence" => "0",
+        "next_sequence" => "0"
+      })
+
+    assert :ok =
+             Spool.put_batch_and_advance(c.spool, c.root, "audio", [
+               {0, gap, 0, 4},
+               {0, frame(0, 4), 1, 5}
+             ])
+
     initial = reply(receipt(c.spec, 0, 0, 1), 1, "current")
     assert {:ok, _} = Spool.activate(c.spool, "audio", c.spec, initial)
     assert :ok = Spool.ack(c.spool, "audio", initial["binding"], receipt(c.spec, 0, 4, 2))
@@ -49,36 +81,66 @@ defmodule MedExHandheld.SpoolReceiptTest do
     assert :ok = Spool.ack(c.spool, "audio", initial["binding"], receipt(c.spec, 1, 5, 3))
   end
 
-  test "foreign identity same-generation conflict rollback and missing handoff preserve bytes", c do
+  test "foreign identity same-generation conflict rollback and missing handoff preserve bytes",
+       c do
     for n <- 0..3, do: put(c, n, n)
     initial = reply(receipt(c.spec, 0, 0, 1), 1, "old")
     assert {:ok, _} = Spool.activate(c.spool, "audio", c.spec, initial)
     committed = receipt(c.spec, 2, 2, 4)
     assert :ok = Spool.ack(c.spool, "audio", initial["binding"], committed)
-    for changed <- [Map.put(committed, "journal_digest", String.duplicate("f", 64)), receipt(c.spec, 1, 1, 5), Map.put(receipt(c.spec, 3, 3, 5), "stream_id", "ecg")] do
+
+    for changed <- [
+          Map.put(committed, "journal_digest", String.duplicate("f", 64)),
+          receipt(c.spec, 1, 1, 5),
+          Map.put(receipt(c.spec, 3, 3, 5), "stream_id", "ecg")
+        ] do
       assert {:error, _} = Spool.ack(c.spool, "audio", initial["binding"], changed)
       assert {:ok, _} = Spool.get(c.spool, "audio", {2, 2})
     end
-    successor = committed |> Map.put("fence", "new") |> Map.put("journal_id", "new-journal") |> Map.put("journal_generation", "1") |> Map.put("journal_digest", MedEx.Serialization.sha256("new"))
+
+    successor =
+      committed
+      |> Map.put("fence", "new")
+      |> Map.put("journal_id", "new-journal")
+      |> Map.put("journal_generation", "1")
+      |> Map.put("journal_digest", MedEx.Serialization.sha256("new"))
+
     fresh = reply(successor, 2, "new")
     assert {:error, _} = Spool.activate(c.spool, "audio", c.spec, fresh)
-    handoff = %{"previous" => committed, "successor" => successor, "imported" => committed, "asserted_by" => "authenticated_host"}
+
+    handoff = %{
+      "previous" => committed,
+      "successor" => successor,
+      "imported" => committed,
+      "asserted_by" => "authenticated_host"
+    }
+
     assert {:ok, _} = Spool.activate(c.spool, "audio", c.spec, Map.put(fresh, "handoff", handoff))
-    assert {:error, :stale_binding} = Spool.ack(c.spool, "audio", initial["binding"], receipt(c.spec, 3, 3, 5))
+
+    assert {:error, :stale_binding} =
+             Spool.ack(c.spool, "audio", initial["binding"], receipt(c.spec, 3, 3, 5))
   end
 
   test "restart recovers synchronized tail and an ACK persisted before record deletion", c do
     for n <- 0..4, do: put(c, n, n)
     initial = reply(receipt(c.spec, 0, 0, 1), 1, "old")
     assert {:ok, _} = Spool.activate(c.spool, "audio", c.spec, initial)
-    Spool.write!(Path.join([c.root, "audio", "ack.json"]), JSON.encode!(%{"binding" => initial["binding"], "receipt" => receipt(c.spec, 3, 3, 2)}))
+
+    Spool.write!(
+      Path.join([c.root, "audio", "ack.json"]),
+      JSON.encode!(%{"binding" => initial["binding"], "receipt" => receipt(c.spec, 3, 3, 2)})
+    )
+
     stop_supervised!(Spool)
     pid = start_supervised!({Spool, root: c.root, limit: 1_048_576})
     assert :ok = Spool.register(pid, c.spec)
     assert %{"sequence" => 5, "sample" => 5} = Spool.watermark(pid, "audio")
     assert :ok = Paired.interrupt_after_restart(%{"spool" => c.root}, pid, "audio", c.spec)
     assert %{"done" => true, "interruption" => "source_reset"} = Spool.watermark(pid, "audio")
-    assert {:ok, _} = Spool.activate(pid, "audio", c.spec, reply(receipt(c.spec, 3, 3, 2), 1, "new"))
+
+    assert {:ok, _} =
+             Spool.activate(pid, "audio", c.spec, reply(receipt(c.spec, 3, 3, 2), 1, "new"))
+
     assert :absent = Spool.get(pid, "audio", {0, 0})
     assert {:ok, _} = Spool.get(pid, "audio", {3, 3})
   end
@@ -106,6 +168,7 @@ defmodule MedExHandheld.SpoolReceiptTest do
     assert File.read!(path) == "broken"
     old = Path.join(c.root, "old")
     File.mkdir_p!(old)
+    File.chmod!(old, 0o700)
     File.write!(Path.join(old, "identity.json"), "{}")
     assert {:error, :incompatible_spool} = Spool.start_link(root: old, limit: 4096)
   end
@@ -120,14 +183,20 @@ defmodule MedExHandheld.SpoolReceiptTest do
     {:ok, decoded} = FrameV1.decode(frame(0, 0))
     {:ok, changed} = FrameV1.encode(%{decoded | payload: <<7, 0>>})
     File.write!(record, :crypto.hash(:sha256, changed) <> changed)
-    assert {:error, :source_record_changed} = Spool.ack(c.spool, "audio", initial["binding"], receipt(c.spec, 1, 1, 2))
+
+    assert {:error, :source_record_changed} =
+             Spool.ack(c.spool, "audio", initial["binding"], receipt(c.spec, 1, 1, 2))
+
     assert File.read!(ack_path) == persisted
     assert File.exists?(record)
   end
 
   test "an exact record replay still has to name its exact ending cursor", c do
     put(c, 0, 0)
-    assert {:error, :spool_conflict} = Spool.put_batch_and_advance(c.spool, c.root, "audio", [{0, frame(0, 0), 2, 99}])
+
+    assert {:error, :spool_conflict} =
+             Spool.put_batch_and_advance(c.spool, c.root, "audio", [{0, frame(0, 0), 2, 99}])
+
     assert %{"sequence" => 1, "sample" => 1} = Spool.watermark(c.spool, "audio")
   end
 
@@ -136,10 +205,29 @@ defmodule MedExHandheld.SpoolReceiptTest do
     previous = receipt(c.spec, 0, 0, 1)
     assert {:ok, _} = Spool.activate(c.spool, "audio", c.spec, reply(previous, 1, "old"))
     recovered = receipt(c.spec, 2, 2, 3)
-    successor = recovered |> Map.put("fence", "successor") |> Map.put("journal_id", "next-journal")
-      |> Map.put("journal_generation", "1") |> Map.put("journal_digest", MedEx.Serialization.sha256("successor"))
-    handoff = %{"previous" => recovered, "successor" => successor, "imported" => recovered, "asserted_by" => "authenticated_host"}
-    assert {:ok, _} = Spool.activate(c.spool, "audio", c.spec, Map.put(reply(successor, 2, "fresh"), "handoff", handoff))
+
+    successor =
+      recovered
+      |> Map.put("fence", "successor")
+      |> Map.put("journal_id", "next-journal")
+      |> Map.put("journal_generation", "1")
+      |> Map.put("journal_digest", MedEx.Serialization.sha256("successor"))
+
+    handoff = %{
+      "previous" => recovered,
+      "successor" => successor,
+      "imported" => recovered,
+      "asserted_by" => "authenticated_host"
+    }
+
+    assert {:ok, _} =
+             Spool.activate(
+               c.spool,
+               "audio",
+               c.spec,
+               Map.put(reply(successor, 2, "fresh"), "handoff", handoff)
+             )
+
     assert :absent = Spool.get(c.spool, "audio", {1, 1})
     assert {:ok, _} = Spool.get(c.spool, "audio", {2, 2})
   end
@@ -158,7 +246,13 @@ defmodule MedExHandheld.SpoolReceiptTest do
     size = byte_size(frame(0, 0)) + 32
     spool = start_supervised!({Spool, root: c.root, limit: size})
     assert :ok = Spool.register(spool, c.spec)
-    assert {:error, :spool_full} = Spool.put_batch_and_advance(spool, c.root, "audio", [{0, frame(0, 0), 1, 1}, {1, frame(1, 1), 2, 2}])
+
+    assert {:error, :spool_full} =
+             Spool.put_batch_and_advance(spool, c.root, "audio", [
+               {0, frame(0, 0), 1, 1},
+               {1, frame(1, 1), 2, 2}
+             ])
+
     assert %{"sequence" => 1, "sample" => 1} = Spool.watermark(spool, "audio")
     assert {:ok, _} = Spool.get(spool, "audio", {0, 0})
     assert :absent = Spool.get(spool, "audio", {1, 1})
@@ -166,7 +260,9 @@ defmodule MedExHandheld.SpoolReceiptTest do
     spool = start_supervised!({Spool, root: c.root, limit: size})
     assert :ok = Spool.register(spool, c.spec)
     assert :ok = Paired.interrupt_after_restart(%{}, spool, "audio", c.spec)
-    assert %{"sequence" => 1, "sample" => 1, "interruption" => "source_reset"} = Spool.watermark(spool, "audio")
+
+    assert %{"sequence" => 1, "sample" => 1, "interruption" => "source_reset"} =
+             Spool.watermark(spool, "audio")
   end
 
   test "restart removes only uncommitted staging names and never installs their bytes", c do
@@ -181,16 +277,61 @@ defmodule MedExHandheld.SpoolReceiptTest do
     assert {:ok, _} = Spool.get(spool, "audio", {0, 0})
   end
 
-  defp put(c, q, first), do: assert(:ok = Spool.put_batch_and_advance(c.spool, c.root, "audio", [{q, frame(q, first), q + 1, first + 1}]))
+  defp put(c, q, first),
+    do:
+      assert(
+        :ok =
+          Spool.put_batch_and_advance(c.spool, c.root, "audio", [
+            {q, frame(q, first), q + 1, first + 1}
+          ])
+      )
+
   defp frame(q, first) do
-    {:ok, bytes} = FrameV1.encode(%FrameV1{stream_number: 1, source_epoch: 0, config_epoch: 0, sequence: q, first_sample: first, sample_count: 1, payload: <<4, 0>>})
+    {:ok, bytes} =
+      FrameV1.encode(%FrameV1{
+        stream_number: 1,
+        source_epoch: 0,
+        config_epoch: 0,
+        sequence: q,
+        first_sample: first,
+        sample_count: 1,
+        payload: <<4, 0>>
+      })
+
     bytes
   end
+
   defp receipt(spec, q, sample, gen) do
-    %{"stream_id" => "audio", "source_epoch" => "0", "descriptor_ref" => spec.descriptor_ref, "fence" => "fence", "journal_id" => "journal", "journal_generation" => to_string(gen), "journal_digest" => MedEx.Serialization.sha256(to_string(gen)), "accepted_sequence" => to_string(q), "accepted_sample" => to_string(sample), "durable_sequence" => to_string(q), "durable_sample" => to_string(sample)}
+    %{
+      "stream_id" => "audio",
+      "source_epoch" => "0",
+      "descriptor_ref" => spec.descriptor_ref,
+      "fence" => "fence",
+      "journal_id" => "journal",
+      "journal_generation" => to_string(gen),
+      "journal_digest" => MedEx.Serialization.sha256(to_string(gen)),
+      "accepted_sequence" => to_string(q),
+      "accepted_sample" => to_string(sample),
+      "durable_sequence" => to_string(q),
+      "durable_sample" => to_string(sample)
+    }
   end
+
   defp reply(receipt, gen, connection) do
     assert {:ok, _} = Receipt.parse(receipt)
-    %{"type" => "durable", "receipt" => receipt, "binding" => %{"acquisition" => "acq", "profile" => "paired_exam", "generation" => to_string(gen), "connection" => connection, "stream" => "audio", "fence" => receipt["fence"], "journal_id" => receipt["journal_id"]}}
+
+    %{
+      "type" => "durable",
+      "receipt" => receipt,
+      "binding" => %{
+        "acquisition" => "acq",
+        "profile" => "paired_exam",
+        "generation" => to_string(gen),
+        "connection" => connection,
+        "stream" => "audio",
+        "fence" => receipt["fence"],
+        "journal_id" => receipt["journal_id"]
+      }
+    }
   end
 end

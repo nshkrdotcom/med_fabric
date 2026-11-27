@@ -51,5 +51,4 @@ defmodule MedExHandheld.SourceTest do
     assert {^p, :outcome_unknown} = PLXPeripheral.timeout(busy)
     assert rows == p.records
   end
-
 end

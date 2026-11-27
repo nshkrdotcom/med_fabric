@@ -56,7 +56,9 @@ defmodule MedFabric.Interop.Observation do
 
   defp strip_reference_display(remote, field, expected) do
     case {expected[field], remote[field]} do
-      {ref, %{} = actual} when is_map(ref) and not is_map_key(ref,"display") and (is_map_key(ref,"reference") or is_map_key(ref,"identifier")) ->
+      {ref, %{} = actual}
+      when is_map(ref) and not is_map_key(ref, "display") and
+             (is_map_key(ref, "reference") or is_map_key(ref, "identifier")) ->
         Map.put(remote, field, Map.delete(actual, "display"))
 
       _ ->

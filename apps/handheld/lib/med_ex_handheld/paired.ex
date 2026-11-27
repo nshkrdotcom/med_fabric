@@ -27,7 +27,7 @@ defmodule MedExHandheld.Paired do
       spec = %StreamSpec{
         source_ref: c["device"],
         acquisition_id: c["acquisition"],
-        boot_id: "rdp-" <> to_string(p.boot),
+        boot_id: Map.fetch!(c, "boot"),
         stream_id: n,
         source_epoch: 0,
         descriptor_ref: String.duplicate("0", 64),
@@ -276,7 +276,8 @@ defmodule MedExHandheld.Paired do
   @doc "Retain the actual verified local tail; a restarted physical source cannot establish continuous capture."
   def interrupt_after_restart(_config, spool, name, spec) do
     with :ok <- Spool.register(spool, spec),
-         %{"sequence" => sequence, "sample" => sample, "done" => done} <- Spool.watermark(spool, name) do
+         %{"sequence" => sequence, "sample" => sample, "done" => done} <-
+           Spool.watermark(spool, name) do
       if done, do: :ok, else: Spool.finish_source(spool, name, sequence, sample, "source_reset")
     end
   end
@@ -284,23 +285,53 @@ defmodule MedExHandheld.Paired do
   def upload(config, spool, admission, name, spec) do
     with {:ok, socket} <- Transport.connect(config, "stream") do
       try do
-        fields = %{"binding" => admission["binding"], "lease" => admission["lease"],
-          "acquisition" => admission["binding"]["acquisition"], "generation" => admission["binding"]["generation"],
-          "stream" => name, "descriptor_ref" => spec.descriptor_ref,
-          "max_credit_frames" => admission["credit_frames"], "max_credit_bytes" => admission["credit_bytes"]}
+        fields = %{
+          "binding" => admission["binding"],
+          "lease" => admission["lease"],
+          "acquisition" => admission["binding"]["acquisition"],
+          "generation" => admission["binding"]["generation"],
+          "stream" => name,
+          "descriptor_ref" => spec.descriptor_ref,
+          "max_credit_frames" => admission["credit_frames"],
+          "max_credit_bytes" => admission["credit_bytes"]
+        }
+
         authority = %{hub: config["hub"], control_binding: admission["binding"]}
+
         with {:ok, reply} <- Transport.request(socket, "open_stream", fields),
              :ok <- authority(authority),
-             true <- is_map(reply["binding"]) and Map.take(reply["binding"], ~w(acquisition profile generation)) == Map.take(admission["binding"], ~w(acquisition profile generation)),
+             true <-
+               is_map(reply["binding"]) and
+                 Map.take(reply["binding"], ~w(acquisition profile generation)) ==
+                   Map.take(admission["binding"], ~w(acquisition profile generation)),
              {:ok, receipt} <- Spool.activate(spool, name, spec, reply),
-             {:ok, ledger} <- Credit.new(reply["binding"], reply["credit_frames"], reply["credit_bytes"]),
+             {:ok, ledger} <-
+               Credit.new(reply["binding"], reply["credit_frames"], reply["credit_bytes"]),
              {:ok, cursor} <- StreamCursor.new(spec) do
-          stream = %{spool: spool, socket: socket, name: name, spec: spec, binding: reply["binding"],
-            ledger: ledger, durable: receipt, cursor: %{cursor | next_sequence: receipt.durable_sequence, next_sample: receipt.durable_sample},
-            hub: config["hub"], control_binding: admission["binding"], checkpoint: nil,
-            checkpoint_at: System.monotonic_time(:millisecond), deadline: System.monotonic_time(:millisecond) + 1_800_000}
+          stream = %{
+            spool: spool,
+            socket: socket,
+            name: name,
+            spec: spec,
+            binding: reply["binding"],
+            ledger: ledger,
+            durable: receipt,
+            cursor: %{
+              cursor
+              | next_sequence: receipt.durable_sequence,
+                next_sample: receipt.durable_sample
+            },
+            hub: config["hub"],
+            control_binding: admission["binding"],
+            checkpoint: nil,
+            checkpoint_at: System.monotonic_time(:millisecond),
+            deadline: System.monotonic_time(:millisecond) + 1_800_000
+          }
+
           try do
-            if reply["type"] == "stream_finished", do: terminal(stream, reply), else: drain(stream)
+            if reply["type"] == "stream_finished",
+              do: terminal(stream, reply),
+              else: drain(stream)
           after
             Spool.invalidate(spool, reply["binding"])
           end
@@ -317,49 +348,74 @@ defmodule MedExHandheld.Paired do
       mark = Spool.watermark(stream.spool, stream.name)
       sent = {stream.cursor.next_sequence, stream.cursor.next_sample}
       produced = {mark["sequence"], mark["sample"]}
+
       cond do
-        System.monotonic_time(:millisecond) >= stream.deadline -> {:error, :upload_deadline}
-        sent == produced and mark["done"] and Credit.stats(stream.ledger).outstanding_frames == 0 -> finish_upload(stream, mark)
+        System.monotonic_time(:millisecond) >= stream.deadline ->
+          {:error, :upload_deadline}
+
+        sent == produced and mark["done"] and Credit.stats(stream.ledger).outstanding_frames == 0 ->
+          finish_upload(stream, mark)
+
         sent != produced ->
           case send_record(stream) do
-            {:ok, next} -> drain(next)
+            {:ok, next} ->
+              drain(next)
+
             {:error, :credit_exhausted} ->
               if Credit.stats(stream.ledger).outstanding_frames == 0,
-                do: {:error, :insufficient_negotiated_credit}, else: wait_reply(stream, mark)
-            error -> error
+                do: {:error, :insufficient_negotiated_credit},
+                else: wait_reply(stream, mark)
+
+            error ->
+              error
           end
-        true -> wait_reply(stream, mark)
+
+        true ->
+          wait_reply(stream, mark)
       end
     end
   end
 
   defp send_record(stream) do
     key = {stream.cursor.next_sequence, stream.cursor.next_sample}
+
     with {:ok, raw} <- Spool.get(stream.spool, stream.name, key),
          {:ok, metadata} <- Plan.record(raw, stream.spec),
          {:ok, next_cursor} <- Plan.advance(stream.cursor, metadata),
          {:ok, frame, charge} <- outbound_record(metadata, raw, stream.binding),
-         operation = %{id: metadata.id, fingerprint: metadata.fingerprint, bytes: charge,
-           sequence: next_cursor.next_sequence, sample: next_cursor.next_sample},
+         operation = %{
+           id: metadata.id,
+           fingerprint: metadata.fingerprint,
+           bytes: charge,
+           sequence: next_cursor.next_sequence,
+           sample: next_cursor.next_sample
+         },
          {:ok, ledger, _} <- Credit.reserve(stream.ledger, stream.binding, operation),
-         :ok <- authority(stream), :ok <- Transport.send_frame(stream.socket, frame) do
+         :ok <- authority(stream),
+         :ok <- Transport.send_frame(stream.socket, frame) do
       {:ok, %{stream | ledger: ledger, cursor: next_cursor}}
     else
       :absent -> {:error, :missing_source_record}
       error -> error
     end
   end
+
   defp outbound_record(%{event: {:frame, _}}, raw, _), do: {:ok, {:binary, raw}, byte_size(raw)}
+
   defp outbound_record(%{gap: gap, id: id}, _raw, binding) do
-    with {:ok, encoded} <- Control.encode("gap", Map.merge(gap, %{"binding" => binding, "operation_id" => id})) do
+    with {:ok, encoded} <-
+           Control.encode("gap", Map.merge(gap, %{"binding" => binding, "operation_id" => id})) do
       {:ok, {:text, encoded}, byte_size(encoded)}
     end
   end
 
   defp wait_reply(stream, mark) do
     pending = Credit.stats(stream.ledger).outstanding_frames > 0
-    checkpoint_due = pending and stream.checkpoint == nil and
-      (mark["done"] or System.monotonic_time(:millisecond) - stream.checkpoint_at >= 200)
+
+    checkpoint_due =
+      pending and stream.checkpoint == nil and
+        (mark["done"] or System.monotonic_time(:millisecond) - stream.checkpoint_at >= 200)
+
     with {:ok, stream} <- if(checkpoint_due, do: request_checkpoint(stream), else: {:ok, stream}) do
       case Transport.recv(stream.socket, if(pending, do: 250, else: 10)) do
         {:error, :timeout} -> drain(stream)
@@ -367,56 +423,104 @@ defmodule MedExHandheld.Paired do
       end
     end
   end
+
   defp request_checkpoint(stream) do
     operation = Transport.operation_id()
+
     with :ok <- authority(stream),
-         :ok <- Transport.send_json(stream.socket, "checkpoint", %{"binding" => stream.binding, "operation_id" => operation}) do
+         :ok <-
+           Transport.send_json(stream.socket, "checkpoint", %{
+             "binding" => stream.binding,
+             "operation_id" => operation
+           }) do
       {:ok, %{stream | checkpoint: operation, checkpoint_at: System.monotonic_time(:millisecond)}}
     end
   end
+
   defp replies(stream, 0), do: {:ok, stream}
+
   defp replies(stream, budget) do
     case Transport.recv_nowait(stream.socket) do
       {:error, :timeout} -> {:ok, stream}
       reply -> with {:ok, next} <- handle_reply(stream, reply), do: replies(next, budget - 1)
     end
   end
+
   defp handle_reply(stream, {:ok, reply}) when is_map(reply) do
     cond do
-      reply["binding"] != stream.binding -> {:ok, stream}
-      authority(stream) != :ok -> {:error, :authority_expired}
+      reply["binding"] != stream.binding ->
+        {:ok, stream}
+
+      authority(stream) != :ok ->
+        {:error, :authority_expired}
+
       reply["type"] == "accepted" ->
-        with {:ok, operation} <- Credit.lookup(stream.ledger, stream.binding, reply["operation_id"]),
+        with {:ok, operation} <-
+               Credit.lookup(stream.ledger, stream.binding, reply["operation_id"]),
              true <- operation_fingerprint(reply, operation.id) == operation.fingerprint,
              {:ok, accepted} <- Receipt.parse(reply["receipt"]),
              :ok <- Receipt.validate_identity(accepted, stream.durable),
-             true <- accepted.accepted_sequence >= operation.sequence and accepted.accepted_sample >= operation.sample,
-             true <- accepted.accepted_sequence <= stream.cursor.next_sequence and accepted.accepted_sample <= stream.cursor.next_sample do
+             true <-
+               accepted.accepted_sequence >= operation.sequence and
+                 accepted.accepted_sample >= operation.sample,
+             true <-
+               accepted.accepted_sequence <= stream.cursor.next_sequence and
+                 accepted.accepted_sample <= stream.cursor.next_sample do
           {:ok, stream}
         else
           false -> {:error, :invalid_acceptance}
           error -> error
         end
+
       reply["type"] in ["durable", "stream_finished"] ->
         with {:ok, receipt} <- Receipt.parse(reply["receipt"]),
-             true <- receipt_operation?(stream, reply["operation_id"]) or Receipt.exact_prefix?(stream.durable, receipt),
-             true <- receipt.durable_sequence <= stream.cursor.next_sequence and receipt.durable_sample <= stream.cursor.next_sample,
+             true <-
+               receipt_operation?(stream, reply["operation_id"]) or
+                 Receipt.exact_prefix?(stream.durable, receipt),
+             true <-
+               receipt.durable_sequence <= stream.cursor.next_sequence and
+                 receipt.durable_sample <= stream.cursor.next_sample,
              :ok <- Spool.ack(stream.spool, stream.name, stream.binding, receipt),
-             {:ok, ledger, _released} <- Credit.acknowledge(stream.ledger, stream.binding, receipt) do
-          next = %{stream | durable: receipt, ledger: ledger,
-            checkpoint: if(reply["operation_id"] == stream.checkpoint or Credit.stats(ledger).outstanding_frames == 0, do: nil, else: stream.checkpoint)}
-          if reply["type"] == "stream_finished", do: {:interrupted, :premature_terminal}, else: {:ok, next}
+             {:ok, ledger, _released} <-
+               Credit.acknowledge(stream.ledger, stream.binding, receipt) do
+          next = %{
+            stream
+            | durable: receipt,
+              ledger: ledger,
+              checkpoint:
+                if(
+                  reply["operation_id"] == stream.checkpoint or
+                    Credit.stats(ledger).outstanding_frames == 0,
+                  do: nil,
+                  else: stream.checkpoint
+                )
+          }
+
+          if reply["type"] == "stream_finished",
+            do: {:interrupted, :premature_terminal},
+            else: {:ok, next}
         else
           false -> {:error, :uncovered_receipt}
           error -> error
         end
+
       reply["type"] == "refused" ->
-        with {:ok, operation} <- Credit.lookup(stream.ledger, stream.binding, reply["operation_id"]),
-             {:ok, _ledger} <- Credit.refuse(stream.ledger, stream.binding, operation.id, operation_fingerprint(reply, operation.id)),
-          do: {:error, :known_refusal}
-      true -> {:error, :unexpected_reply}
+        with {:ok, operation} <-
+               Credit.lookup(stream.ledger, stream.binding, reply["operation_id"]),
+             {:ok, _ledger} <-
+               Credit.refuse(
+                 stream.ledger,
+                 stream.binding,
+                 operation.id,
+                 operation_fingerprint(reply, operation.id)
+               ),
+             do: {:error, :known_refusal}
+
+      true ->
+        {:error, :unexpected_reply}
     end
   end
+
   defp handle_reply(_, error), do: error
 
   defp operation_fingerprint(reply, "frame-" <> _), do: reply["transport_sha256"]
@@ -424,15 +528,29 @@ defmodule MedExHandheld.Paired do
   defp operation_fingerprint(_, _), do: nil
 
   defp receipt_operation?(stream, operation) do
-    operation == stream.checkpoint or match?({:ok, _}, Credit.lookup(stream.ledger, stream.binding, operation)) or
-      (is_binary(operation) and byte_size(operation) <= 96 and Regex.match?(~r/\Acheckpoint-[A-Za-z0-9_-]+\z/, operation))
+    operation == stream.checkpoint or
+      match?({:ok, _}, Credit.lookup(stream.ledger, stream.binding, operation)) or
+      (is_binary(operation) and byte_size(operation) <= 96 and
+         Regex.match?(~r/\Acheckpoint-[A-Za-z0-9_-]+\z/, operation))
   end
 
   defp finish_upload(stream, mark) do
-    with true <- {stream.durable.durable_sequence, stream.durable.durable_sample} == {mark["sequence"], mark["sample"]},
+    with true <-
+           {stream.durable.durable_sequence, stream.durable.durable_sample} ==
+             {mark["sequence"], mark["sample"]},
          :ok <- authority(stream),
-         {:ok, reply} <- Transport.request(stream.socket, "finish", %{"binding" => stream.binding,
-           "sequence" => to_string(mark["sequence"]), "sample" => to_string(mark["sample"]), "interruption" => mark["interruption"]}, 35_000),
+         {:ok, reply} <-
+           Transport.request(
+             stream.socket,
+             "finish",
+             %{
+               "binding" => stream.binding,
+               "sequence" => to_string(mark["sequence"]),
+               "sample" => to_string(mark["sample"]),
+               "interruption" => mark["interruption"]
+             },
+             35_000
+           ),
          true <- reply["binding"] == stream.binding,
          :ok <- authority(stream),
          :ok <- Spool.ack(stream.spool, stream.name, stream.binding, reply["receipt"]) do
@@ -442,23 +560,35 @@ defmodule MedExHandheld.Paired do
       error -> error
     end
   end
+
   defp terminal(stream, reply) do
     mark = Spool.watermark(stream.spool, stream.name)
-    with true <- reply["type"] == "stream_finished" and MedEx.ContractRules.digest?(reply["index_digest"]),
-         {:ok, receipt} <- Receipt.parse(reply["receipt"]), true <- Receipt.durable?(receipt),
-         true <- mark["done"] and {receipt.durable_sequence, receipt.durable_sample} == {mark["sequence"], mark["sample"]} do
+
+    with true <-
+           reply["type"] == "stream_finished" and
+             MedEx.ContractRules.digest?(reply["index_digest"]),
+         {:ok, receipt} <- Receipt.parse(reply["receipt"]),
+         true <- Receipt.durable?(receipt),
+         true <-
+           mark["done"] and
+             {receipt.durable_sequence, receipt.durable_sample} ==
+               {mark["sequence"], mark["sample"]} do
       :ok
     else
       _ -> {:interrupted, :premature_terminal}
     end
   end
+
   defp authority(stream) do
     now = System.monotonic_time(:millisecond)
     expected_binding = stream.control_binding
+
     case :ets.lookup(stream.hub, :authority) do
       [{:authority, ^expected_binding, deadline}] when is_integer(deadline) ->
         if now < deadline, do: :ok, else: {:error, :authority_expired}
-      _ -> {:error, :authority_expired}
+
+      _ ->
+        {:error, :authority_expired}
     end
   rescue
     ArgumentError -> {:error, :authority_expired}

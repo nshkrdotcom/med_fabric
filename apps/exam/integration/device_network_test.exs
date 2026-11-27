@@ -1,8 +1,11 @@
+Code.require_file("support/fixtures.exs", __DIR__)
+
 defmodule MedFabric.DeviceNetworkTest do
   use ExUnit.Case, async: false
+
+  setup context, do: MedFabric.Exam.IntegrationFixtures.trusted_tmp(context)
   @moduletag timeout: 1_550_000
 
-  @tag :tmp_dir
   test "external paired and spot-check producers verify real durable artifacts and reviewed outcomes",
        %{tmp_dir: directory} do
     on_exit(fn -> File.rm_rf!(directory) end)

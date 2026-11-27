@@ -8,7 +8,7 @@ defmodule MedFabric.RuntimeConfigTest do
   @env ~w(MF_LAB MF_PREVIEW_CONFIG MF_PREVIEW_PORT MF_PREVIEW_URL
           MF_PREVIEW_CREDENTIAL_FILE MF_ENCOUNTERS_FILE MF_HTTP_PORT MF_PUBLIC_ORIGIN
           MF_PROXY_SECRET MF_TURN_URLS MF_TURN_SECRET MF_RELAY_ONLY MF_DEVICE_TLS_CERTFILE
-          MF_DEVICE_TLS_KEYFILE MF_ARTIFACT_DIR MF_SECRET_KEY_BASE DATABASE_URL)
+          MF_DEVICE_TLS_KEYFILE MF_ARTIFACT_DIR MF_SECRET_KEY_BASE MF_DEPLOYMENT_UUID DATABASE_URL)
   @moduletag :tmp_dir
 
   setup %{tmp_dir: dir} do
@@ -84,12 +84,19 @@ defmodule MedFabric.RuntimeConfigTest do
       "MF_ENCOUNTERS_FILE" => encounters,
       "MF_PREVIEW_URL" => "http://127.0.0.1:4090",
       "MF_ARTIFACT_DIR" => c.root,
+      "MF_DEPLOYMENT_UUID" => "129485fb-78f2-4bb1-9731-4fa6506c570b",
       "MF_SECRET_KEY_BASE" => String.duplicate("s", 64),
       "DATABASE_URL" => "postgres://synthetic:synthetic@localhost/synthetic"
     })
 
+    File.write!(c.credential, String.duplicate("p", 32))
+    assert read("exam")[:mf_exam][:sidecar][:url] == "http://127.0.0.1:4090"
+
     File.write!(c.credential, "\n")
-    assert_raise RuntimeError, ~r/Empty Preview credential/, fn -> read("exam") end
+
+    assert_raise RuntimeError, ~r/Preview credential requires at least 32 bytes/, fn ->
+      read("exam")
+    end
   end
 
   defp read(app) do

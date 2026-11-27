@@ -2,12 +2,22 @@ defmodule MedFabric.Preview.Capability do
   @moduledoc "Purpose-bound Exam authority. Deadlines are conservative local monotonic values."
   alias MedEx.{CanonicalJSON, ContractRules}
   alias MedEx.Wire.Control
+
   @keys ~w(purpose acquisition source_kind profile generation source_epoch descriptor_ref viewer viewer_session issued_at_ms expires_at_ms nonce)
-  @enforce_keys [:claims, :issued, :expires, :deadline, :received_wall, :received_mono, :clock_error]
+  @enforce_keys [
+    :claims,
+    :issued,
+    :expires,
+    :deadline,
+    :received_wall,
+    :received_mono,
+    :clock_error
+  ]
   defstruct @enforce_keys
 
   def verify(token, acquisition, secret, opts)
-      when is_binary(token) and byte_size(token) <= 4096 and is_binary(secret) and byte_size(secret) in 32..4096 do
+      when is_binary(token) and byte_size(token) <= 4096 and is_binary(secret) and
+             byte_size(secret) in 32..4096 do
     now = Keyword.fetch!(opts, :now_ms)
     mono = Keyword.fetch!(opts, :mono_ms)
     error = Keyword.fetch!(opts, :clock_error_ms)
@@ -30,30 +40,48 @@ defmodule MedFabric.Preview.Capability do
          {:ok, expires} <- Control.uint64(claims["expires_at_ms"]),
          true <- issued <= now + error and expires > issued and expires - issued <= 25_000,
          true <- expires <= 9_007_199_254_740_991 and expires - now - error > 0 do
-      {:ok, %__MODULE__{claims: claims, issued: issued, expires: expires,
-        deadline: mono + expires - now - error, received_wall: now, received_mono: mono,
-        clock_error: error}}
+      {:ok,
+       %__MODULE__{
+         claims: claims,
+         issued: issued,
+         expires: expires,
+         deadline: mono + expires - now - error,
+         received_wall: now,
+         received_mono: mono,
+         clock_error: error
+       }}
     else
       _ -> {:error, :denied}
     end
   end
+
   def verify(_, _, _, _), do: {:error, :denied}
 
   def current?(%__MODULE__{} = grant, mono, wall) when is_integer(mono) and is_integer(wall) do
     mono < grant.deadline and mono >= grant.received_mono and
-      abs((wall - grant.received_wall) - (mono - grant.received_mono)) <= grant.clock_error
+      abs(wall - grant.received_wall - (mono - grant.received_mono)) <= grant.clock_error
   end
+
   def current?(_, _, _), do: false
 
   def key(%__MODULE__{claims: c}), do: {c["acquisition"], c["viewer"], c["viewer_session"]}
-  def source(%__MODULE__{claims: c}), do: Map.take(c, ~w(acquisition source_kind profile generation source_epoch descriptor_ref))
+
+  def source(%__MODULE__{claims: c}),
+    do: Map.take(c, ~w(acquisition source_kind profile generation source_epoch descriptor_ref))
 
   def renew(%__MODULE__{} = old, %__MODULE__{} = fresh) do
     cond do
-      key(old) != key(fresh) or source(old) != source(fresh) -> {:error, :wrong_owner}
-      fresh.issued <= old.issued or fresh.claims["nonce"] == old.claims["nonce"] -> {:error, :not_fresh}
-      fresh.deadline <= old.deadline -> {:error, :not_fresh}
-      true -> {:ok, fresh}
+      key(old) != key(fresh) or source(old) != source(fresh) ->
+        {:error, :wrong_owner}
+
+      fresh.issued <= old.issued or fresh.claims["nonce"] == old.claims["nonce"] ->
+        {:error, :not_fresh}
+
+      fresh.deadline <= old.deadline ->
+        {:error, :not_fresh}
+
+      true ->
+        {:ok, fresh}
     end
   end
 

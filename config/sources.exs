@@ -288,9 +288,9 @@ defmodule MedFabric.BuildSources do
 
     if app == :med_ex do
       contracts =
-        Path.wildcard(
-          Path.join(path, "{lib,core/*/lib,components/core/*/lib}/med_ex/contract.ex")
-        )
+        Enum.flat_map(["lib", "core/*/lib", "components/core/*/lib"], fn lib ->
+          Path.wildcard(Path.join([path, lib, "med_ex/contract.ex"]))
+        end)
 
       unless Enum.any?(
                contracts,

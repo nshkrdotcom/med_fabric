@@ -155,14 +155,16 @@ defmodule MedFabric.Acceptance.Oracle do
   def monitor!(directory, cfg, manifest) do
     root = Path.join([directory, "spool", cfg["acquisition"]])
     monitor = read(Path.join(root, "monitor.json"))
-    unknown = Enum.any?(manifest["facts"], &(&1["type"] == "command_outcome_unknown"))
+    [mutation] = Map.values(monitor["cache"])
 
     check!(
-      unknown and monitor["epoch"] == "1" and monitor["gain"] == "half",
-      "Unknown command readback differs"
+      monitor["epoch"] == "1" and monitor["gain"] == "half" and
+        Enum.any?(manifest["facts"], fn fact ->
+          fact["type"] == "command_applied" and fact["body"] == mutation["result"]
+        end),
+      "Committed monitor command differs from the exact persisted result"
     )
 
-    [mutation] = Map.values(monitor["cache"])
     changed = integer(mutation["result"]["application"]["first_sample"])
 
     {count, raw, expected} =
@@ -186,7 +188,6 @@ defmodule MedFabric.Acceptance.Oracle do
     check!(count == cfg["seconds"] * 48_000, "Incomplete monitor trace")
 
     %{
-      unknown_command_outcome_exercised: true,
       command_mutations: 1,
       monitor_checked_samples: count,
       monitor_trace_digest: Base.encode16(:crypto.hash_final(raw), case: :lower),

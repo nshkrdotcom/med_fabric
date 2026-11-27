@@ -1,5 +1,9 @@
+Code.require_file("support/fixtures.exs", __DIR__)
+
 defmodule MedFabric.Exam.DeviceRootLockTest do
   use ExUnit.Case, async: false
+
+  setup context, do: MedFabric.Exam.IntegrationFixtures.trusted_tmp(context)
 
   setup context do
     if dir = context[:tmp_dir], do: on_exit(fn -> File.rm_rf!(dir) end)
@@ -12,7 +16,6 @@ defmodule MedFabric.Exam.DeviceRootLockTest do
   @fixture Path.expand("support/device_root_owner.exs", __DIR__)
   @timeout 10_000
 
-  @tag :tmp_dir
   test "a contender is refused and replacement waits for actual owner VM death", %{tmp_dir: root} do
     first = launch(root, "write")
     [first_pid, helper_pid] = line(first, "ready")

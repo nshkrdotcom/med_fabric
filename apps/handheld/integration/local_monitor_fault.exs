@@ -6,7 +6,12 @@ root = Path.join(cfg["spool_root"], cfg["acquisition"])
 
 if cfg["local_monitor_fault"] == "startup" do
   File.mkdir_p!(root)
-  File.write!(Path.join(root, "namespace.json"), JSON.encode!(%{"schema" => "mf_handheld.spool", "revision" => 2}))
+
+  File.write!(
+    Path.join(root, "namespace.json"),
+    JSON.encode!(%{"schema" => "mf_handheld.spool", "revision" => 2})
+  )
+
   File.write!(Path.join(root, "monitor.json"), "{")
 end
 

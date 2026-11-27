@@ -46,7 +46,7 @@ defmodule MedFabric.Interop.NativeFHIRFixture do
   # Independent HTTP oracle; it does not call production reconcile/verify.
   def observations(ctx) do
     %{status: 200, body: bytes} = Req.get!(ctx.url <> "/Observation",
-      params: [identifier: ctx.identifier["system"] <> "|" <> ctx.identifier["value"], "_count": 20],
+      params: [identifier: ctx.identifier["system"] <> "|" <> ctx.identifier["value"], _count: 20],
       retry: false, decode_body: false, receive_timeout: 5_000)
     %{"resourceType" => "Bundle"} = bundle = JSON.decode!(bytes)
     if Enum.any?(bundle["link"] || [], &(&1["relation"] == "next")),

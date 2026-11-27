@@ -23,7 +23,12 @@ defmodule MedFabric.ExamWeb.Endpoint do
     longpoll: false
   )
 
-  plug(Plug.Static, at: "/assets", from: :mf_exam, only: ~w(exam.js acquisition.js acquisition_worklet.js))
+  plug(Plug.Static,
+    at: "/assets",
+    from: :mf_exam,
+    only: ~w(exam.js acquisition.js acquisition_worklet.js)
+  )
+
   plug(Plug.Static, at: "/assets", from: {:phoenix, "priv/static"}, only: ~w(phoenix.mjs))
 
   plug(Plug.Static,
@@ -31,7 +36,6 @@ defmodule MedFabric.ExamWeb.Endpoint do
     from: {:phoenix_live_view, "priv/static"},
     only: ~w(phoenix_live_view.esm.js)
   )
-
 
   plug(Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
@@ -43,5 +47,4 @@ defmodule MedFabric.ExamWeb.Endpoint do
 
   plug(Plug.Session, @session_options)
   plug(MedFabric.ExamWeb.Router)
-
 end
