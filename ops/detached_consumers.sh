@@ -55,7 +55,10 @@ MIX
 end
 MIX
         } > "$consumer/mix.exs"
-        printf 'import Config\n' > "$consumer/config/config.exs"
+        cat > "$consumer/config/config.exs" <<'CONFIG'
+import Config
+config :logger, level: :info
+CONFIG
 
         (
             cd "$consumer"
@@ -73,7 +76,7 @@ MIX
                 test -f "deps/mf_$app/config/runtime.exs" || {
                     printf 'Missing installed %s runtime configuration.\n' "$app" >&2; exit 1;
                 }
-                printf 'import Config\nimport_config "../deps/mf_%s/config/config.exs"\n' "$app" > config/config.exs
+                printf 'import Config\nimport_config "../deps/mf_%s/config/config.exs"\nconfig :logger, level: :info\n' "$app" > config/config.exs
                 # Weld's runtime entry evaluates files relative to __DIR__.
                 # Preserve its entire installed config tree for both mix run
                 # and the assembled release's runtime.exs location.

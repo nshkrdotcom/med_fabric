@@ -12,6 +12,7 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
     Barrier,
     ClockObservations,
     DeviceRootLock,
+    PersistedFrame,
     PreviewGateway
   }
 
@@ -66,20 +67,19 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
 
   def handle_in({raw, [opcode: :binary]}, %{writer: writer} = s)
       when is_pid(writer) and byte_size(raw) <= 65_584 do
-    case FrameV1.decode(raw) do
-      {:ok, frame} ->
-        operation = %{
-          id: "frame-#{frame.sequence}-#{frame.first_sample}",
-          fingerprint: S.hash(raw),
-          bytes: byte_size(raw),
-          sequence: frame.sequence + 1,
-          sample: frame.first_sample + frame.sample_count
-        }
+    with {:ok, frame} <- FrameV1.decode(raw),
+         true <- PersistedFrame.valid?(frame) do
+      operation = %{
+        id: "frame-#{frame.sequence}-#{frame.first_sample}",
+        fingerprint: S.hash(raw),
+        bytes: byte_size(raw),
+        sequence: frame.sequence + 1,
+        sample: frame.first_sample + frame.sample_count
+      }
 
-        record(s, operation, {:frame, raw}, byte_size(frame.payload))
-
-      _ ->
-        denied(s)
+      record(s, operation, {:frame, raw}, byte_size(frame.payload))
+    else
+      _ -> denied(s)
     end
   catch
     :exit, _ -> denied(s)
@@ -213,7 +213,8 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
   end
 
   defp dispatch("gap", msg, %{writer: writer} = s, raw) when is_pid(writer) do
-    with {:ok, sequence} <- Review.counter(msg["next_sequence"]),
+    with true <- msg["operation_id"] == "gap-" <> msg["id"],
+         {:ok, sequence} <- Review.counter(msg["next_sequence"]),
          {:ok, sample} <- Review.counter(msg["end"]) do
       fields = Map.take(msg, @gap_keys)
 

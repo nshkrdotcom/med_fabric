@@ -4,6 +4,7 @@ defmodule MedFabric.Preview.Application do
   alias MedEx.RTC.Provider
 
   def start(_, _) do
+    :ok = MedFabric.Preview.LogPrivacy.install()
     with {:ok, config} <- validate_config(Application.get_env(:mf_preview, :listen)) do
       Supervisor.start_link(
         [

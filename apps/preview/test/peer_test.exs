@@ -1,9 +1,47 @@
 defmodule MedFabric.Preview.PeerTest do
   use ExUnit.Case, async: false
+  import ExUnit.CaptureLog
   alias ExWebRTC.{PeerConnection, SessionDescription}
   alias MedEx.Wire.FrameV1
   alias MedFabric.Preview.{Capability, Feed, Peer}
   @secret "synthetic-preview-test-credential-32"
+
+  test "failed negotiation keeps the host log private and releases native resources" do
+    {:ok, config} = MedFabric.Preview.Application.validate_config(Application.fetch_env!(:mf_preview, :listen))
+    grant = grant()
+    secret = "synthetic-sdp-secret-7b55019b"
+    before_peers = MapSet.new(PeerConnection.get_all_running())
+    before_ports = MapSet.new(Port.list())
+
+    log = capture_log(fn ->
+      offer = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=" <> secret <>
+        "\r\nt=0 0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\nc=IN IP4 0.0.0.0\r\na=recvonly\r\na=rtpmap:111 opus/48000/2\r\n"
+
+      # This passes the provider's shape check and fails negotiation after a
+      # real PeerConnection exists (missing required ICE/DTLS attributes).
+      assert {:error, :negotiation_failed} =
+               Peer.action(grant, "offer", %{"sdp" => offer}, config)
+      Logger.flush()
+    end)
+
+    eventually(fn -> MapSet.new(PeerConnection.get_all_running()) == before_peers end)
+    eventually(fn -> MapSet.new(Port.list()) == before_ports end)
+    refute log =~ secret
+    refute log =~ "candidate:"
+    refute log =~ "v=0"
+  end
+
+  test "expired peer startup is a quiet structured refusal with no owner link" do
+    grant = %{grant() | deadline: System.monotonic_time(:millisecond) - 1}
+    {:links, before_links} = Process.info(self(), :links)
+
+    log = capture_log(fn ->
+      assert {:error, :expired_authority} = Peer.start_link(%{grant: grant, ticket: make_ref(), config: []})
+    end)
+
+    assert {:links, ^before_links} = Process.info(self(), :links)
+    refute log =~ "crasher"
+  end
 
   test "real PCM encoder and independent receiver preserve emitted sequence and dropped sample time" do
     {receiver, peer, grant, config} = connect()

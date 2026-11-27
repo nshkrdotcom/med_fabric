@@ -32,7 +32,16 @@ defmodule MedFabric.Domain.MixProject do
       source_url: @source_url,
       homepage_url: @source_url,
       dialyzer: [plt_add_apps: [:mix]],
-      aliases: [quality: ["credo --strict", "dialyzer"]],
+      aliases: [
+        quality: [
+          "format --check-formatted",
+          "compile --warnings-as-errors",
+          "cmd env MIX_ENV=test mix test --warnings-as-errors",
+          "credo --strict",
+          "dialyzer",
+          "docs --warnings-as-errors"
+        ]
+      ],
       deps: deps,
       docs: docs(),
       package: package()

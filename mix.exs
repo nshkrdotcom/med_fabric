@@ -1,3 +1,5 @@
+Code.require_file("build_support/workspace.exs", __DIR__)
+
 defmodule MedFabric.Workspace.MixProject do
   use Mix.Project
 
@@ -9,38 +11,15 @@ defmodule MedFabric.Workspace.MixProject do
       name: "Med Fabric",
       docs: docs(),
       deps: [
-        {:blitz, "~> 0.4.1", runtime: false},
+        {:blitz, "0.4.1", only: [:dev, :test], runtime: false},
         {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-        {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
         {:ex_doc, "~> 0.40", only: :dev, runtime: false}
       ],
-      dialyzer: [plt_add_apps: [:mix, :blitz]],
-      aliases: [
-        setup: ["blitz.workspace deps_get --"],
-        test: ["blitz.workspace test --"],
-        quality: ["blitz.workspace quality --"]
-      ],
-      blitz_workspace: [
-        root: __DIR__,
-        projects: ~w(core/domain core/store core/interop apps/exam apps/handheld apps/preview),
-        isolation: [deps_path: false, build_path: false, lockfile: false],
-        parallelism: [
-          multiplier: :auto,
-          base: [
-            deps_get: 4,
-            test: 4,
-            quality: 4
-          ],
-          overrides: []
-        ],
-        tasks: [
-          deps_get: [args: ["deps.get"], preflight?: false],
-          test: [args: ["test"], mix_env: :test],
-          quality: [args: ["quality"], mix_env: :dev]
-        ]
-      ]
+      aliases: MedFabric.Build.Workspace.aliases()
     ]
   end
+
+  def cli, do: [preferred_envs: [setup: :dev, test: :dev, credo: :dev, dialyzer: :dev, quality: :dev, docs: :dev]]
 
   defp docs do
     guides =

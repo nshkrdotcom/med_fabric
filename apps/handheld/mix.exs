@@ -24,8 +24,10 @@ defmodule MedExHandheld.MixProject do
         quality: [
           "format --check-formatted",
           "compile --warnings-as-errors",
+          "cmd env MIX_ENV=test mix test --warnings-as-errors",
           "credo --strict",
-          "dialyzer"
+          "dialyzer",
+          "docs --warnings-as-errors"
         ]
       ],
       deps: deps,

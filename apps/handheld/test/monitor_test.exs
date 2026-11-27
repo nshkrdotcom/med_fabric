@@ -2,9 +2,11 @@ defmodule MedExHandheld.MonitorTest do
   use ExUnit.Case, async: true
   alias MedEx.Wire.FrameV1
   alias MedExHandheld.Monitor
-  @moduletag :tmp_dir
-
-  setup %{tmp_dir: dir} do
+  setup do
+    dir = Path.join(System.tmp_dir!(), "mf-monitor-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false))
+    File.mkdir!(dir)
+    File.chmod!(dir, 0o700)
+    on_exit(fn -> File.rm_rf!(dir) end)
     table = :ets.new(:monitor_test, [:set, :public])
     :ets.insert(table, {:authority, test_binding(), System.monotonic_time(:millisecond) + 60_000})
     {:ok, root: dir, table: table}

@@ -1,5 +1,7 @@
 import Config
 
+config :logger, level: :info
+
 if config_env() == :test do
   config :mf_preview, :listen,
     port: 0,

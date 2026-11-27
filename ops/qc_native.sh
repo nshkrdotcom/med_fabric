@@ -5,10 +5,12 @@ usage() {
   echo 'Usage: ops/qc_native.sh [--suite all|paired|soak] [--preview off|isolated] [--evidence NEW_DIR]'
   echo '       [--volume EXISTING_EXT4_DIR] [--artifacts MANIFEST.json] [--seconds N] [--keep-failure]'
   echo '       [--med-ex-project PROJECT_OR_V2_BUNDLE_OR_CURRENT] (short source diagnostics only)'
+  echo '       [--preflight] (check exact release inputs/tools without starting services)'
   echo 'Soak defaults to 29 minutes. Use --suite soak --seconds 60 for a short diagnostic.'
   echo 'Default runs use locked Hex packages; candidate projects require --med-ex-project.'
 }
 suite=all
+preflight=false
 seconds=
 volume=
 candidate=
@@ -20,6 +22,7 @@ keep=0
 while (( $# )); do
   case "$1" in
     --help) usage; exit 0 ;;
+    --preflight) preflight=true; shift ;;
     --keep-failure) options=(--keep-failure); keep=1; shift ;;
     --evidence|--suite|--volume|--med-ex-project|--seconds|--preview|--artifacts)
       [[ $# -ge 2 && -n "$2" ]] || { usage >&2; exit 2; }
@@ -66,6 +69,13 @@ if [[ "$suite" == all || ( "$suite" == soak && "$seconds" == 1740 ) ]]; then
 fi
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 [[ ! -e .mix_sources.json && ! -L .mix_sources.json ]] || { echo 'Use an unselected checkout.' >&2; exit 2; }
+if "$preflight"; then
+  exec ./ops/qc_preflight.sh "$suite" "${preview_mode:-isolated}" "$artifacts" "$volume"
+fi
+if [[ "$suite" == all ]]; then
+  source build_support/receipt_fixture.sh
+  medex_receipt_fixture "$PWD/../med_ex/core/med_core/test/fixtures/receipt_vectors_v2.json"
+fi
 if [[ "$suite" != all ]]; then
   if [[ -z "$volume" ]]; then
     volume="$PWD/_build"
@@ -178,6 +188,8 @@ if [[ "$suite" != all ]]; then
   exit 0
 fi
 
+printf 'Receipt corpus SHA-256: %s\n' "$(sha256sum "$MEDEX_RECEIPT_VECTORS" | cut -d' ' -f1)"
+
 for project in core/store core/interop; do
   (cd "$project" && MIX_ENV=test mix deps.get --check-locked)
 done
@@ -196,7 +208,7 @@ elixir ops/handheld/process_lab_test.exs
 elixir ops/handheld/soak_test.exs
 ops/qc_services.sh run "${options[@]}" -- bash -euc '
   evidence=$1
-  (cd apps/exam && mix test integration/{device_review,device_root_lock,preview_isolation}_test.exs)
+  (cd apps/exam && mix test integration/{device_review,device_root_lock,preview_isolation,outbox,ingress_bounds,background_isolation}_test.exs --warnings-as-errors)
   timeout --signal=TERM --kill-after=30s 1600s elixir ops/handheld_acceptance.exs \
     --suite all --preview isolated --fhir hapi --report "$evidence/native.json" "${@:2}"
   jq -e -f ops/verify_native_report.jq "$evidence/native.json"

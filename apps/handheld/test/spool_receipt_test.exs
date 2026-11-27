@@ -81,6 +81,37 @@ defmodule MedExHandheld.SpoolReceiptTest do
     assert :ok = Spool.ack(c.spool, "audio", initial["binding"], receipt(c.spec, 1, 5, 3))
   end
 
+  test "spool gap IDs leave room for the canonical wire operation prefix", c do
+    for size <- [92, 93, 96] do
+      gap = %{
+        "id" => String.duplicate("a", size), "irreversible" => true, "cause" => "source_loss",
+        "first" => "0", "end" => "4", "first_sequence" => "0", "next_sequence" => "0"
+      }
+      raw = MedEx.CanonicalJSON.encode(gap)
+      result = MedExHandheld.Spool.Plan.record(raw, c.spec)
+
+      if size == 92 do
+        assert {:ok, metadata} = result
+        assert metadata.id == "gap-" <> gap["id"]
+        assert byte_size(metadata.id) == 96
+        assert metadata.fingerprint == MedEx.Serialization.sha256(raw)
+      else
+        assert {:error, :invalid_source_gap} = result
+      end
+    end
+  end
+
+  test "hybrid durable activation never reclaims retained source bytes", c do
+    put(c, 0, 0)
+    valid = reply(receipt(c.spec, 1, 1, 2), 1, "current")
+
+    for fields <- [%{"event_id" => "event"}, %{"fingerprint" => String.duplicate("a", 64)}, %{"event_id" => nil}] do
+      assert {:error, :invalid_activation} = Spool.activate(c.spool, "audio", c.spec, Map.merge(valid, fields))
+      assert {:ok, _} = Spool.get(c.spool, "audio", {0, 0})
+      refute File.exists?(Path.join([c.root, "audio", "ack.json"]))
+    end
+  end
+
   test "foreign identity same-generation conflict rollback and missing handoff preserve bytes",
        c do
     for n <- 0..3, do: put(c, n, n)

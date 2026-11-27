@@ -39,11 +39,48 @@ server signaling cannot forcibly stop established direct P2P media.
 
 ## Development
 
-Use the pinned `.tool-versions` and Elixir ~> 1.20. Root Blitz orchestration covers
-all three private core projects and all three apps, including Preview. Run each
-project's formatter, warning-free compile, tests, Credo, Dialyzer and ExDoc in its
-actual dependency context. Native browser/PostgreSQL/HAPI/Opus/RTC and detached
-release tests are explicit additional lanes.
+The six application targets are `core/domain`, `core/store`, `core/interop`,
+`apps/exam`, `apps/handheld` and `apps/preview`. The root remains an empty
+coordinator: it contributes genuine tooling lint/tests and overview docs to
+quality, but is never a Dialyzer target. `tools/maintainer` remains a private
+compile boundary. A test path requires explicit `--project`; root-relative
+paths are never broadcast into six unrelated projects.
+
+## Root command contract
+
+Both repositories expose the following source-development commands. They use
+released Blitz 0.4.1 with at most two concurrent project processes by default;
+`--jobs 1` through `--jobs 4` select the bound. `ERL_FLAGS` defaults to `+S 4:4`.
+These are repository wrapper options, not guessed Blitz task passthrough syntax.
+
+| Command | Default behavior |
+|---|---|
+| `mix setup` | Fetch genuine root tooling first, then each real project's dev/test/prod dependencies; no upgrade-all. |
+| `mix test` | Run all ordinary application suites once, with test compilation and warnings as errors. |
+| `mix credo` | Strict Credo in every real application, with exact nonempty source-inventory comparison. |
+| `mix dialyzer` | Analyze each real application's nonempty own BEAM inventory using its existing PLT context. |
+| `mix quality` | Format, warning-free dev/test compile, ordinary tests, strict Credo, Dialyzer and docs; include private boundary/root tooling checks. |
+| `mix docs` | Build root overview and application documentation with warnings as errors. |
+
+Use `mix setup --locked` only after real locks are resolved; it adds
+`deps.get --check-locked`. `mix quality --release` adds warning-free production
+compilation. `mix quality --project PATH` repeats only an affected project;
+`mix test --project PATH -- test/file_test.exs:42 --seed 0 --max-cases 2` forwards
+native test arguments to that project. Native leaf commands remain available
+from the leaf directory. Quality/setup reject stray arguments. Root Credo is
+always strict; use a native leaf task for deliberately focused lint.
+
+Each project owns its dependency, build, lock and PLT paths. Unset inherited
+`MIX_EXS`, `MIX_BUILD_PATH`, `MIX_BUILD_ROOT`, `MIX_DEPS_PATH` and `MIX_LOCKFILE`.
+The root runner invokes native tasks without recursive aliases; startup tests
+exercise fetched-but-uncompiled dependencies and real Blitz failure propagation.
+A missing expected suite, empty BEAM set or incomplete Credo inventory fails.
+Cold PLTs can be slow; valid PLTs are not forcibly rebuilt. Root commands do not
+start PostgreSQL, HAPI, TURN, browsers, physical ENOSPC or long capture runs.
+
+The implementation environment lacked Elixir/Mix. The command contract and new
+Elixir regressions require real workstation compilation and execution before
+release; no source documentation asserts an unobserved passing gate.
 
 `.mix_sources.json` is the sole development source selector. Choose trusted paths,
 exact Git refs or ordinary/signed registry packages for the three upstream SDK

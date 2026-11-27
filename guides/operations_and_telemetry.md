@@ -46,5 +46,60 @@ remote body. Observe pending frames/bytes, spool peak, mailbox/queue peaks,
 checkpoint/ACK latency, recovery time, native process cleanup and actual reclaim
 work. Keep source identity and exact archive checksums in qualification evidence.
 
+Exam and Preview default to Logger `:info`; the Exam test configuration retains
+its warning threshold. Installed executable consumers must import the package
+configuration or set the same defaults themselves. Phoenix filters credentials,
+session/lease/creation tokens and clinical/media fields. Store does not install a
+query logger callback. Host-owned primary filters redact messages and arbitrary
+metadata from the database, HTTP and media dependency namespaces, retaining the
+original severity, a fixed category and a safe originating MFA when available.
+They also redact OTP crash reports identified with those dependencies or clinical
+host/SDK processes; unrelated OTP reports and fixed host diagnostics remain
+visible. Installation is idempotent across host restarts. The filters remain
+installed for shutdown reporting for the lifetime of that VM.
+Runtime configuration is evaluated before these filters exist; malformed Exam
+configuration therefore raises fixed categories without echoing JSON fragments,
+credential paths, encounter bodies or invalid URL values. Delayed OTP crash
+reports retain their ownership classification through the standard own-process
+and neighbour report fields even after the originating PID exits.
+
+The pinned `ex_webrtc 0.18.0` source includes warning paths that inspect transport
+exit reasons and RTCP packets; an info threshold alone therefore cannot implement
+this policy. See its [PeerConnection source](https://hex.pm/packages/ex_webrtc/0.18.0/files/lib/ex_webrtc/peer_connection.ex)
+and the documented [Logger primary filter API](https://hexdocs.pm/logger/Logger.html#module-filtering).
+This is a bounded policy for known Logger/OTP paths, not a guarantee about arbitrary
+third-party direct stdout/stderr writes or newly introduced namespaces. Run the
+secret-sentinel startup, SQL-fault and native failed-negotiation regressions in
+the actual source and installed executable hosts before qualification.
+
+Expiry and delivery workers, plus the optional Preview gateway, are siblings in
+a one-for-one background supervisor after Endpoint. A child fault leaves the
+other workers and admitted capture intact. Repeated fatal failures can still
+exhaust OTP restart intensity; predictable database/poll/item failures use fixed
+diagnostics and a bounded next poll. A failed delivery item defers its due time by
+five seconds without consuming an execution, changing its disposition or clearing
+a lease. Core database/schema/root/recovery failures retain the outer rest-for-one
+fence and restart dependent acquisition and Endpoint.
+
+An expired exact claim with only an immutable `claim/admitted` record can settle
+as `noncommitted/expired_before_send`; the token is fenced in the same transaction.
+Any committed send marker stays `unknown/claim_expired`, since an already admitted
+HTTP effect can arrive late. Earlier uncertain attempts still constrain retry and
+confirmation. Missing, mismatched or terminal current-claim history returns
+`invalid_claim_history`; the expired token remains unusable and no historical
+repair is made. This is a release-blocking corruption condition requiring a
+separately authorized reconciliation plan, not permission to backfill old data.
+
+Effective UID checks read the effective field of Linux `/proc/self/status` or use
+a bounded, trusted absolute POSIX `id -u` executable when procfs is unavailable.
+Identity resolution uses no VM-global cache. Every existing ownership boundary
+retains fresh path, UID, lock and retirement validation; root owners additionally
+pin device/inode identity so same-UID directory replacement cannot inherit a
+held lock. Handheld rechecks its owned root before spool operations. Root lock
+and flock requirements, unsupported platforms, and the ext4 qualification target
+remain explicit; this UID fallback alone does not make those facilities portable.
+Measure commit/recovery and full clean-soak performance on the final closure;
+these changes do not establish a performance improvement.
+
 See the release guide for approval and preservation prerequisites. No automatic
 evidence deletion or destructive downgrade is permitted.

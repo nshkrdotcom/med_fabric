@@ -97,9 +97,216 @@ defmodule MedFabric.Exam.OutboxIntegrationTest do
 
     assert {:ok, :unresolved} = Deliveries.expire_claim(c.db, id)
     assert {:ok, %{status: "unresolved", remote_ref: nil}} = Deliveries.get(c.db, id)
+    assert [_, _, [_, "result", "unknown", false, "claim_expired"]] = history(c, id)
+    assert {:ok, :current} = Deliveries.expire_claim(c.db, id)
+    assert length(history(c, id)) == 3
 
     assert {:error, :stale_attempt} =
              Deliveries.record_attempt_outcome(c.db, claim, {:noncommitted, :before_http})
+  end
+
+  test "claim-only expiry appends exact noncommit evidence and fences a late worker", %{tmp_dir: root} do
+    c = F.context(root)
+    id = intent(c, false)
+    {:ok, pinned} = Deliveries.get(c.db, id)
+    {:ok, claim} = Deliveries.claim_delivery(c.db, id)
+    assert {:ok, :current} = Deliveries.expire_claim(c.db, id)
+    assert length(history(c, id)) == 1
+
+    expire(c, id)
+    assert {:ok, :retryable} = Deliveries.expire_claim(c.db, id)
+    token = claim.token
+
+    assert [
+             [^token, "claim", "admitted", false, nil],
+             [^token, "result", "noncommitted", false, "expired_before_send"]
+           ] = history(c, id)
+
+    assert {:ok, %{status: "retryable", token: nil, proof: %{"safe_confirmation" => false}}} =
+             Deliveries.get(c.db, id)
+
+    assert {:ok, :current} = Deliveries.expire_claim(c.db, id)
+    assert length(history(c, id)) == 2
+    assert {:error, :stale_attempt} = Deliveries.before_dispatch(c.db, claim)
+
+    assert {:error, :stale_attempt} =
+             Deliveries.record_attempt_outcome(c.db, claim, {:matched, "Observation/late"})
+
+    assert {:ok, retry} = Deliveries.claim_delivery(c.db, id)
+    assert {:ok, :ok} = Deliveries.before_dispatch(c.db, retry)
+    assert {:error, :invalid_claim_history} = Deliveries.before_dispatch(c.db, retry)
+
+    assert {:ok, "confirmed"} =
+             Deliveries.record_attempt_outcome(c.db, retry, {:matched, "Observation/one"})
+
+    assert {:ok, after_retry} = Deliveries.get(c.db, id)
+    assert after_retry.resource_bytes == pinned.resource_bytes
+    assert after_retry.destination == pinned.destination
+    assert after_retry.qualification_ref == pinned.qualification_ref
+  end
+
+  test "qualified sent expiry remains unknown until legitimate reconciliation", %{tmp_dir: root} do
+    c = F.context(root)
+    id = intent(c, true)
+    {:ok, claim} = Deliveries.claim_delivery(c.db, id)
+    {:ok, :ok} = Deliveries.before_dispatch(c.db, claim)
+    expire(c, id)
+    assert {:ok, :unresolved} = Deliveries.expire_claim(c.db, id)
+    assert [_, _, [_, "result", "unknown", true, "claim_expired"]] = history(c, id)
+    assert {:ok, %{proof: %{"safe_confirmation" => false}}} = Deliveries.get(c.db, id)
+    assert {:ok, "confirmed"} = Deliveries.reconcile(c.db, id, {:matched, "Observation/one"})
+  end
+
+  test "missing, mismatched or terminal claim evidence is refused without historical repair", %{
+    tmp_dir: root
+  } do
+    c = F.context(root)
+    id = intent(c, false)
+    {:ok, claim} = Deliveries.claim_delivery(c.db, id)
+
+    for field <- ["attempt_id", "claim_token"] do
+      AcquisitionSessions.rows(c.db, "UPDATE outbox_deliveries SET " <> field <> "=$2 WHERE id=$1", [
+        id,
+        "corruption_fixture"
+      ])
+
+      expire(c, id)
+      assert {:error, :invalid_claim_history} = Deliveries.expire_claim(c.db, id)
+      assert length(history(c, id)) == 1
+      assert {:error, :stale_attempt} = Deliveries.before_dispatch(c.db, claim)
+
+      AcquisitionSessions.rows(
+        c.db,
+        "UPDATE outbox_deliveries SET attempt_id=$2,claim_token=$3 WHERE id=$1",
+        [id, claim.attempt_id, claim.token]
+      )
+    end
+
+    AcquisitionSessions.rows(
+      c.db,
+      "INSERT INTO delivery_attempts(delivery_id,attempt_id,token,stage,outcome,conditional_protected) VALUES($1,$2,$3,'result','unknown',false)",
+      [id, claim.attempt_id, claim.token]
+    )
+
+    assert {:error, :invalid_claim_history} = Deliveries.expire_claim(c.db, id)
+    assert [_, [_, "result", "unknown", false, nil]] = history(c, id)
+    assert {:error, :unsafe_dispatch} = Deliveries.claim_delivery(c.db, id)
+  end
+
+  test "claim-only settlement cannot erase an older unknown effect in a corruption fixture", %{
+    tmp_dir: root
+  } do
+    c = F.context(root)
+    id = intent(c, false)
+    {:ok, old} = Deliveries.claim_delivery(c.db, id)
+    {:ok, :ok} = Deliveries.before_dispatch(c.db, old)
+    {:ok, "unresolved"} = Deliveries.record_attempt_outcome(c.db, old, {:unknown, :timeout})
+
+    # This state cannot be admitted by claim_delivery/2: model an externally
+    # corrupted current claim without rewriting the retained old history.
+    AcquisitionSessions.rows(
+      c.db,
+      "UPDATE outbox_deliveries SET status='dispatching',attempt_id='corrupt_current',claim_token='corrupt_token',lease_until=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [id]
+    )
+
+    AcquisitionSessions.rows(
+      c.db,
+      "INSERT INTO delivery_attempts(delivery_id,attempt_id,token,stage,outcome,conditional_protected) VALUES($1,'corrupt_current','corrupt_token','claim','admitted',false)",
+      [id]
+    )
+
+    assert {:ok, :unresolved} = Deliveries.expire_claim(c.db, id)
+    assert {:ok, "unresolved"} = Deliveries.reconcile(c.db, id, {:matched, "Observation/one"})
+    assert {:error, :unsafe_dispatch} = Deliveries.claim_delivery(c.db, id)
+  end
+
+  test "claim-only retries preserve the five-delay scheduling cap", %{tmp_dir: root} do
+    c = F.context(root)
+    id = intent(c, false)
+
+    for _ <- 1..6 do
+      assert {:ok, _} = Deliveries.claim_delivery(c.db, id)
+      expire(c, id)
+      assert {:ok, :retryable} = Deliveries.expire_claim(c.db, id)
+    end
+
+    assert [[5, nil]] =
+             AcquisitionSessions.rows(c.db, "SELECT executions,next_due_at FROM outbox_deliveries WHERE id=$1", [id])
+    assert length(history(c, id)) == 12
+  end
+
+  test "expiry winning the row lock prevents a late dispatch from admitting HTTP", %{tmp_dir: root} do
+    c = F.context(root)
+    id = intent(c, false)
+    {:ok, claim} = Deliveries.claim_delivery(c.db, id)
+    expire(c, id)
+    parent = self()
+
+    expiry = Task.async(fn ->
+      Postgrex.transaction(c.db, fn tx ->
+        result = Deliveries.expire_claim(tx, id)
+        send(parent, {:expiry_fenced, result})
+        receive do
+          :commit -> result
+        end
+      end)
+    end)
+
+    assert_receive {:expiry_fenced, {:ok, :retryable}}, 5_000
+    sender = Task.async(fn ->
+      case Deliveries.before_dispatch(c.db, claim) do
+        {:ok, :ok} -> send(parent, :http_admitted)
+        error -> error
+      end
+    end)
+    send(expiry.pid, :commit)
+    assert {:ok, {:ok, :retryable}} = Task.await(expiry)
+    assert {:error, :stale_attempt} = Task.await(sender)
+    refute_received :http_admitted
+    assert [_, [_, "result", "noncommitted", false, "expired_before_send"]] = history(c, id)
+  end
+
+  test "a committed send winning the row lock remains a possible late HTTP effect", %{tmp_dir: root} do
+    c = F.context(root)
+    id = intent(c, false)
+    {:ok, claim} = Deliveries.claim_delivery(c.db, id)
+    parent = self()
+
+    sender = Task.async(fn ->
+      Postgrex.transaction(c.db, fn tx ->
+        assert {:ok, :ok} = Deliveries.before_dispatch(tx, claim)
+        expire(%{c | db: tx}, id)
+        send(parent, :send_recorded)
+        receive do
+          :commit -> :ok
+        end
+      end)
+    end)
+
+    assert_receive :send_recorded, 5_000
+    expiry = Task.async(fn -> Deliveries.expire_claim(c.db, id) end)
+    send(sender.pid, :commit)
+    assert {:ok, :ok} = Task.await(sender)
+    assert {:ok, :unresolved} = Task.await(expiry)
+    assert [_, _, [_, "result", "unknown", false, "claim_expired"]] = history(c, id)
+    assert {:ok, "unresolved"} = Deliveries.reconcile(c.db, id, {:matched, "Observation/one"})
+  end
+
+  defp expire(c, id) do
+    AcquisitionSessions.rows(
+      c.db,
+      "UPDATE outbox_deliveries SET lease_until=clock_timestamp()-interval '1 second' WHERE id=$1",
+      [id]
+    )
+  end
+
+  defp history(c, id) do
+    AcquisitionSessions.rows(
+      c.db,
+      "SELECT token,stage,outcome,conditional_protected,evidence_ref FROM delivery_attempts WHERE delivery_id=$1 ORDER BY ordinal",
+      [id]
+    )
   end
 
   test "qualified protection covers delayed effects and exact matching confirmation is terminal",

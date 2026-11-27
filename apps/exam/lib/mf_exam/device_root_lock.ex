@@ -2,10 +2,15 @@ defmodule MedFabric.Exam.DeviceRootLock do
   @moduledoc "Exclusive service-owned root, immutable deployment identity and local effect gates. Lock loss is fail-stop."
   use GenServer
   import Bitwise
+  alias MedFabric.Exam.EffectiveUID
   alias MedFabric.Store.AcquisitionSessions
 
-  def start_link(opts),
-    do: GenServer.start_link(__MODULE__, opts, name: Keyword.fetch!(opts, :name))
+  def start_link(opts) do
+    case GenServer.start_link(__MODULE__, {self(), opts}, name: Keyword.fetch!(opts, :name)) do
+      {:error, {:shutdown, reason}} -> {:error, reason}
+      result -> result
+    end
+  end
 
   def gate(pid, key), do: GenServer.call(pid, {:gate, key}, 5_000)
   def release(pid, key), do: GenServer.call(pid, {:release, key}, 5_000)
@@ -22,14 +27,27 @@ defmodule MedFabric.Exam.DeviceRootLock do
   def invalidate_connection(pid, key),
     do: GenServer.call(pid, {:invalidate_connection, key}, 5_000)
 
-  def init(opts) do
+  def init({caller, opts}) do
+    case initialize(opts) do
+      {:stop, reason} ->
+        Process.unlink(caller)
+        {:stop, {:shutdown, reason}}
+
+      success ->
+        success
+    end
+  end
+
+  defp initialize(opts) do
     root = Path.expand(Keyword.fetch!(opts, :root))
     uuid = Keyword.fetch!(opts, :deployment_uuid)
     existed = File.exists?(root)
 
-    with :ok <- File.mkdir_p(root),
+    with {:ok, uid} <- EffectiveUID.resolve(),
+         :ok <- File.mkdir_p(root),
          :ok <- if(existed, do: :ok, else: File.chmod(root, 0o700)),
-         :ok <- trusted_path(root),
+         :ok <- trusted_path(root, uid),
+         {:ok, root_identity} <- root_identity(root),
          :ok <- identity(root, uuid),
          executable when is_binary(executable) <- System.find_executable("flock") do
       path = Path.join(root, "capture-service.lock")
@@ -48,8 +66,15 @@ defmodule MedFabric.Exam.DeviceRootLock do
 
       receive do
         {^port, {:data, "locked\n"}} ->
-          {:ok,
-           %{root: root, uuid: uuid, port: port, token: make_ref(), gates: %{}, connections: %{}}}
+          if EffectiveUID.resolve() == {:ok, uid} and
+               root_identity(root) == {:ok, root_identity} and trusted_path(root, uid) == :ok do
+            {:ok,
+             %{root: root, uuid: uuid, uid: uid, root_identity: root_identity,
+               port: port, token: make_ref(), gates: %{}, connections: %{}}}
+          else
+            if Port.info(port), do: Port.close(port)
+            {:stop, :untrusted_artifact_root}
+          end
 
         {^port, {:exit_status, _}} ->
           {:stop, :artifact_root_in_use}
@@ -67,7 +92,8 @@ defmodule MedFabric.Exam.DeviceRootLock do
   def handle_call({:med_ex_root_ownership, path}, _, s) do
     inside = Path.expand(path) == s.root or String.starts_with?(Path.expand(path), s.root <> "/")
 
-    if inside and Port.info(s.port) != nil and trusted_path(s.root) == :ok,
+    if inside and Port.info(s.port) != nil and EffectiveUID.resolve() == {:ok, s.uid} and
+         root_identity(s.root) == {:ok, s.root_identity} and trusted_path(s.root, s.uid) == :ok,
       do: {:reply, {:ok, %{root: s.root, token: s.token}}, s},
       else: {:reply, {:error, :root_ownership_lost}, s}
   end
@@ -214,13 +240,27 @@ defmodule MedFabric.Exam.DeviceRootLock do
   end
 
   def trusted_path(path) do
-    {:ok, %{uid: uid}} = File.stat("/proc/self")
+    with {:ok, uid} <- EffectiveUID.resolve() do
+      trusted_path(path, uid)
+    else
+      _ -> {:error, :untrusted_artifact_root}
+    end
+  end
+
+  defp trusted_path(path, uid) do
     components = Path.split(Path.expand(path))
     paths = Enum.scan(components, &Path.join(&2, &1))
 
     if Enum.all?(paths, &trusted_component?(&1, Path.expand(path), uid)),
       do: :ok,
       else: {:error, :untrusted_artifact_root}
+  end
+
+  defp root_identity(path) do
+    case File.lstat(path) do
+      {:ok, %{type: :directory, major_device: device, inode: inode}} -> {:ok, {device, inode}}
+      _ -> {:error, :untrusted_artifact_root}
+    end
   end
 
   defp trusted_component?(p, path, uid) do

@@ -24,8 +24,10 @@ defmodule MedFabric.Preview.MixProject do
         quality: [
           "format --check-formatted",
           "compile --warnings-as-errors",
+          "cmd env MIX_ENV=test mix test --warnings-as-errors",
           "credo --strict",
-          "dialyzer"
+          "dialyzer",
+          "docs --warnings-as-errors"
         ]
       ],
       deps: deps,
@@ -116,7 +118,9 @@ defmodule MedFabric.Preview.MixProject do
           MedFabric.Preview.Endpoint
         ],
         "Media & Signaling": [
-          MedFabric.Preview.Peer
+          MedFabric.Preview.Peer,
+          MedFabric.Preview.Capability,
+          MedFabric.Preview.Timeline
         ]
       ]
     ]

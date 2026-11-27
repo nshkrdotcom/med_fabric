@@ -1,5 +1,7 @@
 import Config
 
+config :logger, level: :info
+
 if config_env() != :test do
   path = System.get_env("MF_PREVIEW_CONFIG") || "/etc/med_fabric/preview.json"
 

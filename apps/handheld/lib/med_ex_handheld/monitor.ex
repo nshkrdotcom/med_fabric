@@ -7,7 +7,12 @@ defmodule MedExHandheld.Monitor do
   @cache_limit 4096
   @result_keys ~w(id fingerprint boot target generation expected_epoch gain status epoch application reason)
 
-  def start_link(opts), do: GenServer.start_link(__MODULE__, {self(), opts})
+  def start_link(opts) do
+    case GenServer.start_link(__MODULE__, {self(), opts}) do
+      {:error, {:shutdown, reason}} -> {:error, reason}
+      result -> result
+    end
+  end
 
   def offer(pid, table, batch) when is_pid(pid) and is_list(batch) and length(batch) <= 5 do
     if Process.alive?(pid) and
@@ -46,17 +51,17 @@ defmodule MedExHandheld.Monitor do
 
   def init({caller, opts}) do
     case initialize(opts) do
-      {:stop, _} = failure ->
+      {:stop, reason} ->
         Process.unlink(caller)
-        failure
+        {:stop, {:shutdown, reason}}
 
       success ->
         success
     end
   end
 
-  defp initialize({config, boot, table}) when is_map(config) and is_binary(boot) do
-    file = Path.join(config["spool"], "monitor.json")
+  defp initialize({%{"spool" => root} = config, boot, table}) when is_binary(root) and is_binary(boot) do
+    file = Path.join(root, "monitor.json")
 
     case load_ledger(file, boot) do
       {:ok, ledger} ->

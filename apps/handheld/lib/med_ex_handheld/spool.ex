@@ -4,11 +4,18 @@ defmodule MedExHandheld.Spool do
   import Bitwise, only: [band: 2]
   alias MedEx.{Receipt, Serialization, StreamCursor, StreamSpec}
   alias MedEx.Wire.Control
+  alias MedExHandheld.EffectiveUID
   alias MedExHandheld.Spool.Plan
   @namespace %{"schema" => "mf_handheld.spool", "revision" => 2}
   @max_records 100_000
 
-  def start_link(opts), do: GenServer.start_link(__MODULE__, {self(), opts})
+  def start_link(opts) do
+    case GenServer.start_link(__MODULE__, {self(), opts}) do
+      {:error, {:shutdown, reason}} -> {:error, reason}
+      result -> result
+    end
+  end
+
   def register(pid, spec), do: GenServer.call(pid, {:register, spec}, 30_000)
 
   def put(pid, "events", sequence, bytes),
@@ -46,9 +53,9 @@ defmodule MedExHandheld.Spool do
 
   def init({caller, opts}) do
     case initialize(opts) do
-      {:stop, _} = failure ->
+      {:stop, reason} ->
         Process.unlink(caller)
-        failure
+        {:stop, {:shutdown, reason}}
 
       success ->
         success
@@ -59,9 +66,23 @@ defmodule MedExHandheld.Spool do
     with root when is_binary(root) <- opts[:root],
          limit when is_integer(limit) and limit > 0 and limit <= 536_870_912 <-
            opts[:limit] || 67_108_864,
-         :ok <- prepare_root(root),
+         {:ok, uid} <- EffectiveUID.resolve(),
+         :ok <- prepare_root(root, uid),
+         {:ok, %{major_device: device, inode: inode}} <- File.lstat(root),
          {:ok, owner} <- lock(root) do
-      case initialize(root, limit, owner) do
+      ownership = %{
+        root: Path.expand(root),
+        root_identity: {device, inode},
+        owner: owner,
+        uid: uid
+      }
+
+      result =
+        if owned_root?(ownership),
+          do: initialize(ownership, limit),
+          else: {:error, :unsafe_spool_root}
+
+      case result do
         {:ok, state} ->
           {:ok, state}
 
@@ -75,7 +96,27 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  def handle_call({:register, %StreamSpec{stream_id: name} = spec}, _, state)
+  def handle_call(request, from, state) do
+    if owned_root?(state),
+      do: handle_owned_call(request, from, state),
+      else: {:stop, :normal, {:error, :unsafe_spool_root}, state}
+  end
+
+  defp owned_root?(state) do
+    with true <- Port.info(state.owner) != nil,
+         {:ok, uid} <- EffectiveUID.resolve(),
+         true <- uid == state.uid,
+         {:ok, %{type: :directory, uid: ^uid, mode: mode, major_device: device, inode: inode}} <-
+           File.lstat(state.root),
+         true <- band(mode, 0o022) == 0 and {device, inode} == state.root_identity,
+         :ok <- trusted_ancestors(state.root, uid) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  defp handle_owned_call({:register, %StreamSpec{stream_id: name} = spec}, _, state)
       when name in ["audio", "ecg"] do
     case register_stream(state, spec) do
       {:ok, stream} -> {:reply, :ok, %{state | streams: Map.put(state.streams, name, stream)}}
@@ -83,9 +124,9 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  def handle_call({:register, _}, _, state), do: {:reply, {:error, :invalid_stream}, state}
+  defp handle_owned_call({:register, _}, _, state), do: {:reply, {:error, :invalid_stream}, state}
 
-  def handle_call({:batch, root, name, items}, _, state)
+  defp handle_owned_call({:batch, root, name, items}, _, state)
       when is_list(items) and length(items) <= 5 do
     with true <- Path.expand(root) == state.root,
          {:ok, stream} <- Map.fetch(state.streams, name),
@@ -102,12 +143,12 @@ defmodule MedExHandheld.Spool do
       {:stop, :local_outcome_unknown, {:error, :outcome_unknown}, state}
   end
 
-  def handle_call({:batch, _, _, _}, _, state),
+  defp handle_owned_call({:batch, _, _, _}, _, state),
     do: {:reply, {:error, :invalid_source_batch}, state}
 
-  def handle_call({:watermark, name}, _, state), do: {:reply, mark(state.streams[name]), state}
+  defp handle_owned_call({:watermark, name}, _, state), do: {:reply, mark(state.streams[name]), state}
 
-  def handle_call({:persist_watermark, name}, _, state) do
+  defp handle_owned_call({:persist_watermark, name}, _, state) do
     case state.streams[name] do
       nil ->
         {:reply, {:error, :unknown_stream}, state}
@@ -118,7 +159,7 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  def handle_call({:finish_source, name, q, sample, interruption}, _, state) do
+  defp handle_owned_call({:finish_source, name, q, sample, interruption}, _, state) do
     case state.streams[name] do
       %{cursor: %{next_sequence: ^q, next_sample: ^sample}} = stream
       when is_nil(interruption) or is_binary(interruption) ->
@@ -136,17 +177,18 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  def handle_call({:get, name, key}, _, state) do
+  defp handle_owned_call({:get, name, key}, _, state) do
     case state.files[{name, key}] do
       nil -> {:reply, :absent, state}
       file -> {:reply, {:ok, read_record!(file.path)}, state}
     end
   end
 
-  def handle_call({:activate, name, spec, reply}, _, state) when is_map(reply) do
+  defp handle_owned_call({:activate, name, spec, reply}, _, state) when is_map(reply) do
     with {:ok, stream} <- Map.fetch(state.streams, name),
          true <- stream.spec == spec,
          true <- reply["type"] in ["durable", "stream_finished"],
+         false <- Map.has_key?(reply, "event_id") or Map.has_key?(reply, "fingerprint"),
          {:ok, receipt} <- Receipt.parse(reply["receipt"]),
          true <- Receipt.durable?(receipt),
          :ok <- binding_valid(reply["binding"], spec, receipt),
@@ -160,10 +202,10 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  def handle_call({:activate, _, _, _}, _, state),
+  defp handle_owned_call({:activate, _, _, _}, _, state),
     do: {:reply, {:error, :invalid_activation}, state}
 
-  def handle_call({:ack, name, binding, wire}, _, state) do
+  defp handle_owned_call({:ack, name, binding, wire}, _, state) do
     with ^binding <- state.active[name],
          true <- is_map(binding),
          {:ok, stream} <- Map.fetch(state.streams, name),
@@ -179,7 +221,7 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  def handle_call({:invalidate, binding}, _, state) do
+  defp handle_owned_call({:invalidate, binding}, _, state) do
     base? =
       is_map(binding) and
         Enum.sort(Map.keys(binding)) == Enum.sort(~w(acquisition profile generation connection))
@@ -200,7 +242,7 @@ defmodule MedExHandheld.Spool do
      }}
   end
 
-  def handle_call({:event, sequence, bytes}, _, state)
+  defp handle_owned_call({:event, sequence, bytes}, _, state)
       when is_integer(sequence) and sequence >= 0 and is_binary(bytes) and
              byte_size(bytes) <= 16_384 do
     key = {"events", sequence}
@@ -234,7 +276,7 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  def handle_call({:event_activate, binding}, _, state) do
+  defp handle_owned_call({:event_activate, binding}, _, state) do
     history = Path.join([state.root, "events", "binding.json"])
     identity = read_json(Path.join(state.root, "identity.json"), nil)
 
@@ -257,7 +299,7 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  def handle_call({:event_ack, binding, sequence, id, digest}, _, state) do
+  defp handle_owned_call({:event_ack, binding, sequence, id, digest}, _, state) do
     with true <- binding == state.events_binding and is_map(binding),
          {:ok, file} <- Map.fetch(state.files, {"events", sequence}),
          raw <- read_record!(file.path),
@@ -271,7 +313,7 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  def handle_call({:event_seal, binding, inventory}, _, state) do
+  defp handle_owned_call({:event_seal, binding, inventory}, _, state) do
     files = Enum.filter(state.files, fn {{name, _}, _} -> name == "events" end)
     seal_path = Path.join([state.root, "events", "seal.json"])
     saved = read_json(seal_path, nil)
@@ -296,12 +338,12 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  def handle_call(:stats, _, state),
+  defp handle_owned_call(:stats, _, state),
     do: {:reply, Map.take(state, [:bytes, :maximum, :limit, :reclamation_visits]), state}
 
-  def handle_call(_, _, state), do: {:reply, {:error, :invalid_spool_operation}, state}
+  defp handle_owned_call(_, _, state), do: {:reply, {:error, :invalid_spool_operation}, state}
 
-  defp initialize(root, limit, owner) do
+  defp initialize(%{root: root} = ownership, limit) do
     namespace = Path.join(root, "namespace.json")
 
     with :ok <- namespace(root, namespace),
@@ -313,9 +355,7 @@ defmodule MedExHandheld.Spool do
          {:ok, records, bytes} <- load_records(root),
          true <- map_size(records) <= @max_records and bytes <= limit do
       {:ok,
-       %{
-         root: Path.expand(root),
-         owner: owner,
+       Map.merge(ownership, %{
          limit: limit,
          bytes: bytes,
          maximum: bytes,
@@ -325,7 +365,7 @@ defmodule MedExHandheld.Spool do
          events_binding: nil,
          reclamation_visits: 0,
          needs_sweep: MapSet.new(["audio", "ecg"])
-       }}
+       })}
     else
       {:error, reason} -> {:error, reason}
       _ -> {:error, :invalid_spool_inventory}
@@ -334,12 +374,12 @@ defmodule MedExHandheld.Spool do
     _ in [File.Error, JSON.DecodeError, ArgumentError, MatchError] -> {:error, :corrupt_spool}
   end
 
-  defp prepare_root(root) do
+  defp prepare_root(root, uid) do
     with true <- Path.type(root) == :absolute,
-         :ok <- trusted_ancestors(root),
+         :ok <- trusted_ancestors(root, uid),
          :ok <- File.mkdir_p(root),
          {:ok, stat} <- File.lstat(root),
-         true <- stat.type == :directory,
+         true <- stat.type == :directory and stat.uid == uid,
          :ok <- File.chmod(root, 0o700) do
       :ok
     else
@@ -347,9 +387,7 @@ defmodule MedExHandheld.Spool do
     end
   end
 
-  defp trusted_ancestors(root) do
-    {uid_text, 0} = System.cmd("id", ["-u"])
-    uid = String.to_integer(String.trim(uid_text))
+  defp trusted_ancestors(root, uid) do
     paths = Path.expand(root) |> Path.split() |> Enum.scan(&Path.join(&2, &1))
 
     Enum.reduce_while(paths, :ok, fn path, :ok ->

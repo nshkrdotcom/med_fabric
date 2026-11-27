@@ -11,7 +11,8 @@ defmodule MedFabric.Exam.AcquisitionIngress do
     AcquisitionManifest,
     AcquisitionWorkflow,
     Barrier,
-    DeviceRootLock
+    DeviceRootLock,
+    PersistedFrame
   }
 
   alias MedFabric.Store.AcquisitionSessions, as: S
@@ -123,7 +124,10 @@ defmodule MedFabric.Exam.AcquisitionIngress do
   end
 
   def handle_call(op, {socket, _}, %{socket: socket, writer: writer} = s) when is_pid(writer) do
-    result = protected(s, op)
+    result =
+      with {:ok, operation} <- validate_operation(op) do
+        protected(s, operation)
+      end
 
     case result do
       {:ok, %{receipt: receipt} = value} ->
@@ -256,8 +260,22 @@ defmodule MedFabric.Exam.AcquisitionIngress do
   defp flatten_result({:ok, {:error, _} = error}), do: error
   defp flatten_result(result), do: result
 
-  defp effect(s, {:frame, raw}) do
-    with {:ok, f} <- FrameV1.decode(raw),
+  defp validate_operation({:frame, raw}) do
+    with {:ok, frame} <- FrameV1.decode(raw),
+         true <- PersistedFrame.valid?(frame) do
+      {:ok, {:frame, raw, frame}}
+    else
+      _ -> {:error, :invalid_frame}
+    end
+  end
+
+  defp validate_operation({:gap, _} = operation), do: {:ok, operation}
+  defp validate_operation({:finish, _, _, _} = operation), do: {:ok, operation}
+  defp validate_operation(:checkpoint), do: {:ok, :checkpoint}
+  defp validate_operation(_), do: {:error, :invalid_frame}
+
+  defp effect(s, {:frame, _raw, f}) do
+    with true <- PersistedFrame.valid?(f),
          true <- f.stream_number == s.attempt.number and f.source_epoch == s.spec.source_epoch do
       frame =
         struct!(
@@ -563,9 +581,8 @@ defmodule MedFabric.Exam.AcquisitionIngress do
 
     S.record_receipt(tx, s.attempt.fence, durable)
 
-    if match?({:frame, _}, op) do
-      {:frame, raw} = op
-      {:ok, frame} = FrameV1.decode(raw)
+    if match?({:frame, _, _}, op) do
+      {:frame, raw, frame} = op
       S.transport(tx, s.attempt.fence, frame.sequence, raw)
     end
 
@@ -659,7 +676,7 @@ defmodule MedFabric.Exam.AcquisitionIngress do
     S.settlement(context.db, id, fn tx, _ -> record_recovered_prefix(tx, fence, prefix) end)
   end
 
-  defp effect_operation({:frame, _}), do: :push
+  defp effect_operation({:frame, _, _}), do: :push
   defp effect_operation({:gap, _}), do: :gap
   defp effect_operation({:finish, _, _, _}), do: :finish
   defp effect_operation(:checkpoint), do: :checkpoint

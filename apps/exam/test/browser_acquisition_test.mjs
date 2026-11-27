@@ -5,7 +5,7 @@ import {createHash,webcrypto} from "node:crypto";
 import vm from "node:vm";
 import {fileURLToPath} from "node:url";
 const asset=new URL("../priv/static/acquisition.js",import.meta.url);
-const module=await import("data:text/javascript;base64,"+Buffer.from(await readFile(asset)).toString("base64"));
+const module=await import("data:text/javascript;base64,"+Buffer.from(await readFile(asset,"utf8")+"\n//# sourceURL=browser-acquisition.js").toString("base64"));
 const {parseJSON,parseReceipt,observe,committedSuccessor,exactPrefix,handoff,frameHeader,BrowserAcquisition}=module;
 if(!globalThis.crypto)Object.defineProperty(globalThis,"crypto",{value:webcrypto});
 const path=process.env.MEDEX_RECEIPT_VECTORS||fileURLToPath(new URL("../../../../med_ex/core/med_core/test/fixtures/receipt_vectors_v2.json",import.meta.url));
@@ -31,7 +31,7 @@ const base=corpus.cases[0].previous;
 const receipt=(q,n,g="3")=>({...base,accepted_sequence:String(q),durable_sequence:String(q),accepted_sample:String(n),durable_sample:String(n),journal_generation:g,journal_digest:"c".repeat(64)});
 const zero={...base,accepted_sequence:"0",durable_sequence:"0",accepted_sample:"0",durable_sample:"0",journal_generation:"1"};
 function acquisition(){const a=new BrowserAcquisition({encounter:"e",csrf:"test"});a.receipt=zero;a.authorityDeadline=performance.now()+30000;a.frames=15;a.bytes=262144;return a;}
-function entry(q,first,count=960){return {sequence:String(q),first:String(first),count,buffer:new ArrayBuffer(1968),sent:true};}
+function entry(q,first,count=960){const buffer=new ArrayBuffer(1968);return {sequence:String(q),first:String(first),count,buffer,sent:true,fingerprint:createHash("sha256").update(new Uint8Array(buffer,0,48+count*2)).digest("hex")};}
 test("strict bounded JSON rejects duplicates at every nesting depth and trailing/oversized/inexact data",()=>{
   for(const invalid of ['{"type":"durable","type":"accepted"}','{"receipt":{"fence":"a","fence":"b"}}','{"x":1,"\\u0078":2}','{} {}','{"x":9007199254740993}','{"x":1.0}','['.repeat(20)+'0'+']'.repeat(20),'"'+"a".repeat(16385)+'"'])assert.throws(()=>parseJSON(invalid));
   assert.equal(parseJSON('{"x":[0,true,null,"hello"]}').x[3],"hello");
@@ -57,7 +57,7 @@ test("stale connection replies cannot reclaim retained frames or change current 
 });
 test("volatile accepted receipt never grants credit or reclaims a buffer",()=>{
   const a=acquisition();a.socket={};a.binding={acquisition:"a",generation:"1",connection:"c"};a.pending.set("0",entry(0,0));a.inflight=1;
-  a.message(a.socket,JSON.stringify({schema:module.SCHEMA,type:"accepted",binding:a.binding,receipt:{...zero,accepted_sequence:"1",accepted_sample:"960"}}));
+  a.message(a.socket,JSON.stringify({schema:module.SCHEMA,type:"accepted",operation_id:"frame-0-0",transport_sha256:a.pending.get("0").fingerprint,binding:a.binding,receipt:{...zero,accepted_sequence:"1",accepted_sample:"960"}}));
   assert.equal(a.pending.size,1);assert.equal(a.inflight,1);
 });
 test("MEX1 counters above 2^53 round trip exactly and overflow refuses before writing",()=>{
@@ -67,10 +67,11 @@ test("MEX1 counters above 2^53 round trip exactly and overflow refuses before wr
   assert.throws(()=>frameHeader(buffer,4,0n,(1n<<64n)-1n,1));
 });
 test("transport buffering and source-record credit are separate finite bounds",()=>{
-  globalThis.WebSocket={OPEN:1};const a=acquisition();const sent=[];a.binding={};a.socket={readyState:1,bufferedAmount:0,send:bytes=>sent.push(bytes.length)};
+  globalThis.WebSocket={OPEN:1};const a=acquisition();const sent=[];a.binding={};a.socket={readyState:1,bufferedAmount:0,send:bytes=>sent.push(bytes.length),close(){}};
   for(let q=0;q<30;q++)a.pending.set(String(q),entry(q,q*960));for(const e of a.pending.values())e.sent=false;
   a.pump();assert.equal(sent.length,15);assert.equal(a.inflight,15);assert.equal(a.pending.size,30);
-  const blocked=acquisition();blocked.binding={};blocked.socket={readyState:1,bufferedAmount:blocked.wsBudget,send:()=>assert.fail("buffer limit ignored")};blocked.pending.set("0",{...entry(0,0),sent:false});blocked.pump();assert.equal(blocked.inflight,0);
+  const blocked=acquisition();blocked.binding={};blocked.socket={readyState:1,bufferedAmount:blocked.wsBudget,send:()=>assert.fail("buffer limit ignored"),close(){}};blocked.pending.set("0",{...entry(0,0),sent:false});blocked.pump();assert.equal(blocked.inflight,0);
+  a.cleanup();blocked.cleanup();
 });
 const workletSource=(await readFile(new URL("../priv/static/acquisition_worklet.js",import.meta.url),"utf8")).replace("export class AcquisitionProcessor","class AcquisitionProcessor");
 function worklet(rate,buffers=30){const messages=[];let Type;const context=vm.createContext({sampleRate:rate,AudioWorkletProcessor:class{constructor(){this.port={onmessage:null,postMessage:data=>messages.push(data)};}},registerProcessor:(_,klass)=>Type=klass,ArrayBuffer,DataView,Math,Number,BigInt,Float32Array});vm.runInContext(workletSource,context);const processor=new Type({});for(let i=0;i<buffers;i++)processor.port.onmessage({data:{type:"buffer",buffer:new ArrayBuffer(1968)}});if(buffers===30)processor.port.onmessage({data:{type:"start"}});return {processor,messages};}
@@ -99,7 +100,7 @@ test("producer does not start before its complete pool is admitted",()=>{
 test("historical ACK before local invalidation proves coverage but never extends authority",()=>{
   const a=acquisition();a.socket={};a.binding={acquisition:"a",generation:"1",connection:"old"};a.pending.set("0",entry(0,0));a.inflight=1;a.inflightBytes=1968;
   const deadline=a.authorityDeadline;
-  a.message(a.socket,JSON.stringify({schema:module.SCHEMA,type:"durable",binding:a.binding,receipt:receipt(1,960)}));
+  a.message(a.socket,JSON.stringify({schema:module.SCHEMA,type:"durable",operation_id:"checkpoint-current",binding:a.binding,receipt:receipt(1,960)}));
   assert.equal(a.pending.size,0);assert.equal(a.authorityDeadline,deadline);
   a.binding={...a.binding,connection:"new"};a.pending.set("1",entry(1,960));
   a.message(a.socket,JSON.stringify({schema:module.SCHEMA,type:"durable",binding:{...a.binding,connection:"old"},receipt:receipt(2,1920,"4")}));

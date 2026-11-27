@@ -6,9 +6,12 @@ defmodule MedFabric.Preview.Peer do
   alias MedFabric.Preview.{Capability, Feed, Timeline}
 
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts,
-      name: {:via, Registry, {MedFabric.Preview.Registry, Capability.key(opts.grant)}}
-    )
+    case GenServer.start_link(__MODULE__, {self(), opts},
+           name: {:via, Registry, {MedFabric.Preview.Registry, Capability.key(opts.grant)}}
+         ) do
+      {:error, {:shutdown, reason}} -> {:error, reason}
+      result -> result
+    end
   end
 
   def action(grant, operation, body, config) do
@@ -79,7 +82,7 @@ defmodule MedFabric.Preview.Peer do
     end
   end
 
-  def init(opts) do
+  def init({caller, opts}) do
     Process.flag(:trap_exit, true)
     key = Capability.key(opts.grant)
 
@@ -104,7 +107,9 @@ defmodule MedFabric.Preview.Peer do
          drops: 0
        }}
     else
-      _ -> {:stop, :expired_authority}
+      _ ->
+        Process.unlink(caller)
+        {:stop, {:shutdown, :expired_authority}}
     end
   end
 

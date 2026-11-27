@@ -12,6 +12,19 @@ artifact qualification gates; no publication or native gate success is implied.
 
 ## Unreleased
 
+- Settle expired unsent outbox claims only from coherent never-dispatched history;
+  preserve uncertainty and late-sender fencing after dispatch.
+- Isolate DeliveryWorker/AcquisitionExpiry from capture and Endpoint while keeping
+  core dependency failure fencing; bound per-row poll failures.
+- Reject SQL-unrepresentable frame positions before credit or writer effects.
+- Make browser finish/reconnect/producer cleanup single-owner and idempotent;
+  bind replies to exact operations/fingerprints and retain unacknowledged source.
+- Sanitize host/dependency logging and expected startup failures, retain fresh
+  root/spool ownership checks, and move refusal fixtures outside source snapshots.
+- Route root quality/static checks to real projects with complete source/BEAM
+  coverage and safe source-context lock resolution. Add targeted regressions;
+  Elixir, service/native and release qualification remain pending.
+
 - Add a standalone example that exercises all six published Hex packages, including native Opus encoding and WebRTC delivery.
 
 ## 0.3.1 — 2026-11-26

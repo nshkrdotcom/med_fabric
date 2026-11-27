@@ -37,3 +37,18 @@ no application-global provider selection exists. The local test listener uses an
 ephemeral port. These smoke tests require neither a database nor a browser; they
 do not replace the detached native browser, PostgreSQL/HAPI, TLS, loss/recovery,
 conditional-create or full duration ext4 qualification gates.
+
+This combined consumer is a dependency-resolution and API smoke fixture. It is
+not a production process layout or proof of OS process isolation. The authoritative
+MedEx, Exam and Handheld closures add no application-owned or third-party NIF
+dependencies; OTP itself can use native implementations. Opus uses an external
+C Port process. RTC's `ex_webrtc` closure includes native `ex_dtls`, `ex_libsrtp`
+and `shmex` code, so production Preview must run in its own OS BEAM, with no
+clinical database or raw-evidence access. A separate supervisor in Exam's VM does
+not provide that boundary.
+
+The executable consumer must load safe Logger settings explicitly: dependency
+project configuration is not automatically imported. Use `config :logger,
+level: :info`, the installed Exam Phoenix parameter filters, and the installed
+Exam/Preview runtime configuration. Each host installs its own narrow privacy
+filter before listeners start; the SDK and providers do not configure Logger.

@@ -41,6 +41,7 @@ defmodule MedExHandheld.Spool.Plan do
              Enum.sort(~w(id irreversible cause first end first_sequence next_sequence)),
          true <-
            gap["irreversible"] == true and MedEx.ContractRules.id?(gap["id"]) and
+             byte_size(gap["id"]) <= 92 and
              MedEx.ContractRules.id?(gap["cause"]),
          {:ok, first} <- Control.uint64(gap["first"]),
          {:ok, ending} <- Control.uint64(gap["end"]),

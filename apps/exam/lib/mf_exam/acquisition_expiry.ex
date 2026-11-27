@@ -1,6 +1,7 @@
 defmodule MedFabric.Exam.AcquisitionExpiry do
   @moduledoc "Closes admission before independently quiescing and settling actual source effects."
   use GenServer
+  require Logger
   alias MedFabric.Exam.{AcquisitionIngress, AcquisitionManifest}
   alias MedFabric.Store.AcquisitionSessions, as: S
   def start_link(context), do: GenServer.start_link(__MODULE__, context)
@@ -12,10 +13,28 @@ defmodule MedFabric.Exam.AcquisitionExpiry do
   end
 
   def handle_info(:sweep, context) do
-    S.expire_unadmitted(context.db)
-    Enum.each(S.expiring(context.db), &sweep_one(context, &1))
+    case expiring(context) do
+      {:ok, ids} ->
+        Enum.each(ids, fn id ->
+          if sweep_one(context, id) != :ok, do: Logger.warning("acquisition_settlement_pending")
+        end)
+
+      {:error, _} ->
+        Logger.warning("acquisition_expiry_poll_failed")
+    end
+
     Process.send_after(self(), :sweep, 2_000)
     {:noreply, context}
+  end
+
+  defp expiring(context) do
+    :ok = S.expire_unadmitted(context.db)
+    {:ok, S.expiring(context.db)}
+  rescue
+    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :database_unavailable}
+  catch
+    :exit, {_, {module, _, _}} when module in [GenServer, DBConnection.Holder] ->
+      {:error, :database_unavailable}
   end
 
   def sweep_one(context, id) do
@@ -37,5 +56,10 @@ defmodule MedFabric.Exam.AcquisitionExpiry do
         S.settlement_pending(context.db, id)
         {:error, :settlement_pending}
     end
+  rescue
+    _ -> {:error, :settlement_outcome_unknown}
+  catch
+    :exit, {_, {module, _, _}} when module in [GenServer, DBConnection.Holder] ->
+      {:error, :settlement_outcome_unknown}
   end
 end

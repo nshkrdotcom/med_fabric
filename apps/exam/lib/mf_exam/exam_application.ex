@@ -6,12 +6,13 @@ defmodule MedFabric.Exam.Application do
   alias MedFabric.Store.{AcquisitionSessions, Encounters, Postgres}
   @asset_revision "0.3.0"
   @asset_hashes %{
-    "exam.js" => "adbb1090694c985530b59409de3631eba0ff9cd83f5756da3d2a7bdf4c294157",
-    "acquisition.js" => "cf3fb4cb9f8e2e348fbfd84812d9fbe1feda42600da3c539c1127eb9a8f1c515",
+    "exam.js" => "0ace0894746932833484406d9a578e7f5ee1f3ee21a60b7ada33569c4edabdf2",
+    "acquisition.js" => "260a1e618d115041bcab49a9c60939165ff90c22f029bcfb12cf9bb2681b0609",
     "acquisition_worklet.js" => "6fcb7dd5010a6b410d6a55fb4e189dbff07cec8bcb6a5e10fc65e43799f9610b"
   }
 
   def start(_type, _args) do
+    :ok = MedFabric.Exam.LogPrivacy.install()
     ClockObservations.initialize_host_generation()
 
     case Application.get_env(:mf_exam, :lab) do
@@ -41,18 +42,10 @@ defmodule MedFabric.Exam.Application do
           {Registry, keys: :unique, name: MedFabric.Exam.AcquisitionRegistry},
           {DynamicSupervisor, strategy: :one_for_one, name: MedFabric.Exam.Writers},
           %{id: :recovery, start: {__MODULE__, :recover, []}},
-          %{id: :expiry, start: {__MODULE__, :expiry, []}},
-          %{id: :delivery, start: {__MODULE__, :delivery, []}},
-          MedFabric.ExamWeb.Endpoint
+          MedFabric.ExamWeb.Endpoint,
+          %{id: :background, type: :supervisor, start: {__MODULE__, :background, []}}
         ]
-
-        sidecar =
-          case Application.get_env(:mf_exam, :sidecar) do
-            nil -> []
-            config -> [{MedFabric.Exam.PreviewGateway, config}]
-          end
-
-        Supervisor.start_link(children ++ sidecar,
+        Supervisor.start_link(children,
           strategy: :rest_for_one,
           name: MedFabric.Exam.Supervisor
         )
@@ -73,12 +66,20 @@ defmodule MedFabric.Exam.Application do
   end
 
   def recover do
-    :ok = AcquisitionManifest.recover(Exam.context())
-    :ignore
+    case AcquisitionManifest.recover(Exam.context()) do
+      :ok -> :ignore
+      {:error, _} -> {:error, :startup_recovery_failed}
+    end
   end
 
-  def expiry, do: AcquisitionExpiry.start_link(Exam.context())
-  def delivery, do: DeliveryWorker.start_link(Exam.context())
+  def background(context \\ Exam.context(), sidecar \\ Application.get_env(:mf_exam, :sidecar)) do
+    preview = if is_nil(sidecar), do: [], else: [{MedFabric.Exam.PreviewGateway, sidecar}]
+
+    Supervisor.start_link([{AcquisitionExpiry, context}, {DeliveryWorker, context}] ++ preview,
+      strategy: :one_for_one
+    )
+  end
+
   @doc false
   def resources(dir \\ Application.app_dir(:mf_exam, "priv/static")) do
     verified =

@@ -9,7 +9,7 @@ async function localSDP(peer,description){await peer.setLocalDescription(descrip
 const Capture={
  mounted(){const start=this.el.querySelector("[data-start]"),finish=this.el.querySelector("[data-finish]"),input=this.el.querySelector("[data-input]"),status=this.el.querySelector('[role="status"]');void listInputs(input);input.onfocus=()=>void listInputs(input);this.el.dataset.samples="0";
   start.onclick=async()=>{start.disabled=input.disabled=true;this.current?.cleanup();this.current=new BrowserAcquisition({encounter:this.el.dataset.encounter,deviceId:input.value,csrf:csrf(),status:(state,meta)=>{status.textContent=state;this.el.dataset.state=state==="sealed"?"ready":state;if(meta.acquisition)this.el.dataset.acquisition=meta.acquisition;if(meta.digest)this.el.dataset.digest=meta.digest;finish.disabled=state!=="capturing";if(state==="sealed"||state.includes("interrupted"))start.disabled=input.disabled=false;}});try{await this.current.start();}catch{this.current.fail("Acquisition unavailable");start.disabled=input.disabled=false;}};
-  finish.onclick=()=>{finish.disabled=true;this.current?.finish().catch(()=>this.current.disconnected());};
+  finish.onclick=()=>{finish.disabled=true;this.current?.finish().catch(()=>{});};
   this.observe=setInterval(()=>{if(this.current){let samples=this.current.produced?.sample||this.current.receipt?.durable_sample||"0";for(const entry of this.current.pending.values())samples=String(BigInt(entry.first)+BigInt(entry.count));this.el.dataset.samples=samples;this.el.dataset.pending=String(this.current.pending.size);this.el.dataset.websocketBytes=String(this.current.socket?.bufferedAmount||0);}},100);
  },destroyed(){clearInterval(this.observe);this.current?.cleanup();}
 };

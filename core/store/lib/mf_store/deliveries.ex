@@ -31,6 +31,20 @@ defmodule MedFabric.Store.Deliveries do
     end
   end
 
+  def defer_failure(db, id) do
+    locked(db, id, fn tx, d ->
+      # Only scheduling changes. An exception is not evidence of noncommit and
+      # must not clear a live lease, alter attempt history or consume retries.
+      S.rows(
+        tx,
+        "UPDATE outbox_deliveries SET next_due_at=GREATEST(clock_timestamp()+interval '5 seconds',lease_until) WHERE id=$1 AND next_due_at<=clock_timestamp() AND status IN ('pending','ready','retryable','unresolved','dispatching')",
+        [d.id]
+      )
+
+      :ok
+    end)
+  end
+
   def dispatch_allowed?(attempts, qualified) when is_list(attempts) do
     attempts == [] or Enum.all?(attempts, &settled_noncommit?/1) or
       (qualified and Enum.all?(attempts, &(&1.protected or settled_noncommit?(&1))))
@@ -120,6 +134,7 @@ defmodule MedFabric.Store.Deliveries do
     locked(db, claim.id, fn tx, d ->
       S.writable!(tx)
       require_claim!(tx, d, claim)
+      unless claim_history(tx, d) == :claim_only, do: S.abort(tx, :invalid_claim_history)
 
       unless is_binary(d.resource_bytes) and S.hash(d.resource_bytes) == d.fingerprint,
         do: S.abort(tx, :pinned_resource_corrupt)
@@ -146,6 +161,7 @@ defmodule MedFabric.Store.Deliveries do
     locked(db, claim.id, fn tx, d ->
       if d.status == "confirmed", do: S.abort(tx, :already_confirmed)
       require_claim!(tx, d, claim)
+      unless claim_history(tx, d) == :sent, do: S.abort(tx, :invalid_claim_history)
 
       {fact, ref, code} = classify_outcome(outcome)
 
@@ -227,20 +243,61 @@ defmodule MedFabric.Store.Deliveries do
                "SELECT lease_until IS NULL OR lease_until<=clock_timestamp() FROM outbox_deliveries WHERE id=$1",
                [id]
              ) == [[true]] do
-          persist_outcome(
-            tx,
-            d,
-            "unresolved",
-            nil,
-            %{"safe_confirmation" => false, "basis" => "expired_claim"},
-            "claim_expired"
-          )
-
-          :unresolved
+          expire_attempt(tx, d)
         else
           :current
         end
       end)
+
+  defp expire_attempt(tx, d) do
+    {fact, code} =
+      case claim_history(tx, d) do
+        :claim_only -> {"noncommitted", "expired_before_send"}
+        :sent -> {"unknown", "claim_expired"}
+        # An expired token is already fenced by require_claim!/3. Retain this
+        # release-blocking corruption for explicit reconciliation; never repair
+        # an immutable terminal row or infer noncommit from missing history.
+        :invalid -> S.abort(tx, :invalid_claim_history)
+      end
+
+    append(tx, d.id, d.attempt_id, d.token, "result", fact, d.conditional_qualified, code)
+
+    status =
+      if fact == "noncommitted" and dispatch_allowed?(attempts(tx, d.id), d.conditional_qualified),
+        do: "retryable",
+        else: "unresolved"
+
+    persist_outcome(
+      tx,
+      d,
+      status,
+      nil,
+      %{"safe_confirmation" => false, "basis" => "expired_claim", "attempt" => d.attempt_id},
+      code
+    )
+
+    if status == "retryable", do: :retryable, else: :unresolved
+  end
+
+  defp claim_history(tx, d) do
+    rows =
+      S.rows(
+        tx,
+        "SELECT token,stage,outcome,conditional_protected,evidence_ref FROM delivery_attempts WHERE delivery_id=$1 AND attempt_id=$2 ORDER BY ordinal",
+        [d.id, d.attempt_id]
+      )
+
+    claim = [d.token, "claim", "admitted", d.conditional_qualified, nil]
+    send = [d.token, "send", "possible_send", d.conditional_qualified, nil]
+
+    cond do
+      not is_binary(d.token) or not is_binary(d.attempt_id) -> :invalid
+      d.conditional_qualified and not is_binary(d.qualification_ref) -> :invalid
+      rows == [claim] -> :claim_only
+      rows == [claim, send] -> :sent
+      true -> :invalid
+    end
+  end
 
   def reconcile(db, id, result) do
     locked(db, id, fn tx, d ->
@@ -350,13 +407,17 @@ defmodule MedFabric.Store.Deliveries do
            do: S.abort(tx, :stale_attempt)
   end
 
-  defp append(tx, id, attempt, token, stage, outcome, protected, reference),
-    do:
+  defp append(tx, id, attempt, token, stage, outcome, protected, reference) do
+    case
       S.rows(
         tx,
-        "INSERT INTO delivery_attempts(delivery_id,attempt_id,token,stage,outcome,conditional_protected,evidence_ref) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(delivery_id,attempt_id,stage) DO NOTHING",
+        "INSERT INTO delivery_attempts(delivery_id,attempt_id,token,stage,outcome,conditional_protected,evidence_ref) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(delivery_id,attempt_id,stage) DO NOTHING RETURNING ordinal",
         [id, attempt, token, stage, outcome, protected, reference]
-      )
+      ) do
+      [[ordinal]] when is_integer(ordinal) -> :ok
+      _ -> S.abort(tx, :invalid_claim_history)
+    end
+  end
 
   defp attempts(tx, id),
     do:

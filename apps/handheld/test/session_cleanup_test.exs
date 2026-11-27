@@ -2,6 +2,14 @@ defmodule MedExHandheld.SessionCleanupTest do
   use ExUnit.Case, async: true
   alias MedExHandheld.{Session, Transport}
 
+  setup do
+    root = Path.join(System.tmp_dir!(), "mf-session-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false))
+    File.mkdir!(root)
+    File.chmod!(root, 0o700)
+    on_exit(fn -> File.rm_rf!(root) end)
+    %{tmp_dir: root}
+  end
+
   test "session dimensions reject clean completion before drain and invalidate authority on disconnect" do
     initial = %{phase: :disconnected, binding: nil, authority_deadline: nil, stopped: false}
     assert {:ok, resuming} = Session.transition(initial, :resume, 0)
@@ -22,7 +30,6 @@ defmodule MedExHandheld.SessionCleanupTest do
     assert complete.phase == :complete
   end
 
-  @tag :tmp_dir
   test "invalid credential configuration creates no owners or spool evidence", %{tmp_dir: root} do
     config = %{
       "device" => "device",
@@ -46,7 +53,6 @@ defmodule MedExHandheld.SessionCleanupTest do
              Transport.validate_config(%{config | "server" => "ws://localhost"})
   end
 
-  @tag :tmp_dir
   test "namespace incompatibility is refused without network or mutation", %{tmp_dir: root} do
     credential = Path.join(root, "credential")
     File.write!(credential, String.duplicate("x", 32))

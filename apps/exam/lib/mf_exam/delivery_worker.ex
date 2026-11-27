@@ -1,6 +1,7 @@
 defmodule MedFabric.Exam.DeliveryWorker do
   @moduledoc "One bounded outbox worker. HTTP runs outside Store transactions and acquisition locks."
   use GenServer
+  require Logger
   alias MedFabric.Interop.FhirClient
   alias MedFabric.Store.{Deliveries, Encounters}
   def start_link(context), do: GenServer.start_link(__MODULE__, context)
@@ -11,9 +12,46 @@ defmodule MedFabric.Exam.DeliveryWorker do
   end
 
   def handle_info(:work, context) do
-    Enum.each(Deliveries.due(context.db, 1), &run(context, &1))
+    case due(context) do
+      {:ok, ids} -> Enum.each(ids, &work_one(context, &1))
+      {:error, _} -> Logger.warning("delivery_poll_failed")
+    end
+
     Process.send_after(self(), :work, 250)
     {:noreply, context}
+  end
+
+  defp due(context) do
+    {:ok, Deliveries.due(context.db, 4)}
+  rescue
+    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :database_unavailable}
+  catch
+    :exit, {_, {module, _, _}} when module in [GenServer, DBConnection.Holder] ->
+      {:error, :database_unavailable}
+  end
+
+  defp work_one(context, id) do
+    case run(context, id) do
+      {:error, :invalid_claim_history} ->
+        Logger.error("delivery_claim_history_invalid")
+        defer(context, id)
+
+      {:error, _} ->
+        Logger.warning("delivery_item_outcome_unknown")
+        defer(context, id)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp defer(context, id) do
+    Deliveries.defer_failure(context.db, id)
+  rescue
+    _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :database_unavailable}
+  catch
+    :exit, {_, {module, _, _}} when module in [GenServer, DBConnection.Holder] ->
+      {:error, :database_unavailable}
   end
 
   def run(context, id) do
@@ -45,8 +83,10 @@ defmodule MedFabric.Exam.DeliveryWorker do
     end
   rescue
     _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :database_outcome_unknown}
+    _ -> {:error, :worker_outcome_unknown}
   catch
-    :exit, _ -> {:error, :worker_outcome_unknown}
+    :exit, {_, {module, _, _}} when module in [GenServer, DBConnection.Holder] ->
+      {:error, :worker_outcome_unknown}
   end
 
   defp prepare(context, intent) do

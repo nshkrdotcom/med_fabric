@@ -28,7 +28,16 @@ defmodule MedFabric.Exam.MixProject do
       source_url: @source_url,
       homepage_url: @source_url,
       dialyzer: [plt_add_apps: [:mix]],
-      aliases: [quality: ["credo --strict", "dialyzer --force-check"]],
+      aliases: [
+        quality: [
+          "format --check-formatted",
+          "compile --warnings-as-errors",
+          "cmd env MIX_ENV=test mix test --warnings-as-errors",
+          "credo --strict",
+          "dialyzer",
+          "docs --warnings-as-errors"
+        ]
+      ],
       deps: deps,
       docs: docs()
     ] ++ paths
@@ -101,6 +110,7 @@ defmodule MedFabric.Exam.MixProject do
           MedFabric.Exam.AcquisitionManifest,
           MedFabric.Exam.AcquisitionWorkflow,
           MedFabric.Exam.AcquisitionReviews,
+          MedFabric.Exam.DeliveryWorker,
           MedFabric.Exam.AcquisitionExpiry,
           MedFabric.Exam.AcquisitionRecovery,
           MedFabric.Exam.DeviceRootLock,

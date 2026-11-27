@@ -206,5 +206,72 @@ thresholds. The actual timeout and cancellation regression suite is
 
 An explicit ecosystem `--gate` validates only the repositories participating in
 that gate and its prerequisites. Native/soak selection needs the two medical
-repositories; the full umbrella additionally runs a sibling Weld checkout's own
-CI. Installed Weld composition still uses the private MedEx maintainer project.
+repositories. Sibling Weld CI is an explicit separate gate. Installed Weld
+composition still uses the private MedEx maintainer project.
+
+
+## Fast source proof and resumable local candidates
+
+Bootstrap once with `mix setup` in each repository. Resolve only genuine lock
+entries, review the diffs, and use `mix setup --locked` for the default release
+context. The SDK source root adds Blitz `0.4.1`; its existing lock must be
+resolved by real Mix/Hex. Fabric's removed coordinator Dialyxir entry can be
+pruned only through genuine dependency resolution. Private project locks and
+the official smoke fixture must never be hand-written or copied from a different
+registry context.
+
+From the SDK root, use `build_support/qualify_ecosystem.sh fast --repos PARENT
+--evidence PRIVATE_DIR --jobs 2` after bootstrap. The existing runner executes
+`mix quality --release` once per repository, records exact source/tool/lock/fixture
+inputs and retains successful receipts. Fast permits the explicit development
+source selector. `medex-short` and `fabric-short` are distinct independent gates
+for Python/C/Node checks; default full includes them. Their checks-only dispatcher
+never bootstraps or repeats root quality. Retain a passing independent result
+unless its own source, tool or input identity changes. Full refuses it. Moving between those contexts invalidates the
+relevant Fabric proof; do not claim a source-path result proves registry install.
+
+`plan` now shows the local consumer graph. Default `full`/`resume` exclude
+`weld-ci`, `weld-minimum`, `medex-remote` and `fabric-remote`. Those remain explicit
+`--gate` scopes; using released Weld 0.20.2 never requires a sibling Weld CI run.
+Local source lanes cover direct/live/full/prepared/signed registry; remote Git
+lanes require their own gate and real remote equality. No remote success is
+inferred from local candidates. Gate execution stays sequential across mutable
+candidate/native/soak state, while source projects use bounded Blitz concurrency.
+Independent failures are collected, descendants are blocked, matching receipts
+reuse exact output hashes, and superseded attempts remain under `attempts/`.
+
+The short Python/C/Node checks in `build_support/qualify_projects.sh sdk|fabric`
+are additional dispatcher/native/browser tooling proofs. It then invokes the
+same canonical root matrix; `--fast` permits intentional source selection, while
+the default uses locked dependencies and production compile. Do not run it after
+an unchanged passing root matrix simply to duplicate that matrix. Retain its
+independent passing test results and rerun only changed checks.
+
+Set `MEDEX_RECEIPT_VECTORS` to an absolute regular-file copy from the frozen SDK
+revision. `build_support/receipt_fixture.sh` verifies 51 vectors and SHA-256
+`00e4b87285b26e995f5f0e3bff01c3cce5a8f3c4701e41d9f3981b73a197901b` before
+source/preparation/native tests. It is a verification input, not runtime data.
+Fabric preparation uses `build_support/prepare_qualification.sh SDK_ABSOLUTE
+NEW_PRIVATE_EVIDENCE_DIR`, with upstream exact archives already served by the
+existing signed candidate registry. It uses the released SDK maintainer tool.
+`ops/qc_native.sh --preflight --suite all --artifacts MANIFEST` checks current
+tools, PostgreSQL18, pinned Opus/HAPI, Chromium, fixtures and actual archive/registry
+identities without starting services. Soak preflight also needs `--volume` on
+owned writable ext4. Use the actual absolute paths prepared for that run.
+Inspect ignored scratch paths before snapshotting; preserve the installed asset
+integrity checks and symlink-refusal tests. No cleanup may remove owner evidence.
+
+### Documentation and official smoke limits
+
+Direct ExDoc groups include DeliveryWorker and Preview Capability/Timeline.
+The supplied Weld 0.20.2 schema evidence does not support `groups_for_modules`
+for projected `mf_exam`; no unsupported manifest key or new Weld release is
+introduced. Verify the installed schema/help locally and keep this limitation
+explicit if unchanged.
+
+BR-05 remains a post-publication gate: only after separate owner approval and
+all six genuine official versions exist, resolve `examples/hex_smoke/mix.lock`
+against official Hex, verify exact family versions/bytes/closure, run locked
+compile/test and separate role isolation, then commit the genuine fixture lock.
+Its old official entries remain deliberately unchanged before publication.
+The combined fixture is a resolver/install check, never a production topology.
