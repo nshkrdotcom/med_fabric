@@ -25,7 +25,7 @@ class NativeSourceSelectionTest(unittest.TestCase):
         identity = "a" * 64
         self.candidate = releases / identity / "project"
         self.candidate.mkdir(parents=True)
-        (self.candidate / "mix.exs").write_text("# Old candidate fixture\n")
+        (self.candidate / "mix.exs").write_text("# Candidate fixture\n")
         (releases / "CURRENT").write_text(f"weld.release/v1 {identity}\n")
         self.volume = self.root / "volume"
         self.volume.mkdir()
@@ -37,14 +37,15 @@ class NativeSourceSelectionTest(unittest.TestCase):
         # argument parsing, stale-pointer selection and environment are used.
         scripts = {
             "pg_config": '#!/bin/sh\nprintf "%s\\n" "$QC_TEST_TOOLS"\n',
-            "findmnt": "#!/bin/sh\nprintf 'fixture filesystem\\n'\n",
+            "findmnt": '#!/bin/sh\nprintf "%s\\n" "${QC_TEST_FS:-ext4}"\n',
             "mix": """#!/bin/sh
 set -eu
 if [ "$QC_TEST_MODE" = default ]; then
-  test -z "${MF_MED_EX_PATH:-}" || exit 91
+  test ! -e ../../.mix_sources.json || exit 91
   test "${MF_SOURCE_QC_EXPECT_DEFAULT:-}" = 1 || exit 92
 else
-  test "${MF_MED_EX_PATH:-}" = "$QC_TEST_PROJECT" || exit 93
+  test -f ../../.mix_sources.json || exit 93
+  python3 -c 'import json,os; assert json.load(open("../../.mix_sources.json"))["med_ex"]["path"] == os.environ["QC_TEST_PROJECT"]'
 fi
 printf '%s\n' "$MF_SOURCE_QC_PROFILE" >> "$QC_TEST_LOG"
 """,
@@ -87,6 +88,44 @@ printf '%s\n' "$MF_SOURCE_QC_PROFILE" >> "$QC_TEST_LOG"
 
     def test_explicit_candidate_is_still_selected(self):
         self.run_soak("candidate", "--med-ex-project", str(self.candidate))
+
+    def test_full_gate_requires_all_six_exact_archives_before_tools_run(self):
+        result = subprocess.run(
+            ["bash", "ops/qc_native.sh", "--suite", "all"],
+            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("all six exact archive identities", result.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_full_soak_cannot_be_mistaken_for_source_qualification(self):
+        result = subprocess.run(
+            ["bash", "ops/qc_native.sh", "--suite", "soak", "--seconds", "1740"],
+            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("all six exact archive identities", result.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_full_suite_does_not_silently_override_preview_off(self):
+        result = subprocess.run(
+            ["bash", "ops/qc_native.sh", "--suite", "all", "--preview", "off"],
+            cwd=self.root, env=self.env, text=True, capture_output=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("all suite requires isolated Preview", result.stderr)
+        self.assertFalse(self.log.exists())
+
+    def test_soak_refuses_non_ext4_before_starting_the_client(self):
+        result = subprocess.run(
+            ["bash", "ops/qc_native.sh", "--suite", "soak", "--seconds", "3",
+             "--volume", str(self.volume), "--evidence", str(self.root / "evidence")],
+            cwd=self.root, env=dict(self.env, QC_TEST_FS="overlay"),
+            text=True, capture_output=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("actual ext4 filesystem", result.stdout + result.stderr)
+        self.assertFalse(self.log.exists())
 
 
 if __name__ == "__main__":

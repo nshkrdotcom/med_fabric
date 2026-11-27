@@ -1,25 +1,27 @@
-# Preview isolation
+# Optional monitoring isolation
 
-The signed handheld sends software-monitor frames over a separate WSS connection. It sends a new frame only after credit, keeps one latest replacement and discards stale frames after 200 ms of local queue age. Positions and monitor configuration epochs travel in the binary header. The server enforces the raw audio binding, stream number 3 and native 48 kHz mono s16 shape. It forwards the MEX1 body and acquisition ID to a local sidecar on a separate scheduling path. Neither hop grants a durable receipt.
+mf_preview 0.3.0 runs in a separate BEAM, using med_ex_opus/med_ex_rtc 0.3.0
+concrete providers. Exam and Handheld never install native providers. Raw source
+spool/StreamWriter persistence happens before a latest-only disposable offer;
+viewer media cannot supply a receipt, clinical decision or source configuration.
 
-The sidecar validates a dedicated bearer credential and bounds each feed body. Its latest-only ETS table serves viewers with active peers. One native encoding operation is outstanding per peer. A replacement viewer closes the old peer. Peer PID events report connection status. The browser gathers ICE candidates, posts its offer using its existing clinician cookie and CSRF token, consumes the answer and polls status. The Exam server issues expiring viewer tokens and transfers its established TURN/relay policy. Each peer starts a new RTP sequence and sample clock. Network transit time remains unknown.
+Each authorized peer owns one encoder and opaque RTC handle. A finite feed slot
+and peer/request budget prevent mailbox/backlog growth. PCM format is validated
+against source descriptor, epoch and generation. Freshness is 200 ms and idle
+expiry 65 s; neither renews authority. Preview computes logical emitted sequence
+and elapsed 48 kHz ticks, including dropped intervals; RTC converts modulo wire
+counters. Unknown send/encode retires the peer.
 
-Set `MF_PREVIEW_URL` on Exam to a loopback HTTP listener, set
-`MF_PREVIEW_CREDENTIAL_FILE` for both services, and set `MF_PREVIEW_PORT`
-for Preview. In `apps/preview`, run `mix deps.get` and `mix run --no-halt`,
-or build an ordinary release with `MIX_ENV=prod mix deps.get` followed by
-`MIX_ENV=prod mix release`. Preview uses the base SDK and both native provider
-packages. Choose matching sources as described in the
-[handheld guide](handheld_demo.md).
+Capabilities bind purpose, acquisition, source kind/profile, generation/epoch,
+descriptor, viewer/session, issued time, expiry and nonce. Default signed lifetime
+is 25 s with a maximum verified clock uncertainty of 2 s; local monotonic expiry
+is conservative and cannot exceed 30 s from the authorization check. Renewal
+requires a fresh Exam check. Recheck before allocation/feed/encode/send and at
+RTC submission. Expiry/replacement closes encoder, peer and slot; previously
+emitted network packets cannot be recalled.
 
-Run Preview with access only to its own release and private credential.
-Clinical artifacts, database credentials, and Exam's environment belong to
-Exam. The isolated acceptance suite uses separate BEAM processes and
-PID/mount namespaces, waits for browser audio, kills the preview process
-group during recording, and compares authoritative source hashes afterward.
-
-The in-VM legacy browser providers are a separate Exam build profile. Set
-`MF_EXAM_LEGACY_MEDIA=1` for dependency resolution, compilation, tests, and
-when starting the legacy Exam build or release. This profile uses separate
-lock, dependency and build paths, even with the default Hex sources. Default
-Exam and Handheld use only `:med_ex`.
+Qualify absent/invalid/stalled/killed sidecar, peer churn, encoder/RTC faults,
+expired delayed capability, ETS loss, bounded resources and raw byte equality
+using actual separate OS processes. Direct and relay-only media and full
+monitor-active 1740-second ext4 soak are mandatory; combined package smoke alone
+is not isolation proof.

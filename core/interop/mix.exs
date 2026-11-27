@@ -2,6 +2,7 @@ defmodule MedFabric.Interop.MixProject do
   use Mix.Project
 
   @version Path.join(__DIR__, "VERSION") |> File.read!() |> String.trim()
+  @release_version "0.3.0"
   @source_url "https://github.com/nshkrdotcom/med_fabric"
 
   def project do
@@ -41,9 +42,9 @@ defmodule MedFabric.Interop.MixProject do
       logo: "assets/interop.svg",
       assets: %{"assets" => "assets"},
       source_url: @source_url,
-      source_ref: "mf_interop-v#{@version}",
+      source_ref: "mf_exam-v#{@release_version}",
       source_url_pattern:
-        "#{@source_url}/blob/mf_interop-v#{@version}/core/interop/%{path}#L%{line}",
+        "#{@source_url}/blob/mf_exam-v#{@release_version}/core/interop/%{path}#L%{line}",
       extras: [
         {"README.md", filename: "readme", title: "Overview"},
         {"CHANGELOG.md", title: "Changelog"},

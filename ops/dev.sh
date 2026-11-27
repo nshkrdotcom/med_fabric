@@ -116,8 +116,10 @@ EOF
 cmd_preview() {
   require_tools
   [[ -f "$lab/preview.credential" ]] || die "Dev lab not prepared. Run: ./ops/dev.sh up"
+  [[ -f "$lab/preview.json" ]] || die "Preview settings missing; use a fresh revision-2 dev lab."
   cd "$repo_root/apps/preview"
   exec env \
+    MF_PREVIEW_CONFIG="$lab/preview.json" \
     MF_PREVIEW_PORT="$preview_port" \
     MF_PREVIEW_CREDENTIAL_FILE="$lab/preview.credential" \
     mix run --no-halt

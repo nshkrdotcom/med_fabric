@@ -1,3 +1,5 @@
+Code.require_file("support/native_fhir.exs", __DIR__)
+
 defmodule MedFabric.Interop.HAPILostReplyProxy do
   @moduledoc false
   @limit 1_048_576
@@ -81,65 +83,49 @@ end
 
 defmodule MedFabric.Interop.DeviceFHIRIntegrationTest do
   use ExUnit.Case, async: false
-  alias MedFabric.Interop.{FhirClient, HAPILostReplyProxy}
+  alias MedFabric.Interop.{FhirClient, HAPILostReplyProxy, NativeFHIRFixture}
   @moduletag timeout: 60_000
 
   setup do
-    url = System.fetch_env!("FHIR_BASE_URL") |> String.trim_trailing("/")
-    %URI{scheme: "http", host: host} = URI.parse(url)
-    assert host in ["localhost", "127.0.0.1", "::1"], "loss test requires the isolated local HAPI lab"
-    suffix = :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
-    prefix = "mfqc-" <> suffix
-    refs = %{"patient_ref" => "Patient/" <> prefix, "encounter_ref" => "Encounter/" <> prefix}
-    fixtures = [
-      {"Patient", %{"resourceType" => "Patient", "id" => prefix,
-        "name" => [%{"text" => "Synthetic Med Fabric QC"}]}},
-      {"Encounter", %{"resourceType" => "Encounter", "id" => prefix, "status" => "in-progress",
-        "class" => %{"system" => "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code" => "AMB"},
-        "subject" => %{"reference" => refs["patient_ref"]}}},
-      {"Device", %{"resourceType" => "Device", "id" => prefix, "status" => "active",
-        "deviceName" => [%{"name" => "Med Fabric PLXS engineering simulator", "type" => "user-friendly-name"}]}}
-    ]
-    for {type, resource} <- fixtures do
-      assert {:ok, %{status: status}} = Req.put(url <> "/#{type}/#{prefix}",
-        json: resource, retry: false, receive_timeout: 5_000)
-      assert status in [200, 201]
-    end
-    external = prefix <> ":spo2"
-    on_exit(fn ->
-      case FhirClient.fetch_by_identifier(external, base_url: url) do
-        {:ok, observations} ->
-          Enum.each(observations, fn observation ->
-            Req.delete(url <> "/Observation/" <> observation["id"], retry: false, receive_timeout: 5_000)
-          end)
-        _ -> :ok
-      end
-      for {type, _} <- Enum.reverse(fixtures),
-        do: Req.delete(url <> "/#{type}/#{prefix}", retry: false, receive_timeout: 5_000)
-    end)
-    %{url: url, prefix: prefix, refs: refs, external: external}
+    ctx = NativeFHIRFixture.create!()
+    %URI{scheme: "http", host: host} = URI.parse(ctx.url)
+    assert host in ["localhost", "127.0.0.1", "::1"],
+      "TCP response-loss proof requires the isolated local HAPI lab"
+    on_exit(fn -> NativeFHIRFixture.cleanup(ctx) end)
+    %{fixture: ctx}
   end
 
-  test "real committed HAPI write survives a dropped HTTP response with one remote observation", ctx do
-    evidence = %{"kind" => "device_spo2_v1",
-      "value" => %{"mantissa" => "972", "exponent" => "-1"},
-      "effective_at" => "2026-11-24T12:00:00Z", "issued" => "2026-11-24T12:00:01Z",
-      "device_ref" => "Device/" <> ctx.prefix, "source_event_id" => ctx.prefix <> "-event",
-      "parent_acquisition_id" => ctx.prefix <> "-collection",
-      "provenance" => %{"kind" => "simulated_plxs", "simulated" => true,
-        "time_basis" => "qualified_fixture_utc", "gateway" => "handheld-fixture"}}
-    assert {:ok, resource} = FhirClient.resource_checked(evidence, ctx.external, "synthetic-clinician", ctx.refs)
+  test "actual dropped response retains exact decimal and event provenance", %{fixture: ctx} do
+    native = NativeFHIRFixture.native(ctx, "device_spo2_v1", %{"mantissa" => "972", "exponent" => "-1"})
+    assert {:ok, resource} = FhirClient.resource_checked(native, ctx.identifier, ctx.refs)
     {pid, listener, port} = HAPILostReplyProxy.start(ctx.url, self())
-    on_exit(fn -> :gen_tcp.close(listener); if Process.alive?(pid), do: Process.exit(pid, :shutdown) end)
+    on_exit(fn ->
+      :gen_tcp.close(listener)
+      if Process.alive?(pid), do: Process.exit(pid, :shutdown)
+    end)
     path = URI.parse(ctx.url).path || ""
-    assert {:error, _} = FhirClient.deliver(resource, base_url: "http://127.0.0.1:#{port}" <> path,
-      receive_timeout: 15_000)
+    assert {:unknown, :possible_remote_effect} = FhirClient.deliver(resource,
+      base_url: "http://127.0.0.1:#{port}" <> path, receive_timeout: 15_000)
     assert_receive {:hapi_reply_discarded, :ok}, 15_000
-    assert {:ok, %{remote_ref: remote, created?: false}} = FhirClient.deliver(resource, base_url: ctx.url)
-    assert {:ok, %{remote_ref: ^remote, created?: false}} = FhirClient.deliver(resource, base_url: ctx.url)
-    assert {:ok, [confirmed]} = FhirClient.fetch_by_identifier(ctx.external, base_url: ctx.url)
-    assert Decimal.equal?(confirmed["valueQuantity"]["value"], Decimal.new("97.2"))
-    changed = put_in(resource, ["valueQuantity", "code"], "1")
-    assert {:error, :conflicting_remote_record} = FhirClient.deliver(changed, base_url: ctx.url)
+
+    [remote] = NativeFHIRFixture.observations(ctx)
+    reference = "Observation/" <> remote["id"]
+    assert Decimal.equal?(remote["valueQuantity"]["value"], Decimal.new("97.2"))
+    assert remote["valueQuantity"]["code"] == "%"
+    assert remote["device"]["identifier"] == %{
+      "system" => "urn:medfabric:source-device", "value" => ctx.prefix}
+    assert remote["effectiveDateTime"] == native["effective_at"]
+    assert remote["issued"] == native["issued"]
+    assert remote["derivedFrom"] == resource["derivedFrom"]
+    assert remote["meta"]["profile"] == resource["meta"]["profile"]
+    assert {:matched, ^reference} = FhirClient.reconcile(resource, base_url: ctx.url)
+    assert {:matched, ^reference} = FhirClient.deliver(resource, base_url: ctx.url)
+    assert [_] = NativeFHIRFixture.observations(ctx)
+
+    for changed <- [put_in(resource, ["valueQuantity", "code"], "1"),
+                    put_in(resource, ["device", "identifier", "value"], "wrong-device"),
+                    Map.put(resource, "derivedFrom", [])] do
+      assert {:conflict, :conflicting_remote_record} = FhirClient.reconcile(changed, base_url: ctx.url)
+    end
   end
 end

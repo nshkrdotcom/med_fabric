@@ -51,7 +51,7 @@ defmodule MedFabric.DeviceNetworkTest do
       assert length(e["fhir_external_ids"]) == 2
     end
 
-    if suite in ["legacy-browser", "all"],
-      do: assert(e["scenarios"]["legacy-browser"]["actual_browser_playback"])
+    if suite in ["browser", "all"],
+      do: assert(e["scenarios"]["browser"]["actual_browser_playback"])
   end
 end

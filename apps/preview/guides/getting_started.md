@@ -1,108 +1,56 @@
-# Getting Started
+# Getting started
 
-`mf_preview` is an optional sidecar service that encodes live 48 kHz mono
-PCM16LE monitor frames into Opus and delivers them to clinician browsers over
-WebRTC.
+Install `{:mf_preview, "~> 0.3.0"}` into a separate release. Use the same pinned
+six-package revision-2 release family as Exam and Handheld, with exact locks and
+archive checksums recorded for qualification. Preview is built directly from
+`apps/preview` using Mix and compiles the pinned native codec through its direct
+provider dependency.
 
-## Prerequisites
-
-- Elixir `~> 1.20` and OTP 29
-- C11 compiler, GNU `make`, `tar`, and `sh` for the pinned-source `libopus`
-  Port encoder; `curl` or an offline archive selected by an absolute
-  `MED_EX_OPUS_TARBALL` path
-- RTC native build prerequisites, including `pkg-config` and OpenSSL
-  development headers (`libssl-dev` on Ubuntu)
-
-Opus does not require system `libopus` headers or use precompiled encoder
-binaries. The native qualification scope is Ubuntu Linux `x86_64`.
-
-## Installing Exam and Preview in one Mix project
-
-The normal deployment runs Exam and Preview as separate OS releases so native
-WebRTC NIFs (`ex_dtls` / `ex_libsrtp`) stay isolated from authoritative capture.
-Because `med_ex_opus ~> 0.2.1` runs a standalone C11 `libopus` Port encoder
-with no Membrane dependencies, a single Mix project that includes both `mf_exam`
-and `mf_preview` resolves cleanly from Hex with no overrides (requires POSIX
-`cc`, `make`, `tar`, `sh`, and `curl` or `MED_EX_OPUS_TARBALL`; natively
-qualified on Ubuntu Linux `x86_64`).
-
-Both applications start in the host's BEAM when included as ordinary runtime
-dependencies. A combined dependency graph does not provide process isolation;
-deploy Preview in a separate host/release for the isolation guarantees below.
-
-## Using Preview as a Hex dependency
-
-Mix loads runtime configuration from the top-level host project. It does not
-automatically load `deps/mf_preview/config/runtime.exs`. After adding
-`{:mf_preview, "~> 0.2.1"}` and fetching dependencies, copy the supplied runtime
-configuration into a new dedicated Preview host:
-
-```bash
-mix deps.get
-mkdir -p config
-cp -n deps/mf_preview/config/runtime.exs config/runtime.exs
-```
-
-If the host already has `config/runtime.exs`, merge the Preview configuration
-from the packaged file into it. Keep the file contents in the host, so Mix can
-copy its runtime configuration into a release without relying on a checkout
-path. This configures both `:mf_preview, :listen` and
-`:med_ex, :rtc_provider`. An explicitly managed host can set those same
-application settings itself.
-
-## Configuration
-
-For a file-based deployment, create `/etc/med_fabric/preview.json`:
+Create `/etc/med_fabric/preview.json` (or explicitly set `MF_PREVIEW_CONFIG`):
 
 ```json
 {
-  "port": 4100,
-  "credential_file": "/etc/med_fabric/credentials/preview"
+  "port": 4200,
+  "credential_file": "/etc/med_fabric/preview-token",
+  "trusted_clock": true,
+  "clock_error_ms": 2000,
+  "max_peers": 32,
+  "max_source_peers": 4,
+  "ice_servers": [],
+  "ice_transport_policy": "all"
 }
 ```
 
-Use the same credential file content for Exam's `preview_credential_file`.
-Preview listens on loopback. The file takes precedence over the environment
-settings below outside Mix tests. Restart Preview after updating it.
-The port must be in `1..65535`. Use a private random credential; empty or
-whitespace-only credential files are rejected in both configuration modes.
+The credential is a protected absolute file with a 32–4,096-byte secret, also
+configured on Exam's private relay. `trusted_clock: true` is an operator
+assertion backed by verified same-host time or an established bounded relative
+clock error. Without it the service refuses to boot. `MF_PREVIEW_PORT` and
+`MF_PREVIEW_CREDENTIAL_FILE` explicitly override the corresponding file values;
+blank or malformed values fail. The listener is loopback only. A remote sidecar
+requires an explicitly secured private transport deployment, not an open
+listener configuration.
 
-`mf_preview` reads two environment variables at startup (`config/runtime.exs`):
+ICE servers/policy come from trusted service configuration and are validated by
+the concrete RTC provider before allocation. An untrusted offer never supplies a
+remote feed endpoint or ICE configuration. `relay` requires qualified TURN
+configuration. Record platform, browser, TURN and pinned libopus identities in
+native qualification evidence.
 
-- `MF_PREVIEW_PORT` — Loopback TCP port (`127.0.0.1`) for the HTTP endpoint.
-- `MF_PREVIEW_CREDENTIAL_FILE` — Path to a private file containing the shared
-  bearer secret used by `mf_exam` to authenticate `/feed` requests and sign
-  viewer tokens.
+Exam uses the following bounded private HTTP API. Each request carries the
+private bearer and `x-acquisition`:
 
-Configure `mf_exam` with matching `MF_PREVIEW_URL` (for example,
-`http://127.0.0.1:4090`) and `MF_PREVIEW_CREDENTIAL_FILE`.
+| Path | Body/headers | Result |
+|---|---|---|
+| `POST /offer` | JSON `token`, `sdp` (SDP ≤32,768 bytes) | Answer SDP for the authorized viewer |
+| `POST /status` | JSON `token` | Current disposable media state; no lease extension |
+| `POST /renew` | JSON fresh `token` | Fresh monotonic authority deadline after a new Exam check |
+| `POST /close` | JSON `token` | Close only the same authorized viewer/source/session |
+| `POST /feed` | MEX1 monitor frame; `x-generation`, `x-source-epoch`, `x-descriptor-ref` | Disposable credit response; no evidence acknowledgment |
 
-## Quick Local Dev (Monorepo Checkout)
-
-From the `med_fabric` repository root, `./ops/dev.sh` creates the shared
-`preview.credential` file, wires it into `mf_exam`, and starts `mf_preview`:
-
-```bash
-./ops/dev.sh up       # creates preview.credential and prepares the dev lab
-./ops/dev.sh preview  # starts mf_preview on 127.0.0.1:4090
-```
-
-## Running Locally or as a Release
-
-From `apps/preview` in the source checkout, or an unpacked Preview package:
-
-```bash
-mix deps.get
-MF_PREVIEW_PORT=4090 MF_PREVIEW_CREDENTIAL_FILE=/path/to/secret mix run --no-halt
-```
-
-Production release:
-
-```bash
-MIX_ENV=prod mix deps.get
-MIX_ENV=prod mix release
-_build/prod/rel/mf_preview/bin/mf_preview start
-```
-
-A dedicated host project uses its own application/release name in the final
-path and carries the runtime configuration described above.
+The signed canonical JSON claims are exactly: `purpose` (`monitor`),
+`acquisition`, `source_kind` (`device` or `browser`), `profile` (`paired_exam` or
+`browser_microphone`), canonical `generation` and `source_epoch`, descriptor
+SHA-256, `viewer`, `viewer_session`, canonical `issued_at_ms` and
+`expires_at_ms`, and unique `nonce`. The token is unpadded base64url payload plus
+`.` plus an HMAC-SHA256 over the exact canonical bytes. Duplicate, extra,
+noncanonical or mismatched fields are refused before peer creation.

@@ -22,10 +22,7 @@ defmodule MedFabric.Workspace.MixProject do
       ],
       blitz_workspace: [
         root: __DIR__,
-        projects:
-          Path.wildcard("{apps,core}/*/mix.exs")
-          |> Enum.map(&Path.dirname/1)
-          |> Enum.reject(&(&1 == "apps/preview")),
+        projects: ~w(core/domain core/store core/interop apps/exam apps/handheld apps/preview),
         isolation: [deps_path: false, build_path: false, lockfile: false],
         parallelism: [
           multiplier: :auto,
@@ -47,7 +44,7 @@ defmodule MedFabric.Workspace.MixProject do
 
   defp docs do
     guides =
-      ~w(guides/browser_to_record.md guides/media_verification.md guides/architecture_and_roadmap.md guides/handheld_demo.md guides/preview_isolation.md guides/releasing_exam.md guides/failure_matrix.md guides/operations_and_telemetry.md guides/security_and_clinical_boundary.md guides/core_api_and_compatibility.md)
+      ~w(guides/browser_to_record.md guides/media_verification.md guides/architecture_and_roadmap.md guides/handheld_demo.md guides/preview_isolation.md guides/releasing_exam.md guides/failure_matrix.md guides/operations_and_telemetry.md guides/security_and_clinical_boundary.md guides/clinical_core.md)
 
     projects = [
       {"core/domain/README.md", filename: "domain", title: "Domain"},
@@ -108,30 +105,7 @@ defmodule MedFabric.Workspace.MixProject do
     ]
   end
 
-  defp docs_diagrams(:html) do
-    """
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.2/dist/mermaid.min.js"></script>
-    <script>
-      window.addEventListener("exdoc:loaded", () => {
-        const codeBlocks = document.querySelectorAll("pre code.mermaid");
-        if (!codeBlocks.length || !window.mermaid) return;
-        mermaid.initialize({
-          startOnLoad: false,
-          securityLevel: "strict",
-          theme: document.body.classList.contains("dark") ? "dark" : "default"
-        });
-        const nodes = Array.from(codeBlocks, code => {
-          const diagram = document.createElement("div");
-          diagram.className = "mermaid";
-          diagram.textContent = code.textContent;
-          code.parentElement.replaceWith(diagram);
-          return diagram;
-        });
-        mermaid.run({nodes});
-      });
-    </script>
-    """
-  end
+  defp docs_diagrams(:html), do: File.read!(Path.join(__DIR__, "build_support/docs_hook.html"))
 
   defp docs_diagrams(_format), do: ""
 end

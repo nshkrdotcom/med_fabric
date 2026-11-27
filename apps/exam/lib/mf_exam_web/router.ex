@@ -2,123 +2,59 @@ defmodule MedFabric.ExamWeb.Router do
   @moduledoc false
   use Phoenix.Router
   import Phoenix.LiveView.Router
-
   alias MedFabric.Exam
-  alias MedFabric.Exam.{Artifact, ICE, Recordings}
   alias MedFabric.ExamWeb.ProxyIdentity
-  alias MedFabric.Store.{Postgres, Records}
 
   scope "/api/device/v1" do
-    match(:get, "/control", MedFabric.ExamWeb.DeviceSocket, :control)
-    match(:get, "/stream", MedFabric.ExamWeb.DeviceSocket, :stream)
-    match(:get, "/monitor", MedFabric.ExamWeb.DeviceSocket, :monitor)
+    match(:get,"/control",MedFabric.ExamWeb.DeviceSocket,:control)
+    match(:get,"/stream",MedFabric.ExamWeb.DeviceSocket,:stream)
+    match(:get,"/monitor",MedFabric.ExamWeb.DeviceSocket,:monitor)
   end
-
   pipeline :session do
     plug(:fetch_session)
   end
-
   pipeline :browser do
-    plug(:accepts, ["html", "wav", "json"])
+    plug(:accepts,["html","wav","json"])
     plug(:fetch_live_flash)
-    plug(:put_root_layout, html: {MedFabric.ExamWeb.Layout, :root})
+    plug(:put_root_layout,html: {MedFabric.ExamWeb.Layout,:root})
     plug(:protect_from_forgery)
     plug(:put_secure_browser_headers)
     plug(:authorize_exam)
   end
-
   scope "/" do
-    pipe_through([:session, :browser])
-
-    get("/encounters/:encounter_id/attempts/:acquisition", __MODULE__.State, :attempt)
-    get("/encounters/:encounter_id/ice", __MODULE__.State, :ice)
-    live("/encounters/:encounter_id/devices", MedFabric.ExamWeb.DeviceLive, :show)
-
-    match(
-      :get,
-      "/encounters/:encounter_id/devices/:id/segment/:stream/:first_sample/:sha",
-      MedFabric.ExamWeb.DeviceSegment,
-      []
-    )
-
-    match(
-      :get,
-      "/encounters/:encounter_id/devices/:id/segment/:stream/:sha",
-      MedFabric.ExamWeb.DeviceSegment,
-      []
-    )
-
-    match(
-      :post,
-      "/encounters/:encounter_id/devices/:id/action",
-      MedFabric.ExamWeb.DeviceAction,
-      []
-    )
-
-    match(
-      :post,
-      "/encounters/:encounter_id/devices/:id/preview",
-      MedFabric.ExamWeb.DevicePreview,
-      []
-    )
-
-    live("/encounters/:encounter_id", MedFabric.ExamWeb.ExamLive, :show)
-    match(:get, "/encounters/:encounter_id/recordings/:acquisition", __MODULE__.Recording, [])
+    pipe_through([:session,:browser])
+    get("/encounters/:encounter_id/ice",__MODULE__.State,:ice)
+    post("/encounters/:encounter_id/acquisitions/browser",__MODULE__.BrowserCreate,[])
+    get("/encounters/:encounter_id/acquisitions/browser/stream",MedFabric.ExamWeb.BrowserStreamSocket,[])
+    get("/encounters/:encounter_id/acquisitions/:id/segment/:stream/:first_sample/:sha",MedFabric.ExamWeb.DeviceSegment,[])
+    post("/encounters/:encounter_id/acquisitions/:id/action",MedFabric.ExamWeb.DeviceAction,[])
+    post("/encounters/:encounter_id/observations/:id/deliver",MedFabric.ExamWeb.DeviceAction,:deliver)
+    post("/encounters/:encounter_id/acquisitions/:id/preview",MedFabric.ExamWeb.DevicePreview,[])
+    live("/encounters/:encounter_id/devices",MedFabric.ExamWeb.DeviceLive,:show)
+    live("/encounters/:encounter_id",MedFabric.ExamWeb.ExamLive,:show)
   end
-
-  scope "/" do
-    pipe_through(:session)
-    match(:get, "/encounters/:encounter_id/pcm", __MODULE__.PCM, [])
-  end
-
-  defmodule PCM do
-    @moduledoc false
-    alias MedFabric.ExamWeb.PCMSocket
-    def init(opts), do: opts
-    def call(conn, opts), do: PCMSocket.upgrade(conn, opts)
-  end
-
-  defmodule Recording do
-    @moduledoc false
-    import Plug.Conn
-    def init(opts), do: opts
-
-    def call(conn, _) do
-      with "clinician" <- get_session(conn, :exam_role),
-           id = conn.path_params["acquisition"],
-           {:ok, %{evidence: %{"kind" => "audio_pcm16_wav"} = evidence}} <-
-             Records.get(Postgres, conn.path_params["encounter_id"], id) do
-        Artifact.serve(conn, Exam.lab().artifact_dir, id, evidence)
-      else
-        _ -> send_resp(conn, 404, "Recording unavailable")
-      end
-    end
-  end
-
   defmodule State do
     @moduledoc false
     import Plug.Conn
-    def init(action), do: action
-
-    def call(conn, :ice) do
-      private_json(conn, ICE.config(get_session(conn, :exam_actor), Exam.lab().turn))
+    def init(opts),do: opts
+    def call(conn,:ice) do
+      conn |> put_resp_header("cache-control","no-store") |> put_resp_content_type("application/json") |> send_resp(200,Jason.encode!(MedFabric.Exam.ICE.config(get_session(conn,:exam_actor),Exam.lab().turn)))
     end
-
-    def call(conn, :attempt) do
-      with "patient" <- get_session(conn, :exam_role),
-           {:ok, state} <-
-             Recordings.status(conn.path_params["encounter_id"], conn.path_params["acquisition"]) do
-        private_json(conn, %{status: state})
-      else
-        _ -> send_resp(conn, 404, "Attempt unavailable")
-      end
-    end
-
-    defp private_json(conn, data) do
-      conn
-      |> put_resp_header("cache-control", "no-store")
-      |> put_resp_content_type("application/json")
-      |> send_resp(200, Jason.encode!(data))
+  end
+  defmodule BrowserCreate do
+    @moduledoc false
+    import Plug.Conn
+    def init(opts),do: opts
+    def call(conn,_) do
+      actor=get_session(conn,:exam_actor)
+      session=get_session(conn,:exam_session)
+      enc=conn.path_params["encounter_id"]
+      with "patient" <- get_session(conn,:exam_role),
+           {:ok,created} <- MedFabric.Store.AcquisitionSessions.create_browser(Exam.context().db,enc,actor,session,conn.body_params["page"],conn.body_params["request_id"]) do
+        token=Phoenix.Token.sign(MedFabric.ExamWeb.Endpoint,"browser-acquisition",{session,enc,actor,created.acquisition,created.page})
+        body=Map.merge(created,%{stream_token: token,source_ref: actor})
+        conn |> put_resp_header("cache-control","no-store") |> put_resp_content_type("application/json") |> send_resp(201,Jason.encode!(body))
+      else _ -> send_resp(conn,403,"Patient acquisition creation denied") end
     end
   end
 
@@ -137,7 +73,8 @@ defmodule MedFabric.ExamWeb.Router do
   defp authorize_member(conn, id, entry, lab) do
     actor = get_session(conn, :exam_actor)
     role = get_session(conn, :exam_role)
-    current_session = get_session(conn, :lab_encounter) == id and Exam.member?(id, actor, role)
+    current_session = get_session(conn, :lab_encounter) == id and role in ["patient", "clinician"] and
+      MedFabric.Store.Encounters.session_authorized?(Exam.context().db, get_session(conn, :exam_session), id, actor, if(role == "patient", do: :patient, else: :clinician), :read)
 
     if lab.local? do
       authorize_local(conn, id, entry, current_session)
@@ -167,7 +104,7 @@ defmodule MedFabric.ExamWeb.Router do
     with {:ok, actor} <- ProxyIdentity.actor(conn.req_headers, secret),
          role when role in ["patient", "clinician"] <-
            Enum.find(["patient", "clinician"], &(entry[&1 <> "_actor"] == actor)),
-         true <- Exam.member?(id, actor, role) do
+         true <- MedFabric.Store.Records.member?(Exam.context().db, id, actor, if(role == "patient", do: :patient, else: :clinician), :read) do
       if current_session and get_session(conn, :exam_actor) == actor,
         do: conn,
         else: grant(conn, id, actor, role)
@@ -179,7 +116,10 @@ defmodule MedFabric.ExamWeb.Router do
   defp valid_key?(key, expected), do: is_binary(key) and Plug.Crypto.secure_compare(key, expected)
 
   defp grant(conn, id, actor, role) do
+    session = MedFabric.Store.AcquisitionSessions.nonce()
+    {:ok, :ok} = MedFabric.Store.Encounters.browser_session(Exam.context().db, session, id, actor, if(role == "patient", do: :patient, else: :clinician))
     conn
+    |> put_session(:exam_session, session)
     |> configure_session(renew: true)
     |> put_session(:lab_encounter, id)
     |> put_session(:exam_actor, actor)

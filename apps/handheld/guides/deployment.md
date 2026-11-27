@@ -1,31 +1,36 @@
 # Deployment
 
-`mf_handheld` builds as an ordinary Mix release with no dependency on the
-`mf_exam` source tree or database.
+Build `mf_handheld` directly with Mix; it is not a Weld artifact. Its runtime
+closure is MedEx plus Gun/OTP TLS. It has no dependency on Exam, private Fabric
+components, Opus or RTC. Package-relative code and the CLI run from a relocated
+consumer without either source checkout.
 
-## Building a Release
+Use the pinned supported Elixir/OTP toolchain, a service-owned local spool and
+an OS with verified `flock` semantics. Restrict the credential/CA files and root
+to the service user. Use explicit approved endpoints, peer/hostname verification
+and finite source/byte/session budgets. Monitoring is optional and may be absent.
+Do not place an evidence spool under an untrusted writer's directory or allow
+multiple writable processes for the same acquisition.
 
-```bash
-MIX_ENV=prod mix deps.get
-MIX_ENV=prod mix release
-```
+Before the breaking release, inventory old databases, spool/evidence roots and
+credential authorities by metadata only. Protect non-disposable state in
+approved checksummed offline archives and verify recoverability. Provision a
+new namespace for revision 2. A reset or deletion requires explicit operator
+approval; the application never performs one.
 
-Copy `_build/prod/rel/mf_handheld` to a target Linux host matching the build
-architecture and ABI.
+A coordinated restore compares deployment identity, server journal/index and
+manifest inventory, database receipt projection, local ACK/source watermark and
+retained coverage. An older server backup can omit bytes already reclaimed by a
+device. Account for post-backup acquisitions, decisions and external effects,
+including missing newer intent rows. Do not resume writable acquisition when
+those facts cannot be established. Preserve and quarantine the affected scope;
+if its extent is unknown, keep the deployment non-writable.
 
-## Runtime Inputs
-
-Provide the following files on the target host with restrictive permissions:
-
-- Device bearer credential file matching the token enrolled in `mf_exam`
-- Trusted CA PEM bundle for verifying the `mf_exam` TLS certificate
-- Fixture/scenario configuration JSON
-- Dedicated writable spool directory on a local filesystem supporting `flock`
-  and directory `fsync`
-
-## Running the Release
-
-```bash
-bin/mf_handheld eval \
-  'Application.ensure_all_started(:mf_handheld); MedExHandheld.CLI.main(["--config", "/etc/handheld/fixture.json", "--scenario", "paired_exam"])'
-```
+Qualify the actual direct package tar, exact dependency locks and source oracle.
+Required system lanes include TLS denial, two competing spool owners, lost ACK,
+source/ACK/install/deletion crashes, real filesystem exhaustion, monitor kill and
+suspension, unknown command/readback, reconnect, and clean 1,740-second ext4 runs
+with Preview off and isolated Preview on. Preserve the 15-slot negotiated window,
+five-frame source batch, 2,000 ms lag guard and measured queue/reclamation work.
+Record outcomes as PASS/FAIL/BLOCKED/NOT RUN with exact artifact identities. A
+synthetic source test does not establish clinical or physical-device readiness.

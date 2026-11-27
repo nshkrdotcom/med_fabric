@@ -1,72 +1,71 @@
-Code.require_file("../../../ops/lab_fhir.exs", __DIR__)
+Code.require_file("support/native_fhir.exs", __DIR__)
 
 defmodule MedFabric.Interop.HapiIntegrationTest do
   use ExUnit.Case, async: false
-
-  alias MedFabric.Interop.FhirClient
+  alias MedFabric.Interop.{FhirClient, NativeFHIRFixture, JSON}
+  @moduletag timeout: 60_000
 
   defmodule DropCreatedResponse do
     @moduledoc false
-
     def run(request) do
       {request, %Req.Response{status: 201}} = Req.Finch.run(request)
-      {request, %RuntimeError{message: "discarded response after HAPI accepted the write"}}
+      {request, %RuntimeError{message: "synthetic response loss after remote commit"}}
     end
   end
 
-  test "R4 HAPI conditional create survives a response lost after the actual write" do
-    base_url = System.fetch_env!("FHIR_BASE_URL")
-    opts = [base_url: base_url]
-    fixture_id = "record-test-" <> Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+  setup do
+    ctx = NativeFHIRFixture.create!()
+    on_exit(fn -> NativeFHIRFixture.cleanup(ctx) end)
+    %{fixture: ctx}
+  end
 
-    assert %{status: 200, body: %{"fhirVersion" => "4.0.1"}} =
-             Req.get!("#{base_url}/metadata", headers: [{"accept", "application/fhir+json"}])
+  test "lost actual HAPI response remains unknown until exact readback", %{fixture: ctx} do
+    native = NativeFHIRFixture.native(ctx, "pulse_rate", %{"mantissa" => "70", "exponent" => "0"})
+    assert {:ok, resource} = FhirClient.resource_checked(native, ctx.identifier, ctx.refs)
+    assert {:unknown, :possible_remote_effect} = FhirClient.deliver(resource,
+      base_url: ctx.url, adapter: DropCreatedResponse)
+    [remote] = NativeFHIRFixture.observations(ctx)
+    reference = "Observation/" <> remote["id"]
+    assert remote["identifier"] == [ctx.identifier]
+    assert remote["subject"]["reference"] == ctx.refs["patient_ref"]
+    assert remote["encounter"]["reference"] == ctx.refs["encounter_ref"]
+    assert Decimal.equal?(remote["valueQuantity"]["value"], Decimal.new(70))
+    assert {:matched, ^reference} = FhirClient.reconcile(resource, base_url: ctx.url)
 
-    assert {:ok, %{patient_ref: patient, encounter_ref: encounter} = refs} =
-             MedFabric.LabFHIR.seed_exam(fixture_id, opts)
-
-    assert {:ok, ^refs} = MedFabric.LabFHIR.seed_exam(fixture_id, opts)
-
-    resource =
-      FhirClient.resource(
-        %{
-          "kind" => "audio_pcm16_wav",
-          "file_sha256" => String.duplicate("a", 64),
-          "effective_at" => DateTime.utc_now() |> DateTime.to_iso8601()
-        },
-        fixture_id,
-        "Integration test reviewer",
-        %{"patient_ref" => patient, "encounter_ref" => encounter}
-      )
-
-    assert {:error, %RuntimeError{message: "discarded response after HAPI accepted the write"}} =
-             FhirClient.deliver(resource, Keyword.put(opts, :adapter, DropCreatedResponse))
-
-    assert {:ok, %{created?: false, remote_ref: remote_ref}} = FhirClient.deliver(resource, opts)
-    assert {:ok, [remote]} = FhirClient.fetch_by_identifier(fixture_id, opts)
-    assert "Observation/" <> remote["id"] == remote_ref
-    assert remote["subject"]["reference"] == patient
-    assert remote["encounter"]["reference"] == encounter
-    assert remote["valueString"] == resource["valueString"]
-    assert hd(remote["code"]["coding"])["code"] == "reviewed-auscultation-recording"
+    # Qualifies the remote conditional-create behavior only. Store still needs
+    # its independent dispatch/confirmation proof before authorizing any retry.
+    assert {:matched, ^reference} = FhirClient.deliver(resource, base_url: ctx.url)
+    assert [_] = NativeFHIRFixture.observations(ctx)
 
     [coding] = remote["code"]["coding"]
-    enriched = put_in(remote, ["code", "coding"], [Map.put(coding, "display", "Reviewed audio")])
+    enriched = put_in(remote, ["code", "coding"], [Map.put(coding, "display", "Heart rate")])
+    assert %{status: 200} = Req.put!(ctx.url <> "/" <> reference,
+      body: JSON.encode!(enriched), headers: [{"content-type", "application/fhir+json"}],
+      retry: false, receive_timeout: 5_000)
+    assert {:matched, ^reference} = FhirClient.reconcile(resource, base_url: ctx.url)
 
-    assert %{status: 200} =
-             Req.put!("#{base_url}/#{remote_ref}",
-               headers: [{"content-type", "application/fhir+json"}],
-               json: enriched
-             )
+    changed = put_in(resource, ["valueQuantity", "value"], Decimal.new(71))
+    assert {:conflict, :conflicting_remote_record} = FhirClient.deliver(changed, base_url: ctx.url)
+    assert [unchanged] = NativeFHIRFixture.observations(ctx)
+    assert Decimal.equal?(unchanged["valueQuantity"]["value"], Decimal.new(70))
+  end
 
-    assert {:ok, %{created?: false, remote_ref: ^remote_ref}} = FhirClient.deliver(resource, opts)
+  test "multiple actual remote matches are conflict, never arbitrary confirmation", %{fixture: ctx} do
+    native = NativeFHIRFixture.native(ctx, "pulse_rate", %{"mantissa" => "80", "exponent" => "0"})
+    assert {:ok, resource} = FhirClient.resource_checked(native, ctx.identifier, ctx.refs)
+    for _ <- 1..2 do
+      assert %{status: 201} = Req.post!(ctx.url <> "/Observation",
+        headers: [{"content-type", "application/fhir+json"}], body: JSON.encode!(resource),
+        retry: false, receive_timeout: 5_000)
+    end
+    assert [_, _] = NativeFHIRFixture.observations(ctx)
+    assert {:conflict, :ambiguous_search} = FhirClient.reconcile(resource, base_url: ctx.url)
+  end
 
-    assert {:error, :conflicting_remote_record} =
-             FhirClient.deliver(Map.put(resource, "valueString", String.duplicate("b", 64)), opts)
-
-    different_recording = Map.put(resource, "status", "entered-in-error")
-    assert {:error, :conflicting_remote_record} = FhirClient.deliver(different_recording, opts)
-    assert {:ok, [confirmed]} = FhirClient.fetch_by_identifier(fixture_id, opts)
-    assert confirmed["code"] == enriched["code"]
+  test "empty real search cannot prove noncommit", %{fixture: ctx} do
+    native = NativeFHIRFixture.native(ctx, "pulse_rate", %{"mantissa" => "90", "exponent" => "0"})
+    assert {:ok, resource} = FhirClient.resource_checked(native, ctx.identifier, ctx.refs)
+    assert [] = NativeFHIRFixture.observations(ctx)
+    assert {:unknown, :empty_search} = FhirClient.reconcile(resource, base_url: ctx.url)
   end
 end

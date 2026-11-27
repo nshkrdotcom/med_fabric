@@ -1,6 +1,6 @@
 # Executed by the actual app's ordinary Mix project after dependency resolution.
 profile = System.fetch_env!("MF_SOURCE_QC_PROFILE")
-native? = profile in ["preview", "legacy-exam"]
+native? = profile == "preview"
 paths = Mix.Project.deps_paths()
 
 for app <- [:med_ex, :med_ex_opus, :med_ex_rtc] do
@@ -18,11 +18,7 @@ for app <- [:med_ex, :med_ex_opus, :med_ex_rtc] do
   end
 end
 
-unless MedEx.Contract.api_revision() == 1, do: raise("Wrong MedEx contract")
-
-for asset <- ~w(pcm_capture.js pcm_worklet.js session_hook.js) do
-  unless File.regular?(MedEx.Web.asset_path(asset)), do: raise("Missing SDK asset #{asset}")
-end
+unless MedEx.Contract.api_revision() == 2, do: raise("Wrong MedEx contract")
 
 for module <- [MedEx.StreamSpec, MedEx.SampleFrame, MedEx.StreamWriter, MedEx.ClockAlign] do
   unless Code.ensure_loaded?(module) and Application.get_application(module) == :med_ex,
@@ -60,7 +56,7 @@ end
 config = Mix.Project.config()
 mutable = Keyword.take(config, [:lockfile, :deps_path, :build_path])
 
-if System.get_env("MF_SOURCE_QC_EXPECT_DEFAULT") == "1" and profile != "legacy-exam" do
+if System.get_env("MF_SOURCE_QC_EXPECT_DEFAULT") == "1" do
   expected_build = Path.expand(Path.join("_build", Atom.to_string(Mix.env())))
 
   unless Path.expand(config[:lockfile]) == Path.expand("mix.lock") and

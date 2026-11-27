@@ -6,7 +6,7 @@ alias MedFabric.Exam.DeviceRootLock
 Process.flag(:trap_exit, true)
 
 children = [
-  {DeviceRootLock, root},
+  {DeviceRootLock,[name: DeviceRootLock,root: root,deployment_uuid: "00000000-0000-4000-8000-000000000002"]},
   {DynamicSupervisor, strategy: :one_for_one, name: MedFabric.Exam.Captures}
 ]
 
@@ -19,7 +19,7 @@ case Supervisor.start_link(children, strategy: :rest_for_one) do
     {DeviceRootLock, guard, :worker, _} =
       List.keyfind(Supervisor.which_children(supervisor), DeviceRootLock, 0)
 
-    {:os_pid, helper_pid} = guard |> :sys.get_state() |> Port.info(:os_pid)
+    {:os_pid, helper_pid} = guard |> :sys.get_state() |> Map.fetch!(:port) |> Port.info(:os_pid)
 
     descriptor = %StreamSpec{
       descriptor_ref: "",
@@ -51,7 +51,7 @@ case Supervisor.start_link(children, strategy: :rest_for_one) do
         {:ok, writer} =
           DynamicSupervisor.start_child(
             MedFabric.Exam.Captures,
-            {StreamWriter, owner: self(), stream: descriptor, artifact_dir: attempt, fence: fence}
+            {StreamWriter, owner: self(), stream: descriptor, artifact_dir: attempt, fence: fence,root_owner: guard,limits: %{checkpoint_ms: :manual}}
           )
 
         frame = %SampleFrame{
@@ -65,15 +65,15 @@ case Supervisor.start_link(children, strategy: :rest_for_one) do
           payload: payload
         }
 
-        {:ok, _} = StreamWriter.push(writer, frame)
-        {:ok, %{durable_sequence: 1, durable_sample: 2}} = StreamWriter.checkpoint(writer)
+        {:ok, _} = StreamWriter.push(writer, fence,frame,5_000)
+        {:ok, %{durable_sequence: 1, durable_sample: 2}} = StreamWriter.checkpoint(writer,fence,5_000)
         true = Process.alive?(writer)
 
       "recover" ->
         {:ok, %{receipt: %{durable_sequence: 1, durable_sample: 2}, index: %{segments: [chunk]}}} =
-          Storage.recover(attempt, stream: descriptor, fence: fence)
+          Storage.recover(attempt, stream: descriptor, fence: fence,root_owner: guard)
 
-        {:ok, ^payload} = Storage.read_segment(attempt, chunk)
+        {:ok, ^payload} = File.read(Path.join(attempt,chunk.key))
     end
 
     IO.puts("ready #{System.pid()} #{helper_pid}")

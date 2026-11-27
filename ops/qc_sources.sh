@@ -15,13 +15,8 @@ fi
 command -v mix >/dev/null || { echo 'Elixir 1.20 and Mix are required.' >&2; exit 127; }
 qc_dir=$(mktemp -d)
 trap 'rm -rf "$qc_dir"' EXIT
-unset MF_MED_EX_PATH MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE MIX_EXS
+unset MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE MIX_EXS
 export MIX_ENV=test
-export EXPECT_MED_EX_CONTRACT=${EXPECT_MED_EX_CONTRACT:-stream_v1}
-if [[ $EXPECT_MED_EX_CONTRACT =~ ^(legacy|reject_legacy)$ && $profile != base ]]; then
-  echo 'The historical SDK can only be checked in the base profile.' >&2
-  exit 2
-fi
 cp "$repo_dir/config/sources.exs" "$qc_dir/sources.exs"
 cat > "$qc_dir/mix.exs" <<'MIX'
 Code.require_file("../sources.exs", __DIR__)
@@ -33,10 +28,12 @@ defmodule SourceConsumer.MixProject do
   def project do
     profile = System.fetch_env!("MED_EX_PROFILE")
 
-    apps =
-      [:med_ex] ++
-        if(profile in ["opus", "both"], do: [:med_ex_opus], else: []) ++
-        if(profile in ["rtc", "both"], do: [:med_ex_rtc], else: [])
+    apps = case profile do
+      "base" -> [:med_ex]
+      "opus" -> [:med_ex_opus]
+      "rtc" -> [:med_ex_rtc]
+      "both" -> [:med_ex, :med_ex_opus, :med_ex_rtc]
+    end
 
     choices = ".mix_sources.json" |> Path.expand(__DIR__) |> File.read!() |> JSON.decode!()
 
@@ -45,7 +42,6 @@ defmodule SourceConsumer.MixProject do
         do: Mix.raise("Supply a source for #{app} in the #{profile} profile")
 
       {^app, requirement, options} = BuildSources.med_ex_dependency(app)
-      requirement = if app == :med_ex, do: System.get_env("MED_EX_REQUIREMENT", requirement), else: requirement
       {app, requirement, options}
     end)
 
@@ -55,55 +51,28 @@ defmodule SourceConsumer.MixProject do
 end
 MIX
 cat > "$qc_dir/prove.exs" <<'ELIXIR'
-contract = System.fetch_env!("EXPECT_MED_EX_CONTRACT")
 profile = System.fetch_env!("MED_EX_PROFILE")
-unless contract in ["legacy", "stream_v1"], do: raise("Unknown expected contract")
-unless Code.ensure_loaded?(MedEx.Capture), do: raise("Missing browser capture facade")
-
-assets = if contract == "legacy", do: ["pcm_worklet.js"], else: ~w(pcm_capture.js pcm_worklet.js session_hook.js)
-for asset <- assets do
-  unless File.regular?(MedEx.Web.asset_path(asset)), do: raise("Missing browser asset #{asset}")
+deps = Map.keys(Mix.Project.deps_paths())
+base? = profile in ["base", "both"]
+opus? = profile in ["opus", "both"]
+rtc? = profile in ["rtc", "both"]
+for {app, wanted?} <- [med_ex: base?, med_ex_opus: opus?, med_ex_rtc: rtc?] do
+  unless (app in deps) == wanted?, do: raise("Unexpected package #{app} in #{profile}")
 end
-
-revision =
-  if Code.ensure_loaded?(MedEx.Contract) and function_exported?(MedEx.Contract, :api_revision, 0),
-    do: apply(MedEx.Contract, :api_revision, []),
-    else: nil
-
-case {contract, revision} do
-  {"legacy", nil} -> :ok
-  {"stream_v1", 1} -> :ok
-  {"stream_v1", _} -> raise "Selected SDK lacks the stream-v1 contract"
-  {"legacy", _} -> raise "Expected the historical standalone SDK"
-end
-
-if contract == "stream_v1" do
-  deps = Map.keys(Mix.Project.deps_paths())
-  wanted_opus? = profile in ["opus", "both"]
-  wanted_rtc? = profile in ["rtc", "both"]
-  for {dep, wanted?} <- [med_ex_opus: wanted_opus?, elixir_make: wanted_opus?,
-                        med_ex_rtc: wanted_rtc?, ex_webrtc: wanted_rtc?] do
-    unless (dep in deps) == wanted?, do: raise("Unexpected package #{dep} in #{profile}")
-  end
-
-  if profile == "base" do
-    for app <- deps, String.starts_with?(Atom.to_string(app), "membrane_") or app in [:ex_webrtc, :ex_rtp, :ex_rtcp, :ex_srtp],
-      do: raise("Native media dependency leaked into base: #{app}")
-  end
-
-  forbidden = [:weld, :mix_workspace_ops, :med_ex_maintainer, :med_core, :med_capture, :med_rtc]
-  for app <- forbidden, app in deps, do: raise("Unexpected dependency #{app}")
-  for module <- [MedEx.StreamSpec, MedEx.SampleFrame, MedEx.StreamWriter, MedEx.ClockAlign] do
-    unless Application.get_application(module) == :med_ex, do: raise("Incorrect base module ownership")
-  end
-
-  providers = [{:med_ex_opus, MedEx.Opus.Provider, wanted_opus?},
-               {:med_ex_rtc, MedEx.RTC.Provider, wanted_rtc?}]
-  for {app, module, true} <- providers do
-    unless Code.ensure_loaded?(module) and Application.get_application(module) == app,
-      do: raise("Incorrect provider application #{app}")
+if base? do
+  unless MedEx.Contract.api_revision() == 2, do: raise("API revision 2 is required")
+  for module <- [MedEx.Receipt, MedEx.StreamWriter, MedEx.Wire.Credit] do
+    unless Application.get_application(module) == :med_ex,
+      do: raise("Incorrect SDK module ownership")
   end
 end
+for {app, module, wanted?} <- [{:med_ex_opus, MedEx.Opus.Provider, opus?},
+                              {:med_ex_rtc, MedEx.RTC.Provider, rtc?}], wanted? do
+  unless Code.ensure_loaded?(module) and Application.get_application(module) == app,
+    do: raise("Incorrect provider ownership")
+end
+for app <- [:weld, :med_ex_maintainer, :med_core, :med_capture], app in deps,
+  do: raise("Maintainer/private application leaked into consumer")
 
 paths = Keyword.take(Mix.Project.config(), [:lockfile, :build_path, :deps_path])
 unless length(paths) == 3 and Enum.all?(paths, fn {_, path} -> String.contains?(path, "/source_contexts/") end),
@@ -140,7 +109,7 @@ for {app, requirement, source} <- Mix.Project.config()[:deps] do
   end
 end
 
-IO.puts("Source consumer passed: #{contract} / #{profile}")
+IO.puts("Source consumer passed: revision 2 / #{profile}")
 IO.inspect(paths, label: "isolated paths")
 ELIXIR
 
@@ -153,32 +122,9 @@ for selected in "${profiles[@]}"; do
   (
     cd "$work"
     export MED_EX_PROFILE=$selected
-    if [[ $EXPECT_MED_EX_CONTRACT == reject_legacy ]]; then
-      # Prove the genuine historical package first, then attempt to consume
-      # exactly those downloaded bytes under the current stream-v1 requirement.
-      export MED_EX_REQUIREMENT='== 0.1.0' EXPECT_MED_EX_CONTRACT=legacy
-      mix deps.get
-      mix deps.tree
-      mix compile --warnings-as-errors
-      mix run prove.exs
-      legacy_path=$(mix run --no-start -e 'IO.puts(Map.fetch!(Mix.Project.deps_paths(), :med_ex))' | tail -n1)
-      test -f "$legacy_path/mix.exs"
-      elixir -e 'IO.puts(JSON.encode!(%{"med_ex" => %{"path" => hd(System.argv())}}))' -- "$legacy_path" > .mix_sources.json
-      unset MED_EX_REQUIREMENT
-      export EXPECT_MED_EX_CONTRACT=stream_v1
-      if (mix deps.get && mix compile --warnings-as-errors) > rejection.log 2>&1; then
-        cat rejection.log >&2
-        echo 'Historical SDK unexpectedly satisfied the stream-v1 consumer.' >&2
-        exit 1
-      fi
-      cat rejection.log
-      grep -Eiq 'does not satisfy med_ex|med_ex.*(0\.1\.0|version).*(does not match|does not satisfy|mismatch)|version.*mismatch.*med_ex|does not match the requirement' rejection.log
-      echo 'Verified historical package rejected by the stream-v1 consumer.'
-    else
-      mix deps.get
-      mix deps.tree
-      mix compile --warnings-as-errors
-      mix run prove.exs
-    fi
+    mix deps.get
+    mix deps.tree
+    mix compile --warnings-as-errors
+    mix run prove.exs
   )
 done

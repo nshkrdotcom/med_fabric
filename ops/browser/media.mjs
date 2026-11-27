@@ -116,27 +116,77 @@ export async function previewSignal(page) {
   return result;
 }
 
+// Independent wire oracle. It observes exact outbound MEX1 bytes, never calls
+// the producer encoder, and deduplicates only byte-identical retransmissions.
 export function captureWire(patient) {
-  let nextSample = 0, malformed = false, finish = false;
-  const hash = createHash("sha256");
+  const records = new Map();
+  let finish = false, terminal = null, failure = null;
+  const keys = ["stream_id", "source_epoch", "descriptor_ref", "fence", "journal_id",
+    "journal_generation", "journal_digest", "accepted_sequence", "accepted_sample",
+    "durable_sequence", "durable_sample"].sort();
   patient.on("websocket", socket => {
-    if (!new URL(socket.url()).pathname.endsWith("/pcm")) return;
+    if (!new URL(socket.url()).pathname.endsWith("/acquisitions/browser/stream")) return;
     socket.on("framesent", ({payload}) => {
-      if (payload === "finish") finish = true;
-      if (!Buffer.isBuffer(payload)) return;
-      if (finish || payload.length < 10 || payload.length > 1928 || payload.length % 2 ||
-          payload.readBigUInt64BE() !== BigInt(nextSample)) {
-        malformed = true;
-        return;
-      }
-      const pcm = payload.subarray(8);
-      nextSample += pcm.length / 2;
-      hash.update(pcm);
+      try {
+        if (!Buffer.isBuffer(payload)) {
+          const value = JSON.parse(payload);
+          assert.equal(value.schema, "medex.acquisition.v2");
+          if (value.type === "finish") finish = true;
+          if (value.type === "gap") throw new Error("Clean microphone fixture lost source samples");
+          return;
+        }
+        assert.ok(!finish, "no new source data after terminal request");
+        assert.ok(payload.length >= 49 && payload.length <= 65584);
+        assert.equal(payload.toString("ascii", 0, 4), "MEX1");
+        assert.equal(payload.readUInt8(4), 1);
+        assert.equal(payload.readUInt8(5), 0);
+        assert.equal(payload.readUInt16BE(6), 48);
+        assert.equal(payload.readUInt32BE(44), 0);
+        assert.equal(payload.readUInt32BE(40), payload.length - 48);
+        const sequence = payload.readBigUInt64BE(20);
+        const sample = payload.readBigUInt64BE(28);
+        const count = BigInt(payload.readUInt32BE(36));
+        assert.equal(count * 2n, BigInt(payload.length - 48));
+        assert.ok(count > 0n);
+        const previous = records.get(sequence);
+        if (previous) assert.deepEqual(previous.raw, payload, "exact retransmission");
+        else records.set(sequence, {sequence, sample, count, raw: Buffer.from(payload)});
+      } catch (error) { failure ||= error; }
+    });
+    socket.on("framereceived", ({payload}) => {
+      try {
+        if (Buffer.isBuffer(payload)) return;
+        const value = JSON.parse(payload);
+        assert.equal(value.schema, "medex.acquisition.v2");
+        if (value.type === "stream_finished") {
+          assert.deepEqual(Object.keys(value.receipt).sort(), keys);
+          for (const key of ["source_epoch", "journal_generation", "accepted_sequence",
+            "accepted_sample", "durable_sequence", "durable_sample"]) {
+            assert.match(value.receipt[key], /^(0|[1-9][0-9]*)$/);
+          }
+          assert.equal(value.receipt.accepted_sequence, value.receipt.durable_sequence);
+          assert.equal(value.receipt.accepted_sample, value.receipt.durable_sample);
+          terminal = value.receipt;
+        }
+      } catch (error) { failure ||= error; }
     });
   });
   return () => {
-    assert.ok(finish && !malformed && nextSample > 0, "ordered indexed PCM followed by finish");
-    return {samples: nextSample, sha256: hash.digest("hex")};
+    if (failure) throw failure;
+    assert.ok(finish && terminal && records.size > 0, "durable terminal acknowledgement");
+    const ordered = [...records.values()].sort((a, b) => a.sequence < b.sequence ? -1 : 1);
+    let sample = 0n, sequence = 0n;
+    const hash = createHash("sha256");
+    for (const frame of ordered) {
+      assert.equal(frame.sequence, sequence++);
+      assert.equal(frame.sample, sample);
+      sample += frame.count;
+      hash.update(frame.raw.subarray(48));
+    }
+    assert.equal(BigInt(terminal.durable_sequence), sequence);
+    assert.equal(BigInt(terminal.durable_sample), sample);
+    return {samples: sample.toString(), frames: sequence.toString(), sha256: hash.digest("hex"),
+      receipt: terminal};
   };
 }
 

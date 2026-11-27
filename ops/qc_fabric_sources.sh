@@ -37,7 +37,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
-unset MF_MED_EX_PATH MF_EXAM_LEGACY_MEDIA MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE MIX_EXS
+unset MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE MIX_EXS
 export MIX_ENV=test
 # Do not copy runtime state or ignored selectors/credentials from the real apps.
 # Use only the source directories and named project/build files.
@@ -69,8 +69,6 @@ probe() {
     end)')
 }
 for app in exam handheld preview; do probe "apps/$app" > "$scratch/$app-before"; done
-MF_EXAM_LEGACY_MEDIA=1 probe apps/exam > "$scratch/legacy-before"
-grep -q '/source_contexts/' "$scratch/legacy-before"
 for app in exam handheld preview; do
   if grep -q '/source_contexts/' "$scratch/$app-before"; then echo "Unexpected default context: $app" >&2; exit 1; fi
 done
@@ -85,17 +83,8 @@ for app in exam handheld preview; do
     mix run --no-start "$repo/ops/prove_fabric_sources.exs"
   )
 done
-(
-  cd "$scratch/apps/exam"
-  export MF_EXAM_LEGACY_MEDIA=1 MF_SOURCE_QC_PROFILE=legacy-exam
-  mix deps.get
-  mix deps.tree
-  mix compile --warnings-as-errors
-  mix run --no-start "$repo/ops/prove_fabric_sources.exs"
-)
+
 rm "$scratch/.mix_sources.json"
 for app in exam handheld preview; do probe "apps/$app" > "$scratch/$app-after"; cmp "$scratch/$app-before" "$scratch/$app-after"; done
-MF_EXAM_LEGACY_MEDIA=1 probe apps/exam > "$scratch/legacy-after"
-cmp "$scratch/legacy-before" "$scratch/legacy-after"
 (cd "$scratch" && sha256sum --check baseline-locks)
-echo 'Actual Fabric source/profile selection, removal/restoration and default locks passed.'
+echo 'Actual Fabric source selection, removal/restoration and default locks passed.'

@@ -10,7 +10,7 @@ guides = [
   {"guides/failure_matrix.md", "Failure Matrix"},
   {"guides/operations_and_telemetry.md", "Operations and Telemetry"},
   {"guides/security_and_clinical_boundary.md", "Security and Clinical Boundary"},
-  {"guides/core_api_and_compatibility.md", "Core API and Compatibility"}
+  {"guides/clinical_core.md", "Private Clinical Core"}
 ]
 
 guide_paths = Enum.map(guides, &elem(&1, 0))
@@ -24,7 +24,11 @@ exam_docs = guide_paths ++ release_docs
       mode: :monolith,
       monolith_opts: [readme: "apps/exam/README.md"],
       roots: ["apps/exam"],
-      structural_inputs: ["apps/exam/VERSION"],
+      structural_inputs: [
+        "apps/exam/VERSION",
+        "build_support/docs_hook.html",
+        "core/store/priv/sql/001_schema_v2.sql"
+      ],
       package: [
         name: "mf_exam",
         otp_app: :mf_exam,
@@ -54,7 +58,8 @@ exam_docs = guide_paths ++ release_docs
             Guides: guide_paths,
             Release: release_docs
           ],
-          mermaid: true
+          mermaid: true,
+          hook_file: "build_support/docs_hook.html"
         ]
       ],
       output: [docs: exam_docs, assets: ["apps/exam/assets"]]

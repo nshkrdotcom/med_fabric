@@ -1,58 +1,78 @@
-# Handheld Integration
+# Handheld integration
 
-`mf_exam` admits enrolled `mf_handheld` clients over TLS WebSockets
-(`MedFabric.ExamWeb.DeviceSocket`) and persists resumable waveform and
-spot-check acquisitions.
+Exam 0.3.0 and Handheld 0.3.0 speak `medex.acquisition.v2`, API revision 2.
+The binary sample frame remains MEX1 revision 1 with its fixed 48-byte header.
+No older control, schema, artifact or spool reader is retained.
 
-## Paired Acoustic & ECG Examination
+## Admission and source identity
 
-- Exam validates the device credential and encounter grant before admitting an
-  acquisition (`MedFabric.Exam.DeviceIngress`).
-- Incoming frames are persisted durably with explicit segment boundaries,
-  discontinuity gaps, and clock-alignment uncertainty bounds
-  (`MedFabric.Exam.ClockObservations`).
-- Clinicians inspect verified segments and play back authenticated audio slices
-  via `MedFabric.ExamWeb.DeviceLive` and the segment playback endpoint.
+Enroll device credentials and grant a clinician-authorized encounter/profile/site
+through explicit Store database operations. A TLS device control connection
+admits the exact principal, boot identity, source descriptors and requested
+profile. The allowed profiles are `paired_exam` (audio plus ECG) and
+`plx_spot_check` (events only). Browser creation is independently authorized but
+then enters the same acquisition protocol. One active acquisition per encounter
+and profile is enforced transactionally; distinct allowed profiles may coexist.
 
-## Pulse-Oximetry Spot Checks (PLXS)
+The host returns a lease/generation bound to a fresh connection incarnation.
+Every consequential response carries its operation identity and complete binding.
+A durable receipt is historical evidence; it cannot renew a lease or make a
+superseded socket current. Heartbeat/command grants use the outstanding nonce and
+poll-start monotonic budget. The independent heartbeat path continues while a
+waveform uploader stalls.
 
-- Replayed `device_spo2_v1` and `device_pulse_rate_v1` measurements preserve
-  exact decimal mantissa/exponent values, measurement timestamps, peripheral
-  `Device/...` references, and event lineage.
-- Clinicians can mark a collection unusable, request a repeat, or accept
-  eligible metrics. Each accepted metric receives an independent, retryable
-  HL7 FHIR R4 `Observation` delivery record (LOINC `2708-6` / UCUM `%` for SpO2,
-  LOINC `8867-4` / UCUM `/min` for pulse rate).
+## Durable waveform path
 
-## Live Monitoring via `mf_preview`
+The common `MedFabric.Exam.AcquisitionIngress` owns each stream effect gate. It
+takes that gate before the Store transaction/advisory scope, reserves a fenced
+attempt, recovers the actual predecessor and uses the sole MedEx StreamWriter.
+Only explicit manual checkpoints within current host authority advance durable
+acknowledgment. Unknown journal/SQL outcomes retire the writer and require actual
+worker and OS quiescence before a successor is admitted.
 
-When `MF_PREVIEW_URL` and `MF_PREVIEW_CREDENTIAL_FILE` are configured,
-`MedFabric.Exam.PreviewGateway` forwards validated monitor frames to the
-isolated `mf_preview` sidecar and mints short-lived HMAC-SHA256 viewer tokens
-for authorized clinicians. A relay restart drops buffered monitor frames while
-capture and live ECG continue. Without a sidecar configured, Exam keeps live ECG
-and skips starting the audio relay.
+Both source and host obey negotiated slot/byte credit. Maximum-payload frames,
+source gaps and exact retries consume their defined resources. The Handheld
+spool persists exact acknowledgment bytes before deleting covered records;
+reclaim work is proportional to newly covered records. An invalid receipt cannot
+partially delete or release anything. Reconnect verifies retained contiguous
+coverage, actual receipt progression and the authenticated new binding before
+replacing old local state.
 
-Review intervals can cross adjacent storage chunks within a single configuration
-epoch. They cannot cover missing samples. A complete-capture decision records
-the selected interval from a defect-free capture. An interrupted stream retains
-its verified prefix and terminal reason.
+## Measurement events and clinical selection
 
-The native synthetic qualification includes the 60-second paired
-fault and recovery suite. A 29-minute ext4 soak on Fabric `90f796f` with
-MedEx `48b8de2` captured and byte-verified 83,520,000 audio samples and
-435,000 ECG samples, then completed synthetic review.
+PLX transport contains canonical SDK `MeasurementEvent` values. Domain validates
+the exact raw indication, metric values, device status, measurement time,
+availability time and source provenance. There is no empty waveform invented
+for a spot-check collection. The manifest freezes the event inventory.
 
-An encounter can have one active recording per profile, including during
-finalization. A waveform exam and a spot check can therefore overlap.
-Migration 007 tightens the earlier Phase 3A candidate policy. If that
-candidate admitted overlapping recordings of the same profile, finish
-or interrupt all but one through the application before applying 007.
-Resolve overlapping profiles before downgrading to a schema that allows
-only one active recording per encounter.
+A clinician chooses the exact event and one or both eligible metrics. Native
+acceptance of all selected metrics is atomic: an invalid second metric rolls
+back the whole decision. A later mapping failure can block only delivery while
+leaving the accepted native facts intact. SpO₂ uses exact decimal arithmetic and
+the native 0–100 range; pulse is nonnegative and is not capped at 100. Unknown or
+special values/status/time are not silently converted into eligible observations.
 
-Exam accepts a supported nonzero source epoch at admission and checks
-frames against the admitted epoch. Changing epochs within the same
-acquisition is outside this contract. The synthetic clock fixture derives
-its validity interval from the probe span. Physical clock drift and
-multi-exam capacity require separate evidence.
+## Optional live monitoring and commands
+
+The raw source owns recording bytes. Software monitor gain applies only to a
+derived monitor branch. The bounded latest slot and monitor ledger may fail
+without changing raw output. Commands record exact command ID/fingerprint, boot,
+generation, epoch and application coordinates; a setting alone is not evidence
+that a particular command ran. An uncertain outcome is recorded as unknown and
+requires readback, not blind mutation replay.
+
+Live ECG publication occurs after authoritative commit and tolerates missing or
+replaced ETS state. Preview is a separate process with no database/artifact
+credentials, one replaceable feed slot and bounded source/viewer resources. It
+uses a short-lived actor/session/source capability and explicit fresh renewal.
+
+## Qualification
+
+Use the Handheld source/spool/transport/monitor tests, Exam common acquisition
+integration tests and native driver. Cover revoked/replaced authority, malformed
+control and frames, PostgreSQL loss before/after journal sync, delayed historical
+ACK, checksum corruption, ACK/reclaim crash, terminal install recovery, source
+reset/gaps and actual monitor kill/stall/trace. Run real service/TLS/browser/native
+fault phases separately from both 1,740-second clean ext4 soaks. Keep exact bytes,
+source hashes, clocks, bounds and reclaim metrics; never infer success from a
+connected socket or a running process.

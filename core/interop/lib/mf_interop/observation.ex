@@ -7,9 +7,6 @@ defmodule MedFabric.Interop.Observation do
   def matches?(%{"valueQuantity" => quantity} = expected, %{"valueQuantity" => actual} = remote),
     do: quantity_match?(quantity, actual) and common_match?(expected, remote, "valueQuantity")
 
-  def matches?(%{"valueString" => digest} = expected, %{"valueString" => digest} = remote),
-    do: common_match?(expected, remote, "valueString")
-
   def matches?(_, _), do: false
 
   defp common_match?(expected, remote, value_field) do
@@ -59,7 +56,7 @@ defmodule MedFabric.Interop.Observation do
 
   defp strip_reference_display(remote, field, expected) do
     case {expected[field], remote[field]} do
-      {%{"reference" => _} = ref, %{} = actual} when not is_map_key(ref, "display") ->
+      {ref, %{} = actual} when is_map(ref) and not is_map_key(ref,"display") and (is_map_key(ref,"reference") or is_map_key(ref,"identifier")) ->
         Map.put(remote, field, Map.delete(actual, "display"))
 
       _ ->

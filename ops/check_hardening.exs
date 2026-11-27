@@ -10,22 +10,35 @@ unless String.contains?(gitignore, "erl_crash.dump") do
   raise ".gitignore must explicitly ignore erl_crash.dump"
 end
 
-# 2. Verify all 0.3 hardening guides exist
+# 2. Verify all revision-2 operational guides exist
 for guide <- ~w(
       guides/failure_matrix.md
       guides/operations_and_telemetry.md
       guides/security_and_clinical_boundary.md
-      guides/core_api_and_compatibility.md
+      guides/clinical_core.md
     ) do
   path = Path.join(root, guide)
   unless File.regular?(path), do: raise("Missing hardening guide: #{guide}")
 end
 
-# 3. Verify apps/exam has no private reach-ins to MedEx.PreviewSession or Membrane
+# 3. The host has no removed recorder or in-process native media dependency.
 for file <- Path.wildcard(Path.join(root, "apps/exam/lib/**/*.ex")) do
   content = File.read!(file)
 
-  for forbidden <- ["MedEx.PreviewSession", "Membrane."] do
+  for forbidden <- [
+        "MedEx.Capture",
+        "MedEx.Evidence",
+        "MedEx.Preview",
+        "MedEx.Web",
+        "MedEx.Wav",
+        "MedEx.RTC.Provider",
+        "MedEx.Opus.Provider",
+        "Membrane.",
+        "ExWebRTC.",
+        "MedEx.Storage.Journal",
+        "MedEx.Storage.Records",
+        "MedEx.Storage.Objects"
+      ] do
     if String.contains?(content, forbidden) do
       raise "Forbidden private/removed reference #{forbidden} in #{file}"
     end

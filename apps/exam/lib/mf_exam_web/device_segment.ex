@@ -1,7 +1,7 @@
 defmodule MedFabric.ExamWeb.DeviceSegment do
   @moduledoc false
   import Plug.Conn
-  alias MedFabric.Exam.DeviceWorkflow
+  alias MedFabric.Exam.AcquisitionWorkflow
   def init(p), do: p
 
   def call(c, _) do
@@ -9,9 +9,11 @@ defmodule MedFabric.ExamWeb.DeviceSegment do
 
     with "clinician" <- get_session(c, :exam_role),
          {:ok, spec, seg, raw} <-
-           DeviceWorkflow.segment(
+           AcquisitionWorkflow.segment(
+             MedFabric.Exam.context(),
              p["encounter_id"],
              p["id"],
+             get_session(c, :exam_actor),
              c.query_params["revision"],
              p["stream"],
              p["first_sample"],
@@ -24,20 +26,14 @@ defmodule MedFabric.ExamWeb.DeviceSegment do
   end
 
   defp respond(c, %{stream_id: "audio", sample_rate: {rate, 1}} = s, _, raw) do
-    width = MedEx.StreamSpec.bytes_per_value(s.encoding)
-    channels = length(s.channels)
-    size = byte_size(raw)
-
-    wav =
-      <<"RIFF", 36 + size::little-32, "WAVEfmt ", 16::little-32, 1::little-16,
-        channels::little-16, rate::little-32, rate * channels * width::little-32,
-        channels * width::little-16, width * 8::little-16, "data", size::little-32, raw::binary>>
-
-    c |> put_resp_content_type("audio/wav") |> send_resp(200, wav)
+    case MedEx.Format.Wav.header(s.encoding,length(s.channels),rate,byte_size(raw)) do
+      {:ok,header}->c |> put_resp_content_type("audio/wav") |> send_resp(200,header<>raw)
+      _->send_resp(c,415,"Unsupported playback projection")
+    end
   end
 
   defp respond(c, s, seg, raw) do
-    t = DeviceWorkflow.trace(s, seg.first_sample, raw)
+    t = AcquisitionWorkflow.trace(s, seg.first_sample, raw)
     label = Plug.HTML.html_escape("#{s.stream_id}, #{t.label}: #{t.low} to #{t.high} #{t.unit}")
 
     c

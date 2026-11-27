@@ -5,10 +5,12 @@ defmodule MedFabric.Store.MixProject do
   use Mix.Project
 
   @version Path.join(__DIR__, "VERSION") |> File.read!() |> String.trim()
+  @release_version "0.3.0"
   @source_url "https://github.com/nshkrdotcom/med_fabric"
 
   def project do
     defaults = [
+      {:med_ex, "~> 0.4.0"},
       {:mf_domain, path: "../domain"},
       {:postgrex, "~> 0.23"},
       {:db_connection, "~> 2.10.3"},
@@ -56,8 +58,8 @@ defmodule MedFabric.Store.MixProject do
       logo: "assets/store.svg",
       assets: %{"assets" => "assets"},
       source_url: @source_url,
-      source_ref: "mf_store-v#{@version}",
-      source_url_pattern: "#{@source_url}/blob/mf_store-v#{@version}/core/store/%{path}#L%{line}",
+      source_ref: "mf_exam-v#{@release_version}",
+      source_url_pattern: "#{@source_url}/blob/mf_exam-v#{@release_version}/core/store/%{path}#L%{line}",
       extras: [
         {"README.md", filename: "readme", title: "Overview"},
         {"CHANGELOG.md", title: "Changelog"},

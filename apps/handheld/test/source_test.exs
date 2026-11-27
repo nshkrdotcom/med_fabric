@@ -1,13 +1,7 @@
 defmodule MedExHandheld.SourceTest do
   use ExUnit.Case, async: true
 
-  setup context do
-    if dir = context[:tmp_dir], do: on_exit(fn -> File.rm_rf!(dir) end)
-    :ok
-  end
-
-  alias MedEx.Wire.FrameV1
-  alias MedExHandheld.{Monitor, PLXPeripheral, RDP1, ReferencePeripheral, Spool}
+  alias MedExHandheld.{PLXPeripheral, RDP1, ReferencePeripheral}
 
   test "RDP1 independent CRC vector survives every split and coalesced reads" do
     bytes = File.read!(Path.join(__DIR__, "fixtures/rdp1_waveform.bin"))
@@ -58,112 +52,4 @@ defmodule MedExHandheld.SourceTest do
     assert rows == p.records
   end
 
-  @tag :tmp_dir
-  test "spool recovery keeps unacknowledged bytes and rejects predecessor ACK", %{tmp_dir: dir} do
-    p =
-      start_supervised!(
-        Supervisor.child_spec({Spool, root: dir, limit: 100},
-          id: :spool_before_restart,
-          restart: :temporary
-        )
-      )
-
-    {:ok, raw} =
-      FrameV1.encode(%FrameV1{
-        stream_number: 1,
-        source_epoch: 0,
-        config_epoch: 0,
-        sequence: 0,
-        first_sample: 0,
-        sample_count: 1,
-        payload: <<1, 2>>
-      })
-
-    assert :ok = Spool.put(p, "audio", 0, raw)
-    assert {:error, :spool_full} = Spool.put(p, "audio", 1, :binary.copy(<<1>>, 63))
-    GenServer.stop(p)
-
-    p =
-      start_supervised!(
-        Supervisor.child_spec({Spool, root: dir, limit: 100},
-          id: :spool_after_restart,
-          restart: :temporary
-        )
-      )
-
-    assert {:ok, ^raw} = Spool.get(p, "audio", 0)
-
-    r = %{
-      "fence" => "second",
-      "stream_id" => "audio",
-      "descriptor_ref" => String.duplicate("a", 64),
-      "journal_id" => "journal",
-      "source_epoch" => "0",
-      "journal_generation" => "2",
-      "accepted_sequence" => "1",
-      "accepted_sample" => "1",
-      "durable_sample" => "1",
-      "durable_sequence" => "1",
-      "journal_digest" => String.duplicate("a", 64)
-    }
-
-    Spool.write!(
-      Path.join([dir, "audio", "source.json"]),
-      JSON.encode!(%{"sequence" => 1, "sample" => 1, "done" => true})
-    )
-
-    spec = %{stream_id: "audio", source_epoch: 0, descriptor_ref: r["descriptor_ref"]}
-    :ok = Spool.activate(p, "audio", 2, spec, r)
-    assert {:error, :stale_fence} = Spool.ack(p, "audio", 1, r)
-    assert :ok = Spool.ack(p, "audio", 2, r)
-    assert :absent = Spool.get(p, "audio", 0)
-  end
-
-  @tag :tmp_dir
-  test "monitor command replays exact result after restart, including persisted refusals", %{
-    tmp_dir: dir
-  } do
-    c = %{
-      "id" => "one",
-      "fingerprint" => "hash",
-      "boot" => "boot",
-      "gain" => "half",
-      "expected_epoch" => "0"
-    }
-
-    p =
-      start_supervised!(
-        Supervisor.child_spec({Monitor, {dir, "boot"}},
-          id: :monitor_before_restart,
-          restart: :temporary
-        )
-      )
-
-    assert :pending = GenServer.call(p, {:command, c})
-    assert %{"status" => "pending"} = GenServer.call(p, {:state, c})
-
-    assert {"1", <<-16_384::little-signed-16, 0::little-16>>} =
-             GenServer.call(p, {:frame, 960, <<-32_768::little-signed-16, -1::little-signed-16>>})
-
-    assert {:result, r} = GenServer.call(p, {:command, c})
-    assert r["first_sample"] == "960"
-    rejected = %{c | "id" => "two", "fingerprint" => "refused"}
-
-    assert {:result, %{"status" => "rejected"} = refused} =
-             GenServer.call(p, {:command, rejected})
-
-    GenServer.stop(p)
-
-    p =
-      start_supervised!(
-        Supervisor.child_spec({Monitor, {dir, "boot"}},
-          id: :monitor_after_restart,
-          restart: :temporary
-        )
-      )
-
-    assert {:result, ^r} = GenServer.call(p, {:command, c})
-    assert {:result, ^refused} = GenServer.call(p, {:command, rejected})
-    assert {:error, :conflict} = GenServer.call(p, {:command, %{c | "fingerprint" => "changed"}})
-  end
 end

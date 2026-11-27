@@ -8,23 +8,30 @@ defmodule FabricHexSmoke.PublishedPackagesTest do
   alias MedFabric.ExamWeb.Endpoint, as: Exam
   alias MedFabric.Preview.Endpoint, as: Preview
 
-  test "Exam serves its own and the SDK's packaged browser assets" do
-    for path <- ["/assets/exam.js", "/med_ex/pcm_worklet.js"] do
+  test "Exam owns the only packaged microphone and worklet assets" do
+    for path <- ["/assets/exam.js", "/assets/acquisition.js", "/assets/acquisition_worklet.js"] do
       response = Exam.call(Plug.Test.conn(:get, path), Exam.init([]))
       assert response.status == 200
       assert byte_size(response.resp_body) > 0
     end
+
+    assert Exam.call(Plug.Test.conn(:get, "/med_ex/pcm_worklet.js"), Exam.init([])).status == 404
+    refute File.dir?(Application.app_dir(:med_ex, "priv/static/med_web"))
+    assert MedEx.Contract.api_revision() == 2
   end
 
   test "Handheld reads a synthetic spot check that round-trips through MedEx" do
     peripheral = PLXPeripheral.new() |> PLXPeripheral.subscribe()
     {peripheral, {:indications, [_, reading]}} = PLXPeripheral.racp(peripheral, <<1, 1>>)
     {_, <<6, 0, 1, 1>>} = PLXPeripheral.complete(peripheral)
-    event = PLXPeripheral.event(reading, "fixture-reading", 0, nil, :fixed_fixture_utc)
-    assert event["metrics"]["spo2"] == %{"mantissa" => "98", "exponent" => "0"}
-
-    assert :ok =
-             PLXPeripheral.validate_sdk(event, %{"acquisition" => "hex-smoke", "boot" => "boot"})
+    config = %{"acquisition" => "hex-smoke", "device" => "fixture-gateway", "boot" => "boot"}
+    wire = PLXPeripheral.event(reading, "fixture-reading", 0, nil, config, :fixed_fixture_utc)
+    assert {:ok, event} = MedEx.Serialization.measurement(wire)
+    assert event.metrics["spo2"] == {:value, 98, 0, "%"}
+    assert event.raw == {:bytes, reading}
+    assert event.acquisition_id == "hex-smoke"
+    assert event.source_ref == "fixture-gateway"
+    assert event.device_time.clock_id == "unix_us"
   end
 
   test "Preview encodes an SDK PCM frame and sends Opus over WebRTC" do
@@ -43,7 +50,7 @@ defmodule FabricHexSmoke.PublishedPackagesTest do
         post_preview(
           "/offer",
           secret,
-          JSON.encode!(%{"token" => token, "sdp" => offer_sdp, "ice" => %{"iceServers" => []}})
+          JSON.encode!(%{"token" => token, "sdp" => offer_sdp})
         )
 
       :ok =
@@ -89,11 +96,22 @@ defmodule FabricHexSmoke.PublishedPackagesTest do
   defp preview_credentials do
     secret = Application.fetch_env!(:mf_preview, :listen)[:secret]
 
+    now = System.system_time(:millisecond)
+
     payload =
-      JSON.encode!(%{
+      MedEx.CanonicalJSON.encode(%{
+        "purpose" => "monitor",
         "acquisition" => "hex-smoke",
+        "source_kind" => "device",
+        "profile" => "paired_exam",
+        "generation" => "1",
+        "source_epoch" => "0",
+        "descriptor_ref" => String.duplicate("a", 64),
         "viewer" => "example",
-        "exp" => System.system_time(:second) + 60
+        "viewer_session" => "hex-viewer",
+        "issued_at_ms" => to_string(now),
+        "expires_at_ms" => to_string(now + 25_000),
+        "nonce" => Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
       })
 
     encode = &Base.url_encode64(&1, padding: false)
@@ -102,11 +120,19 @@ defmodule FabricHexSmoke.PublishedPackagesTest do
   end
 
   defp post_preview(path, secret, body) do
+    assert {:ok, config} =
+             MedFabric.Preview.Application.validate_config(
+               Application.fetch_env!(:mf_preview, :listen)
+             )
+
     response =
       Plug.Test.conn(:post, path, body)
       |> put_req_header("authorization", "Bearer " <> secret)
       |> put_req_header("x-acquisition", "hex-smoke")
-      |> Preview.call(Preview.init([]))
+      |> put_req_header("x-generation", "1")
+      |> put_req_header("x-source-epoch", "0")
+      |> put_req_header("x-descriptor-ref", String.duplicate("a", 64))
+      |> Preview.call(Preview.init(config))
 
     assert response.status == 200
     JSON.decode!(response.resp_body)

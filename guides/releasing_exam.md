@@ -1,61 +1,210 @@
-# Release the Exam package
+# Coordinated release and qualification
 
-The checked-in manifest at `build_support/weld.exs` declares one release
-artifact, `mf_exam`. Weld composes Exam, Domain, Interop, and Store into one
-Mix application with Exam's static files and Store's migrations under `priv/`.
-It reads the package version from `apps/exam/VERSION`. The ordinary workspace
-and the separate Handheld and Preview projects keep their own Mix workflows.
+## Fixed package topology
 
-From the repository root, use a Hex environment that resolves the
-exact MedEx 0.3.1 archive recorded by the candidate lock. Use the private
-signed registry for local verification before the base is public.
+| Package | Candidate | Construction | Runtime ecosystem dependencies |
+|---|---|---|---|
+| med_ex | 0.4.0 | Weld package projection | none |
+| med_ex_opus | 0.3.0 | Direct Mix extension | none |
+| med_ex_rtc | 0.3.0 | Direct Mix extension | none |
+| mf_exam | 0.3.0 | Weld monolith | med_ex ~> 0.4.0 |
+| mf_handheld | 0.3.0 | Direct Mix app | med_ex ~> 0.4.0 |
+| mf_preview | 0.3.0 | Direct Mix app | base ~> 0.4.0, both providers ~> 0.3.0 |
+
+Check official registry and local/remote package tags before reserving candidates.
+Numbers in source are selected versions, not evidence that they remain unused.
+Never reuse an existing publication. Preserve factual historical changelogs.
+
+## Source and build gates
+
+Freeze both clean source SHAs, executable Git modes and six version identities.
+Read installed Weld and Hex task help; MedEx's private maintainer project requires Weld
+~> 0.19.0. Use the pinned `.tool-versions`. Record actual compiler/native archive,
+OS/filesystem, browser, PostgreSQL and HAPI versions. Do not print secrets.
+
+Use `med_ex/tools/maintainer` as the Weld invoker for both repositories, passing
+each repository's absolute `build_support/weld.exs` manifest and sole artifact
+(`med_ex` or `mf_exam`): `weld.setup`, `weld.project`,
+`weld.verify`, `release.prepare`, `release.status`. Verify current task syntax
+first. Preserve exact prepared identity and archive; never edit generated files,
+CURRENT, tags or stale-check controls to bypass a failure.
+
+For each direct package, resolve the exact candidate closure, run formatting,
+warning-free compilation, all tests, Credo, Dialyzer and ExDoc warnings-as-errors,
+then `mix hex.build`. Preserve the actual resulting archive and checksum.
+Compare package files to its authoritative package inventory. Private components
+and maintainer tools never become runtime packages. The base root Mix project
+is not a second release candidate.
+
+An unpublished dependency has no genuine official checksum. Existing third-party
+lock entries are retained; resolve six-family entries using the signed candidate
+registry and commit the resulting actual locks before candidate freeze. Never
+substitute a guessed version or checksum. Changed lock/content invalidates proof.
+
+### Exact archive inputs for native gates
+
+`ops/qc_native.sh` requires `--artifacts MANIFEST.json` for the full suite and
+each 1740-second soak. `ops/qc_detached_release.sh REPORT.json --artifacts
+MANIFEST.json` accepts the same input. The manifest is qualification evidence,
+not a builder: obtain the actual six archives and both prepared `release.json`
+files through the construction steps above first. The scripts do not rebuild a
+candidate or substitute a checkout package.
+
+The JSON object has schema `medfabric.detached_inputs.v2`, a `registry` value of
+`candidate` or `official`, and a `packages` object with exactly the six package
+names from the release matrix. Each package entry contains:
+
+| Field | Required value |
+|---|---|
+| `archive` | Actual Hex tar path, absolute or relative to the manifest directory |
+| `sha256` | Lowercase 64-character outer SHA-256 of those exact tar bytes |
+| `source_revision` | Lowercase 40-character frozen Git revision; one revision per repository |
+| `build` | `weld` for `med_ex` and `mf_exam`; `mix` for the four direct packages |
+| `prepared_release` | For the two Weld entries only: the actual prepared `release.json` path |
+
+The verifier reads the version and construction from the checked-in release
+matrix. It checks each archive's actual metadata, declared file inventory,
+bounded dependencies, executable modes and contents. Each Weld identity must
+bind that archive checksum and source revision. The role consumers install
+ordinary exact-version Hex dependencies under the caller's configured signed
+candidate registry or the official `https://repo.hex.pm` origin. The scripts
+force signature, origin and TLS verification and refuse embedded URL
+credentials or mirror substitution. A candidate registry cannot be labelled as
+official proof.
+
+Each role starts from a new external consumer directory. Installed locks and
+every archived source file are compared with the supplied bytes before
+compilation and again before native acceptance. Exam and Preview configuration
+must exist in their installed packages. The detached release checks refuse
+private component and maintainer OTP applications; Exam and Handheld also
+refuse the native media dependency closure. The combined Hex example runs
+against the same six archives before the separate process proof. Reports retain
+the manifest checksum, package/source/prepared identities, resolved locks,
+installed file inventories and the registry evidence.
+
+Run the three mandatory native branches from the Med Fabric repository with
+distinct evidence directories:
 
 ```sh
-cd tools/maintainer
-mix deps.get --check-locked
-mix release.status
-mix weld.verify --artifact mf_exam
+ops/qc_native.sh --suite all --artifacts /private/candidate-inputs.json \
+  --evidence /private/evidence/native
+ops/qc_native.sh --suite soak --seconds 1740 --preview off \
+  --volume /mnt/qualified-ext4 --artifacts /private/candidate-inputs.json \
+  --evidence /private/evidence/soak-off
+ops/qc_native.sh --suite soak --seconds 1740 --preview isolated \
+  --volume /mnt/qualified-ext4 --artifacts /private/candidate-inputs.json \
+  --evidence /private/evidence/soak-on
 ```
 
-From a clean Git checkout, run `mix release.prepare --artifact mf_exam` and
-then `mix release.status --artifact mf_exam`. Use the full bundle identity
-and default tag from the output in the commands below. Run the dry run before
-pushing the release tag.
+The full suite requires isolated Preview. Soak refuses a filesystem whose
+observed type is not ext4, and the 1740-second report must pass the fixed soak
+verifier. Explicit `--med-ex-project` is confined to paired or short source
+diagnostics; it cannot satisfy an archive or release soak gate. Browser release
+verification similarly requires `--installed-consumers` from the native gate.
+The focused tooling tests are `python3 ops/qc_native_test.py` and
+`elixir ops/detached_artifacts_test.exs`; these do not replace native execution.
 
-```sh
-mix release.publish --artifact mf_exam --identity "$identity" --dry-run
-mix release.track --artifact mf_exam --identity "$identity" --tag-release --push
-mix release.verify_tag "$tag"
-mix release.publish --artifact mf_exam --identity "$identity" --tag "$tag"
-mix release.archive --artifact mf_exam --identity "$identity"
-```
+## Native qualification
 
-Before publication, extract the prepared Hex archive into a disposable directory,
-assemble the release using the runtime-config overlay described in the
-[Exam package guide](../apps/exam/guides/getting_started.md), and boot it
-against fresh PostgreSQL. Confirm that migrations 006 and 007 are present
-and applied, then exercise paired and spot-check acquisition with the
-packaged clients. The archive carries the runtime sources. The Mix
-assembler's default runtime config copy carries only the entry file.
+Use the authoritative qualification specification (QA-01 through QA-10 and all
+54 case IDs) as the release gate. Record PASS/FAIL/BLOCKED/NOT RUN with actual command, exit, count, fixture
+hash, exact source/archive identity and sanitized evidence. Static checks are
+only one gate. Required checks include:
 
-Run archive after Hex confirms publication. Prepared bundles and writable
-publish workspaces live under the checkout's ignored `.weld/` directory.
-The `projection/mf_exam` commit and annotated tag preserve the Git receipt
-for the same bundle identity.
+- Compiled/public API and deletion inventories, transitive runtime dependencies,
+  ExDoc links/assets and fresh revision refusal.
+- Receipt vectors across SDK, writer/storage, Exam, Handheld and browser; malformed
+  state, exact progression, replay/gap, limits and storage resource transfer.
+- Real filesystem and PostgreSQL kill barriers before and after journal sync,
+  in-flight effect quiescence, delayed historical ACK, local reclaim crash,
+  terminal/index/manifest staging recovery and physical ext4 ENOSPC.
+- Native Domain validity, atomic decision/observations/intents without export
+  configuration, exact authorized request replay after closure and native manual
+  evidence source constraints.
+- Actual HAPI conditional create/readback, response loss, stale sender and lease
+  turnover, permanent proven noncommit, unsafe duplicate possibility, pinning,
+  blocked remediation, bounded retry exhaustion and immutable confirmation.
+- Real microphone/worklet buffering/PCM/tail/drain/reload, verified segment bytes,
+  direct talkback renewal/teardown and its cooperating-client enforcement limits.
+- Real pinned Opus decode/native lifecycle and independent RTC receiver, direct
+  and relay-only TURN, isolated Preview expiry/fault/churn and raw continuity.
+- Fresh/partial/wrong schema/root identities, startup from installed SQL/assets,
+  service ownership and coordinated restore including later irreversible effects.
+- Independent SDK CLI and private clinical host, six detached artifacts and real
+  separate Exam/Handheld/Preview BEAMs; combined smoke is not isolation proof.
+- Two clean 1740-second ext4 soaks: Preview off and isolated monitoring active.
+  Retain 5000 ms sampling, 10000 ms warmup, 15000 ms startup, 2000 ms lag budget
+  and failure after two consecutive violations. Run controlled fault phases
+  separately; do not relax clean-run criteria. Measure queues, exact oracle,
+  p50/p95/p99 latency, O(k) reclamation and bounded segment-read work.
 
-## Restore paired evidence and database state
+## Publication and activation transaction
 
-Quiesce Exam capture and outbox delivery before taking a coordinated
-`pg_dump` and copying the artifact root. Record the source versions and the
-database dump and manifest digests. Restore the dump into a fresh database,
-copy the artifact root to a separate writable volume owned by the service
-user, and configure the restored instance with those two paths. Keep the
-original database and volume available until verification succeeds.
+Do not publish until the owner explicitly authorizes it and every provisional
+all-six gate passes. Publish the three upstream exact qualified archives first;
+verify official downloaded bytes, metadata and checksum. Refresh downstream
+locks against actual official upstream packages. Rebuild changed downstream
+archives and rerun affected and whole-family gates before publishing them.
+Preserve outer SHA-256 separately from Hex/registry checksums.
 
-Confirm that a previously accepted revision opens at its recorded digest and
-that a verified segment still resolves to its documented sample coordinates.
-For a pending delivery with a known prior remote write, verify retry against
-the same qualified destination and confirm it resolves to the original
-remote observation. In a disposable restore copy, omit one required object
-and confirm that review refuses the manifest. Keep delivery disabled during
-restore except for the explicitly selected retry check.
+After all six official archives exist, perform the full official detached native,
+isolated, fault and soak qualification. Tags alone are not proof. No partial
+activation, source fallback or mixed revision deployment. Stop on any failed or
+NOT RUN mandatory gate. If a published package needs correction, select a new
+unused version and qualify its affected closure; never overwrite.
+
+## Data and deployment
+
+Inventory DB, evidence/spool roots, credential authorities and external
+destinations by metadata only. Preserve non-disposable data in approved checksummed
+offline archives and prove recoverability before any destructive operation.
+Provision new empty revision-2 namespaces with one immutable deployment UUID
+in DB and root. Require one authoritative capture service with exclusive trusted
+local root ownership, no simultaneous writable clones or shared filesystem
+failover. Lock loss is fatal; restart only after all old workers/OS effects quiesce.
+
+A coherent older backup does not prove no later evidence, decisions, reclaimed
+source or external writes exist. Account for the cut point using trusted later
+state and pinned external identities; never reconstruct clinical decisions from
+remote resources or invent IDs. Block affected admission/dispatch if uncertain,
+or the whole namespace if scope cannot be bounded. No automatic reset or
+compatibility rollback into new data. Activation is a separately authorized step.
+
+## Ecosystem gates and retained reports
+
+The signed candidate registry is private staging evidence. It is not an official
+publication receipt. Supply its authenticated configuration in a private Hex
+home, then obtain and commit real candidate lock entries before `--check-locked`
+gates. Retain archive SHA-256 and registry checksums separately.
+
+The ecosystem runner has explicit `fabric-native`, `medex-enospc`,
+`fabric-soak-off` and `fabric-soak-isolated` gates. Full soak qualification requires
+`--volume` on ext4 and exactly 1740 seconds, plus `--artifacts`. Physical exhaustion
+requires a separate `--enospc-root` dedicated loop mount with the exact marker
+specified in the SDK technical contract. A short soak is diagnostic only.
+`ops/verify_soak_report.jq` checks exact sample counts, unchanged lag policy,
+actual latency samples, bounded resource maxima, linear reclamation work and
+sustained decoded media for isolated Preview. Preserve both reports and inputs.
+
+Use `--gate fabric-soak-isolated` to select the native and both soak prerequisites
+without requiring remote source publication. Independent remote Git source lanes
+remain separate gates. Nothing in these runners pushes Git refs or publishes Hex
+packages; official publication and final official reruns remain owner-authorized.
+
+The original `frame_bytes` ceiling remains 65,536 decoded payload bytes. The
+additional `wire_frame_bytes` ceiling is 65,584: that same payload plus the fixed
+48-byte MEX1 envelope. Both are measured independently; the payload baseline is
+not widened. Pending frames/bytes, spool and journal-record limits are unchanged.
+
+The ecosystem subprocess owner uses an explicit 5,400-second aggregate wall-time
+budget for native and full-soak gates, including cold dependency builds, service
+startup and their sequential bounded checks. Other gates retain 2,400 seconds.
+Owner EOF still cancels the child process group. These orchestration budgets do
+not alter capture duration, startup/lag policy, authority deadlines or acceptance
+thresholds. The actual timeout and cancellation regression suite is
+`med_ex/test/qualification_command_test.py`.
+
+An explicit ecosystem `--gate` validates only the repositories participating in
+that gate and its prerequisites. Native/soak selection needs the two medical
+repositories; the full umbrella additionally runs a sibling Weld checkout's own
+CI. Installed Weld composition still uses the private MedEx maintainer project.

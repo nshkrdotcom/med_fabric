@@ -30,85 +30,45 @@ defmodule MedExHandheld.PLXPeripheral do
   def complete(%{procedure: :report} = p), do: {%{p | procedure: nil}, <<6, 0, 1, 1>>}
   def timeout(p), do: {%{p | procedure: nil}, :outcome_unknown}
 
-  def event(raw, id, seq, repeat_of, time_policy \\ :unknown) do
-    {:ok, e} = MedExHandheld.PLXAdapter.spot_check(raw)
-
-    {at, basis} =
-      case e.source_time do
-        {:device_local, {y, m, d, h, min, s}} when time_policy == :fixed_fixture_utc ->
-          {:ok, date} = Date.new(y, m, d)
-          {:ok, time} = Time.new(h, min, s)
-          {DateTime.new!(date, time, "Etc/UTC") |> DateTime.to_iso8601(), "qualified_fixture_utc"}
-
-        _ ->
-          {nil, "unknown"}
-      end
-
-    %{
-      "event_id" => id,
-      "gateway_sequence" => to_string(seq),
-      "raw" => Base.encode64(raw),
-      "phase" => "completed",
-      "metrics" => %{"spo2" => metric(e.spo2), "pulse_rate" => metric(e.pulse_rate)},
-      "source_status" => %{
-        "measurement" => status(e.measurement_status),
-        "device" => status(e.device_status)
-      },
-      "measured_at" => at,
-      "time_basis" => basis,
-      "source" => "synthetic-plx",
-      "simulated" => true,
-      "repeat_of" => repeat_of,
-      "features_raw" => Base.encode64(read_features()),
-      "decoder" => "plxs-1.0.1",
-      "source_record_id" => nil,
-      "peripheral_redelivery" => "ambiguous_without_record_id"
-    }
-  end
-
-  @doc "Check the synthetic PLXS adapter mapping against the SDK serialization contract."
-  def validate_sdk(e, c) do
-    metrics = Map.new(e["metrics"], fn {name, value} -> {name, sdk_metric(name, value)} end)
-
+  @doc "Build the single canonical SDK event; only the declared fixture policy qualifies source-local time."
+  def event(raw, id, sequence, repeat_of, config, time_policy \\ :unknown) do
+    {:ok, indication} = MedExHandheld.PLXAdapter.spot_check(raw)
+    {device_time, basis} = source_time(indication.source_time, time_policy)
+    features = Base.encode64(read_features())
+    facts = [
+      %{name: "source", origin: :observed, value: "synthetic-plx"},
+      %{name: "simulated", origin: :observed, value: true},
+      %{name: "phase", origin: :observed, value: "completed"},
+      %{name: "features_raw", origin: :observed, value: features},
+      %{name: "decoder", origin: :claimed, value: "plxs-1.0.1"},
+      %{name: "time_basis", origin: :claimed, value: basis},
+      %{name: "peripheral_redelivery", origin: :observed, value: "ambiguous_without_record_id"}
+    ]
+    facts = if repeat_of == nil, do: facts, else: facts ++ [%{name: "repeat_of", origin: :observed, value: repeat_of}]
     event = %MedEx.MeasurementEvent{
-      event_id: e["event_id"],
-      acquisition_id: c["acquisition"],
-      source_ref: e["source"],
-      boot_id: c["boot"],
-      stream_id: "plx",
-      source_epoch: 0,
-      gateway_sequence: String.to_integer(e["gateway_sequence"]),
-      descriptor_ref:
-        MedEx.Serialization.digest(%{
-          "schema" => "plxs-1.0.1",
-          "features" => e["features_raw"],
-          "source" => e["source"]
-        }),
-      metrics: metrics,
-      raw: {:bytes, Base.decode64!(e["raw"])},
-      device_status: Map.reject(e["source_status"], fn {_, v} -> is_nil(v) end),
-      provenance: [%{name: "simulated", origin: :observed, value: true}]
+      event_id: id, acquisition_id: config["acquisition"], source_ref: config["device"],
+      boot_id: config["boot"], stream_id: "plx", source_epoch: 0, gateway_sequence: sequence,
+      descriptor_ref: MedEx.Serialization.digest(%{"schema" => "plxs-1.0.1", "features" => features, "source" => "synthetic-plx"}),
+      metrics: %{"spo2" => metric(indication.spo2, "%"), "pulse_rate" => metric(indication.pulse_rate, "/min")},
+      raw: {:bytes, raw}, source_record_id: nil,
+      device_status: %{"measurement" => status(indication.measurement_status), "device" => status(indication.device_status)},
+      device_time: device_time, receipt_time: :unknown, provenance: facts
     }
-
-    with :ok <- MedEx.MeasurementEvent.validate(event),
-         {:ok, ^event} <- MedEx.Serialization.measurement(MedEx.Serialization.to_map(event)) do
-      :ok
-    end
+    :ok = MedEx.MeasurementEvent.validate(event)
+    wire = MedEx.Serialization.to_map(event)
+    {:ok, ^event} = MedEx.Serialization.measurement(wire)
+    wire
   end
 
-  defp sdk_metric(name, value) do
-    case value do
-      %{"missing" => reason} ->
-        {:missing, reason}
-
-      %{"mantissa" => mantissa, "exponent" => exponent} ->
-        unit = if name == "spo2", do: "%", else: "/min"
-        {:value, String.to_integer(mantissa), String.to_integer(exponent), unit}
-    end
+  defp source_time({:device_local, {y, m, d, h, min, s}}, :fixed_fixture_utc) do
+    {:ok, date} = Date.new(y, m, d)
+    {:ok, time} = Time.new(h, min, s)
+    at = DateTime.new!(date, time, "Etc/UTC")
+    {%{clock_id: "unix_us", boot_id: "fixture", ticks: DateTime.to_unix(at, :microsecond), uncertainty_ticks: 0}, "qualified_fixture_utc"}
   end
-
-  defp metric({:finite, m, e}), do: %{"mantissa" => to_string(m), "exponent" => to_string(e)}
-  defp metric({:special, r}), do: %{"missing" => to_string(r)}
-  defp status(nil), do: nil
-  defp status(%{raw: r}), do: to_string(r)
+  defp source_time(_, _), do: {:unknown, "unknown"}
+  defp metric({:finite, m, e}, unit), do: {:value, m, e, unit}
+  defp metric({:special, reason}, _), do: {:missing, to_string(reason)}
+  defp status(nil), do: :unknown
+  defp status(%{raw: raw}), do: to_string(raw)
 end

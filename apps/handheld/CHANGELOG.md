@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.0 - 2026-11-26
+
+### Breaking changes
+
+- Adopt revision-2 control and typed SDK receipt semantics with authenticated
+  connection incarnations, verified handoff and persist-before-delete coverage.
+- Account for exact frame/gap operations and encoded bytes within negotiated
+  credit; checkpoint the final short batch before waiting to seal.
+- Preserve one durable spool, explicit reconnect/drain lifecycle and incremental
+  reclamation; reject incompatible or corrupt persisted source state.
+- Keep raw spool persistence ahead of disposable monitoring; bound command
+  admission and poll-start validity and validate the complete persisted ledger.
+- Consume med_ex ~> 0.4.0 through the single explicit development selector or
+  normal Hex dependencies. Publish as a direct Mix package.
+
+### Tests and documentation
+
+- Update receipt/reclaim, malformed state, asynchronous monitor and source tests.
+- Document source continuity, retained evidence and native 29-minute qualification.
+
 ## 0.2.1 — 2026-11-26
 
 - Keep distinct monitor batches captured in the same millisecond and preserve unread audio across gap-only batches.

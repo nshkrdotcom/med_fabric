@@ -4,8 +4,7 @@ import test from "node:test";
 import vm from "node:vm";
 
 test("workspace Mermaid renders every ExDoc page load using the current theme", () => {
-  const mix = readFileSync(new URL("../mix.exs", import.meta.url), "utf8");
-  const hook = mix.match(/defp docs_diagrams\(:html\) do\s+"""([\s\S]*?)"""/)[1];
+  const hook = readFileSync(new URL("../build_support/docs_hook.html", import.meta.url), "utf8");
   const script = hook.match(/<script>([\s\S]*?)<\/script>/)[1];
   const listeners = new Map();
   const rendered = [];

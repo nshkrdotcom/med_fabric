@@ -1,10 +1,8 @@
 defmodule MedExHandheld.Paired do
-  unless Code.ensure_loaded?(MedEx.Wire.FrameV1),
-    do: raise("Select the MedEx stream-v1 source checkout in .mix_sources.json")
-
   @moduledoc "Reference peripheral acquisition runs independently of server connectivity."
-  alias MedEx.{Serialization, StreamSpec}
-  alias MedEx.Wire.FrameV1
+  alias MedEx.{Receipt, Serialization, StreamCursor, StreamSpec}
+  alias MedEx.Wire.{Control, Credit, FrameV1}
+  alias MedExHandheld.Spool.Plan
   alias MedExHandheld.{Monitor, ReferencePeripheral, Spool, Transport}
 
   def sources(c) do
@@ -245,7 +243,7 @@ defmodule MedExHandheld.Paired do
     true = boundary.boot == p.boot and boundary.sequence == lost.seq
 
     {lost,
-     JSON.encode!(%{
+     MedEx.CanonicalJSON.encode(%{
        "id" => "loss-" <> to_string(p.seq),
        "irreversible" => true,
        "cause" => "reference_buffer_exhausted",
@@ -275,283 +273,194 @@ defmodule MedExHandheld.Paired do
         "done" => false
       })
 
-  @doc "Recover only synchronized local bytes after a device VM restart; never regenerate an unobserved acquisition interval."
-  def interrupt_after_restart(c, spool, n, spec) do
-    saved = cursor(c, n)
-
-    unless is_integer(saved["sequence"]) and saved["sequence"] >= 0 and
-             is_integer(saved["sample"]) and saved["sample"] >= 0 and is_boolean(saved["done"]),
-           do: raise("invalid persisted source cursor")
-
-    unless saved["done"] do
-      {base_seq, base_sample} = recovery_base(c, n, spec, saved)
-      {sequence, sample} = recover_local_tail(spool, n, spec, base_seq, base_sample)
-      :ok = Spool.finish_source(spool, n, sequence, sample, "source_reset")
-    end
-
-    :ok
-  end
-
-  defp recovery_base(c, n, spec, saved) do
-    case Spool.read_json(Path.join([c["spool"], n, "receipt.json"]), nil) do
-      nil ->
-        {saved["sequence"], saved["sample"]}
-
-      wire ->
-        receipt_cursor(wire, spec, saved)
+  @doc "Retain the actual verified local tail; a restarted physical source cannot establish continuous capture."
+  def interrupt_after_restart(_config, spool, name, spec) do
+    with :ok <- Spool.register(spool, spec),
+         %{"sequence" => sequence, "sample" => sample, "done" => done} <- Spool.watermark(spool, name) do
+      if done, do: :ok, else: Spool.finish_source(spool, name, sequence, sample, "source_reset")
     end
   end
 
-  defp receipt_cursor(wire, spec, saved) do
-    with {:ok, r} <- Serialization.receipt(wire),
-         true <- comparable_receipt?(r, spec) do
-      recovery_cursor(r, saved)
-    else
-      _ -> raise "invalid persisted receipt"
-    end
-  end
-
-  defp comparable_receipt?(r, spec) do
-    r.stream_id == spec.stream_id and r.source_epoch == spec.source_epoch and
-      r.descriptor_ref == spec.descriptor_ref and r.accepted_sequence == r.durable_sequence and
-      r.accepted_sample == r.durable_sample
-  end
-
-  defp recovery_cursor(receipt, %{"sequence" => sequence, "sample" => sample}) do
-    cond do
-      receipt.durable_sequence > sequence and receipt.durable_sample >= sample ->
-        {receipt.durable_sequence, receipt.durable_sample}
-
-      receipt.durable_sequence == sequence and receipt.durable_sample == sample ->
-        {sequence, sample}
-
-      receipt.durable_sequence < sequence and receipt.durable_sample <= sample ->
-        {sequence, sample}
-
-      true ->
-        raise "persisted receipt conflicts with source cursor"
-    end
-  end
-
-  defp recover_local_tail(spool, n, spec, sequence, sample) do
-    case Spool.get(spool, n, sequence) do
-      :absent ->
-        {sequence, sample}
-
-      {:ok, wire} ->
-        {next, right} = advance_source_tail(wire, n, spec, sequence, sample)
-        recover_local_tail(spool, n, spec, next, right)
-    end
-  end
-
-  defp advance_source_tail(<<"MEX1", _::binary>> = wire, n, spec, sequence, sample) do
-    number = if n == "audio", do: 1, else: 2
-
-    with {:ok, f} <- FrameV1.decode(wire),
-         true <-
-           {f.stream_number, f.source_epoch, f.sequence, f.first_sample} ==
-             {number, spec.source_epoch, sequence, sample},
-         true <- f.sample_count <= spec.capabilities.max_frame_samples,
-         true <-
-           byte_size(f.payload) ==
-             f.sample_count * length(spec.channels) * StreamSpec.bytes_per_value(spec.encoding) do
-      {sequence + 1, sample + f.sample_count}
-    else
-      _ -> raise "invalid durable source tail"
-    end
-  end
-
-  defp advance_source_tail(wire, _, _, sequence, sample),
-    do: gap_endpoint(JSON.decode!(wire), sequence, sample)
-
-  defp gap_endpoint(gap, sequence, sample) do
-    first = to_string(sample)
-    first_sequence = to_string(sequence)
-
-    with %{
-           "irreversible" => true,
-           "first" => ^first,
-           "end" => ending,
-           "first_sequence" => ^first_sequence,
-           "next_sequence" => next_sequence
-         } <- gap,
-         {next, ""} <- Integer.parse(next_sequence),
-         {right, ""} <- Integer.parse(ending),
-         true <- next > sequence and right > sample do
-      {next, right}
-    else
-      _ -> raise "invalid durable source gap"
-    end
-  end
-
-  def upload(c, spool, b, n, spec) do
-    credit =
-      case b["credit_frames"] do
-        v when is_integer(v) and v in 1..15 -> v
-        _ -> 1
+  def upload(config, spool, admission, name, spec) do
+    with {:ok, socket} <- Transport.connect(config, "stream") do
+      try do
+        fields = %{"binding" => admission["binding"], "lease" => admission["lease"],
+          "acquisition" => admission["binding"]["acquisition"], "generation" => admission["binding"]["generation"],
+          "stream" => name, "descriptor_ref" => spec.descriptor_ref,
+          "max_credit_frames" => admission["credit_frames"], "max_credit_bytes" => admission["credit_bytes"]}
+        authority = %{hub: config["hub"], control_binding: admission["binding"]}
+        with {:ok, reply} <- Transport.request(socket, "open_stream", fields),
+             :ok <- authority(authority),
+             true <- is_map(reply["binding"]) and Map.take(reply["binding"], ~w(acquisition profile generation)) == Map.take(admission["binding"], ~w(acquisition profile generation)),
+             {:ok, receipt} <- Spool.activate(spool, name, spec, reply),
+             {:ok, ledger} <- Credit.new(reply["binding"], reply["credit_frames"], reply["credit_bytes"]),
+             {:ok, cursor} <- StreamCursor.new(spec) do
+          stream = %{spool: spool, socket: socket, name: name, spec: spec, binding: reply["binding"],
+            ledger: ledger, durable: receipt, cursor: %{cursor | next_sequence: receipt.durable_sequence, next_sample: receipt.durable_sample},
+            hub: config["hub"], control_binding: admission["binding"], checkpoint: nil,
+            checkpoint_at: System.monotonic_time(:millisecond), deadline: System.monotonic_time(:millisecond) + 1_800_000}
+          try do
+            if reply["type"] == "stream_finished", do: terminal(stream, reply), else: drain(stream)
+          after
+            Spool.invalidate(spool, reply["binding"])
+          end
+        end
+      after
+        Transport.close(socket)
       end
-
-    {:ok, s} = Transport.connect(c, "stream")
-
-    try do
-      {:ok, r} =
-        Transport.request(
-          s,
-          "open_stream",
-          Map.merge(b, %{
-            "stream" => n,
-            "descriptor_ref" => spec.descriptor_ref,
-            "credit_frames" => credit
-          })
-        )
-
-      true = r["type"] in ["durable", "stream_finished"]
-      gen = String.to_integer(b["generation"])
-      :ok = Spool.activate(spool, n, gen, spec, r)
-      :ok = Spool.ack(spool, n, gen, r)
-
-      stream = %{spool: spool, socket: s, name: n, generation: gen, credit: credit}
-      continue_upload(r, stream)
-    after
-      Transport.close(s)
     end
   end
 
-  defp continue_upload(%{"type" => "stream_finished"} = receipt, %{spool: spool, name: name}) do
-    state = Spool.watermark(spool, name)
-
-    if state["done"] and receipt["durable_sequence"] == to_string(state["sequence"]) and
-         receipt["durable_sample"] == to_string(state["sample"]),
-       do: :ok,
-       else: {:interrupted, :premature_terminal}
-  end
-
-  defp continue_upload(%{"type" => "durable", "durable_sequence" => sequence}, stream) do
-    durable_seq = String.to_integer(sequence)
-    drain(stream, durable_seq, durable_seq, [])
-  end
-
-  defp drain(stream, durable_seq, sent_seq, in_flight) do
-    %{spool: spool, socket: socket, name: name, generation: generation} = stream
-
-    case drain_replies(spool, socket, name, generation, durable_seq, in_flight) do
-      {:interrupted, :premature_terminal} ->
-        {:interrupted, :premature_terminal}
-
-      {:ok, durable_seq, in_flight} ->
-        watermark = Spool.watermark(spool, name)
-        step_drain(stream, durable_seq, sent_seq, in_flight, watermark)
+  defp drain(stream) do
+    with :ok <- authority(stream),
+         {:ok, stream} <- replies(stream, 31) do
+      mark = Spool.watermark(stream.spool, stream.name)
+      sent = {stream.cursor.next_sequence, stream.cursor.next_sample}
+      produced = {mark["sequence"], mark["sample"]}
+      cond do
+        System.monotonic_time(:millisecond) >= stream.deadline -> {:error, :upload_deadline}
+        sent == produced and mark["done"] and Credit.stats(stream.ledger).outstanding_frames == 0 -> finish_upload(stream, mark)
+        sent != produced ->
+          case send_record(stream) do
+            {:ok, next} -> drain(next)
+            {:error, :credit_exhausted} ->
+              if Credit.stats(stream.ledger).outstanding_frames == 0,
+                do: {:error, :insufficient_negotiated_credit}, else: wait_reply(stream, mark)
+            error -> error
+          end
+        true -> wait_reply(stream, mark)
+      end
     end
   end
 
-  defp step_drain(stream, durable_seq, sent_seq, in_flight, watermark) do
-    cond do
-      durable_seq > watermark["sequence"] ->
-        raise "remote receipt exceeds stored source watermark"
-
-      sent_seq < watermark["sequence"] and length(in_flight) < stream.credit ->
-        next_sequence = send_spooled(stream, sent_seq)
-        drain(stream, durable_seq, next_sequence, in_flight ++ [{sent_seq, next_sequence}])
-
-      in_flight != [] ->
-        wait_for_drain_reply(stream, durable_seq, sent_seq, in_flight, watermark["done"])
-
-      sent_seq == watermark["sequence"] and watermark["done"] ->
-        true = durable_seq == sent_seq
-        finish_upload(stream.socket, durable_seq, watermark)
-
-      sent_seq == watermark["sequence"] ->
-        Process.sleep(10)
-        drain(stream, durable_seq, sent_seq, in_flight)
-
-      true ->
-        raise "remote receipt exceeds stored source watermark"
-    end
-  end
-
-  defp send_spooled(%{spool: spool, socket: socket, name: name}, sequence) do
-    {:ok, raw} = Spool.get(spool, name, sequence)
-
-    if String.starts_with?(raw, "MEX1") do
-      :ok = Transport.send_frame(socket, {:binary, raw})
-      sequence + 1
+  defp send_record(stream) do
+    key = {stream.cursor.next_sequence, stream.cursor.next_sample}
+    with {:ok, raw} <- Spool.get(stream.spool, stream.name, key),
+         {:ok, metadata} <- Plan.record(raw, stream.spec),
+         {:ok, next_cursor} <- Plan.advance(stream.cursor, metadata),
+         {:ok, frame, charge} <- outbound_record(metadata, raw, stream.binding),
+         operation = %{id: metadata.id, fingerprint: metadata.fingerprint, bytes: charge,
+           sequence: next_cursor.next_sequence, sample: next_cursor.next_sample},
+         {:ok, ledger, _} <- Credit.reserve(stream.ledger, stream.binding, operation),
+         :ok <- authority(stream), :ok <- Transport.send_frame(stream.socket, frame) do
+      {:ok, %{stream | ledger: ledger, cursor: next_cursor}}
     else
-      gap = JSON.decode!(raw)
-      {next, _sample} = gap_endpoint(gap, sequence, String.to_integer(gap["first"]))
-      :ok = Transport.send_json(socket, "gap", gap)
-      next
+      :absent -> {:error, :missing_source_record}
+      error -> error
+    end
+  end
+  defp outbound_record(%{event: {:frame, _}}, raw, _), do: {:ok, {:binary, raw}, byte_size(raw)}
+  defp outbound_record(%{gap: gap, id: id}, _raw, binding) do
+    with {:ok, encoded} <- Control.encode("gap", Map.merge(gap, %{"binding" => binding, "operation_id" => id})) do
+      {:ok, {:text, encoded}, byte_size(encoded)}
     end
   end
 
-  defp wait_for_drain_reply(stream, durable_seq, sent_seq, in_flight, source_done) do
-    %{spool: spool, socket: socket, name: name, generation: generation, credit: credit} = stream
-    wait_ms = if length(in_flight) >= credit or source_done, do: 35_000, else: 10
-
-    case Transport.recv(socket, wait_ms) do
-      {:error, :timeout} when wait_ms < 35_000 ->
-        drain(stream, durable_seq, sent_seq, in_flight)
-
-      reply ->
-        with {:ok, durable_seq, in_flight} <-
-               handle_reply(spool, name, generation, durable_seq, in_flight, reply) do
-          drain(stream, durable_seq, sent_seq, in_flight)
+  defp wait_reply(stream, mark) do
+    pending = Credit.stats(stream.ledger).outstanding_frames > 0
+    checkpoint_due = pending and stream.checkpoint == nil and
+      (mark["done"] or System.monotonic_time(:millisecond) - stream.checkpoint_at >= 200)
+    with {:ok, stream} <- if(checkpoint_due, do: request_checkpoint(stream), else: {:ok, stream}) do
+      case Transport.recv(stream.socket, if(pending, do: 250, else: 10)) do
+        {:error, :timeout} -> drain(stream)
+        reply -> with {:ok, next} <- handle_reply(stream, reply), do: drain(next)
+      end
+    end
+  end
+  defp request_checkpoint(stream) do
+    operation = Transport.operation_id()
+    with :ok <- authority(stream),
+         :ok <- Transport.send_json(stream.socket, "checkpoint", %{"binding" => stream.binding, "operation_id" => operation}) do
+      {:ok, %{stream | checkpoint: operation, checkpoint_at: System.monotonic_time(:millisecond)}}
+    end
+  end
+  defp replies(stream, 0), do: {:ok, stream}
+  defp replies(stream, budget) do
+    case Transport.recv_nowait(stream.socket) do
+      {:error, :timeout} -> {:ok, stream}
+      reply -> with {:ok, next} <- handle_reply(stream, reply), do: replies(next, budget - 1)
+    end
+  end
+  defp handle_reply(stream, {:ok, reply}) when is_map(reply) do
+    cond do
+      reply["binding"] != stream.binding -> {:ok, stream}
+      authority(stream) != :ok -> {:error, :authority_expired}
+      reply["type"] == "accepted" ->
+        with {:ok, operation} <- Credit.lookup(stream.ledger, stream.binding, reply["operation_id"]),
+             true <- operation_fingerprint(reply, operation.id) == operation.fingerprint,
+             {:ok, accepted} <- Receipt.parse(reply["receipt"]),
+             :ok <- Receipt.validate_identity(accepted, stream.durable),
+             true <- accepted.accepted_sequence >= operation.sequence and accepted.accepted_sample >= operation.sample,
+             true <- accepted.accepted_sequence <= stream.cursor.next_sequence and accepted.accepted_sample <= stream.cursor.next_sample do
+          {:ok, stream}
+        else
+          false -> {:error, :invalid_acceptance}
+          error -> error
         end
-    end
-  end
-
-  defp finish_upload(socket, durable_seq, watermark) do
-    {:ok, %{"type" => "stream_finished"}} =
-      Transport.request(
-        socket,
-        "finish",
-        %{
-          "sequence" => to_string(durable_seq),
-          "sample" => to_string(watermark["sample"]),
-          "interruption" => watermark["interruption"]
-        },
-        35_000
-      )
-
-    :ok
-  end
-
-  defp drain_replies(spool, s, n, gen, durable_seq, in_flight) do
-    case Transport.recv_nowait(s) do
-      {:error, :timeout} ->
-        {:ok, durable_seq, in_flight}
-
-      reply ->
-        case handle_reply(spool, n, gen, durable_seq, in_flight, reply) do
-          {:interrupted, :premature_terminal} ->
-            {:interrupted, :premature_terminal}
-
-          {:ok, next_durable, next_in_flight} ->
-            drain_replies(spool, s, n, gen, next_durable, next_in_flight)
+      reply["type"] in ["durable", "stream_finished"] ->
+        with {:ok, receipt} <- Receipt.parse(reply["receipt"]),
+             true <- receipt_operation?(stream, reply["operation_id"]) or Receipt.exact_prefix?(stream.durable, receipt),
+             true <- receipt.durable_sequence <= stream.cursor.next_sequence and receipt.durable_sample <= stream.cursor.next_sample,
+             :ok <- Spool.ack(stream.spool, stream.name, stream.binding, receipt),
+             {:ok, ledger, _released} <- Credit.acknowledge(stream.ledger, stream.binding, receipt) do
+          next = %{stream | durable: receipt, ledger: ledger,
+            checkpoint: if(reply["operation_id"] == stream.checkpoint or Credit.stats(ledger).outstanding_frames == 0, do: nil, else: stream.checkpoint)}
+          if reply["type"] == "stream_finished", do: {:interrupted, :premature_terminal}, else: {:ok, next}
+        else
+          false -> {:error, :uncovered_receipt}
+          error -> error
         end
+      reply["type"] == "refused" ->
+        with {:ok, operation} <- Credit.lookup(stream.ledger, stream.binding, reply["operation_id"]),
+             {:ok, _ledger} <- Credit.refuse(stream.ledger, stream.binding, operation.id, operation_fingerprint(reply, operation.id)),
+          do: {:error, :known_refusal}
+      true -> {:error, :unexpected_reply}
     end
   end
+  defp handle_reply(_, error), do: error
 
-  defp handle_reply(spool, n, gen, durable_seq, in_flight, reply) do
-    case reply do
-      {:ok, %{"type" => "accepted"}} ->
-        {:ok, durable_seq, in_flight}
+  defp operation_fingerprint(reply, "frame-" <> _), do: reply["transport_sha256"]
+  defp operation_fingerprint(reply, "gap-" <> _), do: reply["fingerprint"]
+  defp operation_fingerprint(_, _), do: nil
 
-      {:ok, %{"type" => "durable"} = r} ->
-        next_durable = String.to_integer(r["durable_sequence"])
+  defp receipt_operation?(stream, operation) do
+    operation == stream.checkpoint or match?({:ok, _}, Credit.lookup(stream.ledger, stream.binding, operation)) or
+      (is_binary(operation) and byte_size(operation) <= 96 and Regex.match?(~r/\Acheckpoint-[A-Za-z0-9_-]+\z/, operation))
+  end
 
-        true =
-          next_durable == durable_seq or Enum.any?(in_flight, fn {_, q} -> q == next_durable end)
-
-        :ok = Spool.ack(spool, n, gen, r)
-        remaining = Enum.drop_while(in_flight, fn {_q, next_q} -> next_q <= next_durable end)
-        {:ok, next_durable, remaining}
-
-      {:ok, %{"type" => "stream_finished"} = r} ->
-        :ok = Spool.ack(spool, n, gen, r)
-        {:interrupted, :premature_terminal}
-
-      other ->
-        raise MatchError, term: other
+  defp finish_upload(stream, mark) do
+    with true <- {stream.durable.durable_sequence, stream.durable.durable_sample} == {mark["sequence"], mark["sample"]},
+         :ok <- authority(stream),
+         {:ok, reply} <- Transport.request(stream.socket, "finish", %{"binding" => stream.binding,
+           "sequence" => to_string(mark["sequence"]), "sample" => to_string(mark["sample"]), "interruption" => mark["interruption"]}, 35_000),
+         true <- reply["binding"] == stream.binding,
+         :ok <- authority(stream),
+         :ok <- Spool.ack(stream.spool, stream.name, stream.binding, reply["receipt"]) do
+      terminal(stream, reply)
+    else
+      false -> {:error, :incomplete_source_drain}
+      error -> error
     end
+  end
+  defp terminal(stream, reply) do
+    mark = Spool.watermark(stream.spool, stream.name)
+    with true <- reply["type"] == "stream_finished" and MedEx.ContractRules.digest?(reply["index_digest"]),
+         {:ok, receipt} <- Receipt.parse(reply["receipt"]), true <- Receipt.durable?(receipt),
+         true <- mark["done"] and {receipt.durable_sequence, receipt.durable_sample} == {mark["sequence"], mark["sample"]} do
+      :ok
+    else
+      _ -> {:interrupted, :premature_terminal}
+    end
+  end
+  defp authority(stream) do
+    now = System.monotonic_time(:millisecond)
+    expected_binding = stream.control_binding
+    case :ets.lookup(stream.hub, :authority) do
+      [{:authority, ^expected_binding, deadline}] when is_integer(deadline) ->
+        if now < deadline, do: :ok, else: {:error, :authority_expired}
+      _ -> {:error, :authority_expired}
+    end
+  rescue
+    ArgumentError -> {:error, :authority_expired}
   end
 end

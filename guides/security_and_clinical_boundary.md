@@ -1,39 +1,30 @@
-# Security and Clinical Boundary
+# Security and clinical boundary
 
-## 1. Authentication and Authorization Model
+Every consequential route/socket/service operation verifies actor, encounter,
+role and current source authority at its actual effect boundary. Browser requires
+current patient session/membership, allowed origin/CSRF and trusted proxy identity;
+devices use enrolled identity/grants with verified TLS/CA. Descriptor labels never
+authenticate principals. Bound all identifiers, bodies, SDP, frames and counters;
+reject duplicate JSON keys, unsupported revisions and untrusted endpoints.
 
-- **Clinician / Patient encounter routes (`mf_exam` HTTP):** Scoped by
-  encounter ID and role. Local HTTP uses distinct role-specific access keys
-  (`?key=<clinician_key>`); public HTTPS requires the configured authenticating
-  loopback reverse proxy and proxy secret. Bare `/` is not served. Role
-  separation prevents patient sessions from committing clinical acceptance or
-  triggering FHIR export.
-- **Device ingress (`mf_exam` HTTPS/WSS):** Authenticated TLS WebSocket
-  listener using the lab/deployment CA and enrolled device credentials. Only
-  enrolled devices admitted to an active encounter and profile may push frames.
-- **Preview sidecar (`mf_preview`):** Authenticated with a nonempty shared
-  Preview credential. Deployment must isolate it in a separate BEAM OS process;
-  adding both packages as runtime dependencies of one host starts them together.
+Playback is authorized against acquisition and promoted digest, then verifies the
+exact bounded segment bytes returned. Reject traversal, symlinks, changed identity,
+corrupt length/hash and unsafe root ownership. The supported threat model is a
+service-owned local filesystem; ordinary path checks are not hostile local-user
+race protection. Fail closed before listeners if installed resources, schema,
+DB/root UUID, root lock or required configuration are invalid.
 
-## 2. PHI-Free Diagnostics
+Recording authority, technical evidence, native clinical decision and delivery
+are separate. A sealed waveform does not imply a diagnostic result. Domain alone
+owns native eligibility; Interop representation failure does not roll back valid
+acceptance. Software qualification uses synthetic/reference sources only.
 
-- Logs, telemetry metadata, and error reports must carry only opaque IDs
-  (encounter ID, acquisition ID, stream ID, SHA-256 digests), never patient
-  demographics or raw clinical notes.
-- `erl_crash.dump` is ignored in `.gitignore` and must never be committed or
-  shipped in release artifacts.
+Preview credentials bind purpose, source/generation and viewer session. Viewing
+is bounded to at most 30 seconds from the last Exam check, with conservative
+clock uncertainty and monotonic checks at transport submission. Lost revocation
+cannot extend it. Direct talkback has separately documented cooperating-client
+renewal; server signaling is not a hard P2P media fence.
 
-This is a diagnostics policy, not a claim that BEAM crash dumps are scrubbed.
-A crash dump can contain process state and secrets; keep it outside release
-artifacts and ordinary log collection. A complete PHI/logging audit remains open.
-
-## 3. Synthetic vs. Clinical Qualification Scope
-
-- **Previously exercised with synthetic fixtures:** Paired acoustic/ECG capture, sparse PLXS spot
-  checks, 29-minute ext4 soak, TLS reconnect/replay, and HAPI FHIR R4 retry
-  read-back.
-- **Current release gate:** Re-run those suites, including the 29-minute ext4
-  soak, against the exact 0.3.1 SDK and 0.2.1 application/provider candidates.
-- **Not clinically qualified:** Physical peripheral timing, hardware
-  calibration, regulatory device clearance, and production clinical deployment
-  require separate qualification outside this repository.
+Use safe low-cardinality diagnostics: codes, counts, durations, lag and recovery
+outcomes. Never log tokens, credential material, raw PCM, SDP, clinical payloads
+or unbounded remote bodies. Qualification reports must be sanitized too.

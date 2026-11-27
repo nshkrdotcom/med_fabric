@@ -9,11 +9,11 @@ defmodule MedFabric.BuildSourcesTest do
   use ExUnit.Case, async: false
   alias MedFabric.BuildSources, as: Sources
 
-  @env ~w(MF_MED_EX_PATH MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE
+  @env ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE
            CFLAGS CC MED_EX_OPUS_TARBALL XDG_CACHE_HOME
            HEX_HOME HEX_MIRROR_URL HEX_TRUSTED_MIRROR_URL MIX_XDG XDG_CONFIG_HOME XDG_DATA_HOME)
   @defaults [
-    {:med_ex, "~> 0.2.0", override: true, runtime: true},
+    {:med_ex, "~> 0.4.0", runtime: true},
     {:mf_domain, path: "../../core/domain"},
     {:jason, "~> 1.4"}
   ]
@@ -53,38 +53,15 @@ defmodule MedFabric.BuildSourcesTest do
   end
 
   test "the default MedEx family uses the published Hex package ranges" do
-    assert {:med_ex, "~> 0.3.1", base_opts} = Sources.med_ex_dependency(:med_ex)
+    assert {:med_ex, "~> 0.4.0", base_opts} = Sources.med_ex_dependency(:med_ex)
     assert base_opts[:hex] == "med_ex"
     assert base_opts[:repo] == "hexpm"
-    assert base_opts[:override]
+    refute Keyword.has_key?(base_opts, :override)
 
-    for {app, requirement} <- [med_ex_opus: "~> 0.2.1", med_ex_rtc: "~> 0.2.1"] do
+    for {app, requirement} <- [med_ex_opus: "~> 0.3.0", med_ex_rtc: "~> 0.3.0"] do
       assert {^app, ^requirement, options} = Sources.med_ex_dependency(app)
       assert options == [hex: Atom.to_string(app), repo: "hexpm"]
     end
-  end
-
-  test "legacy media without a source file isolates all mutable state by profile and Mix environment",
-       c do
-    profile = [profile: :legacy_media]
-    assert {@defaults, []} == Sources.resolve(@defaults, c.project, c.root)
-    assert {@defaults, legacy} = Sources.resolve(@defaults, c.project, c.root, profile)
-    assert Enum.sort(Keyword.keys(legacy)) == [:build_path, :deps_path, :lockfile]
-    assert length(Enum.uniq(Keyword.values(legacy))) == 3
-    assert legacy == elem(Sources.resolve(@defaults, c.project, c.root, profile), 1)
-
-    original = Mix.env()
-
-    try do
-      Mix.env(if original == :prod, do: :test, else: :prod)
-      assert legacy != elem(Sources.resolve(@defaults, c.project, c.root, profile), 1)
-    after
-      Mix.env(original)
-    end
-
-    System.put_env("MIX_DEPS_PATH", Path.join(c.root, "shared"))
-    assert_raise Mix.Error, fn -> Sources.resolve(@defaults, c.project, c.root, profile) end
-    assert File.read!(Path.join(c.project, "mix.lock")) == c.lock
   end
 
   test "direct, live and full paths each isolate lock, build and dependency roots", c do
@@ -95,9 +72,10 @@ defmodule MedFabric.BuildSourcesTest do
         make_project(c.root, candidate)
         select(c, %{"med_ex" => %{"path" => candidate}})
         {deps, roots} = Sources.resolve(@defaults, c.project, c.root)
-        assert {:med_ex, "~> 0.2.0", options} = hd(deps)
+        assert {:med_ex, "~> 0.4.0", options} = hd(deps)
         assert options[:path] == Path.join(c.root, candidate)
-        assert options[:override] and options[:runtime]
+        assert options[:runtime]
+        refute Keyword.has_key?(options, :override)
         assert Enum.sort(Keyword.keys(roots)) == [:build_path, :deps_path, :lockfile]
 
         assert Enum.all?(
@@ -123,9 +101,10 @@ defmodule MedFabric.BuildSourcesTest do
         {[{:med_ex, requirement, options} | _], roots} =
           Sources.resolve(@defaults, c.project, c.root)
 
-        assert requirement == "~> 0.2.0"
+        assert requirement == "~> 0.4.0"
         assert options[:ref] == ref and options[:subdir] == "sdk"
-        assert options[:override] and options[:runtime]
+        assert options[:runtime]
+        refute Keyword.has_key?(options, :override)
         refute Keyword.has_key?(options, :path)
         roots
       end
@@ -293,24 +272,11 @@ defmodule MedFabric.BuildSourcesTest do
     refute Enum.any?(deps, fn tuple -> elem(tuple, 0) in [:med_ex_opus, :med_ex_rtc] end)
   end
 
-  test "a nested Store shares the data file and its domain selection isolates the outer consumer",
-       c do
-    domain = make_project(c.root, "domain")
-    mix = Path.join(domain, "mix.exs")
-    File.write!(mix, String.replace(File.read!(mix), "app: :med_ex", "app: :mf_domain"))
-    store = Path.join(c.root, "core/store")
-    File.mkdir_p!(store)
-    store_defaults = [{:mf_domain, path: "../domain"}, {:postgrex, "~> 0.23"}]
-    outer_defaults = [{:mf_store, path: "../../core/store"}]
-    select(c, %{"med_ex" => %{"path" => "unused-sdk"}, "mf_domain" => %{"path" => "domain"}})
-
-    assert {[{:mf_domain, [path: ^domain]}, {:postgrex, "~> 0.23"}], [_ | _]} =
-             Sources.resolve(store_defaults, store, c.root)
-
-    assert {^outer_defaults, [_ | _]} = Sources.resolve(outer_defaults, c.project, c.root)
-    select(c, %{"med_ex" => %{"path" => "unused-sdk"}})
-    assert {^store_defaults, []} = Sources.resolve(store_defaults, store, c.root)
-    assert {^outer_defaults, []} = Sources.resolve(outer_defaults, c.project, c.root)
+  test "private components cannot be externally selected", c do
+    for app <- ["mf_domain", "mf_store", "mf_interop"] do
+      select(c, %{app => %{"path" => "/somewhere"}})
+      assert_raise Mix.Error, fn -> Sources.resolve(@defaults, c.project, c.root) end
+    end
   end
 
   test "private and official repositories with the same Hex name isolate their state", c do
@@ -365,7 +331,7 @@ defmodule MedFabric.BuildSourcesTest do
   test "incompatible literal versions and mismatched Hex identities are rejected", c do
     sdk = make_project(c.root, "sdk")
     mix = Path.join(sdk, "mix.exs")
-    File.write!(mix, String.replace(File.read!(mix), "0.2.0", "0.1.0"))
+    File.write!(mix, String.replace(File.read!(mix), "0.4.0", "0.1.0"))
     select(c, %{"med_ex" => %{"path" => "sdk"}})
 
     assert_raise Mix.Error, ~r/does not satisfy/, fn ->
@@ -420,16 +386,8 @@ defmodule MedFabric.BuildSourcesTest do
     end
   end
 
-  test "legacy candidate flag is isolated and conflicts with a simultaneous selection", c do
-    sdk = make_project(c.root, "sdk")
-    System.put_env("MF_MED_EX_PATH", sdk)
-    {deps, roots} = Sources.resolve(@defaults, c.project, c.root)
-    assert elem(hd(deps), 2)[:path] == sdk
-    assert length(roots) == 3
-    select(c, %{})
-    assert_raise Mix.Error, fn -> Sources.resolve(@defaults, c.project, c.root) end
-    System.delete_env("MF_MED_EX_PATH")
-
+  test "explicit source contexts cannot share mutable Mix paths", c do
+    make_project(c.root, "sdk")
     select(c, %{"med_ex" => %{"path" => "sdk"}})
 
     for name <- ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE) do
@@ -448,7 +406,15 @@ defmodule MedFabric.BuildSourcesTest do
 
     File.write!(
       Path.join(path, "mix.exs"),
-      "defmodule SourceFixture.MixProject do\n  use Mix.Project\n  def project, do: [app: :med_ex, version: \"0.2.0\"]\nend\n"
+      "defmodule SourceFixture.MixProject do\n  use Mix.Project\n  def project, do: [app: :med_ex, version: \"0.4.0\"]\nend\n"
+    )
+
+    File.write!(Path.join(path, "VERSION"), "0.4.0\n")
+    File.mkdir_p!(Path.join(path, "lib/med_ex"))
+
+    File.write!(
+      Path.join(path, "lib/med_ex/contract.ex"),
+      "defmodule MedEx.Contract do\n  def api_revision, do: 2\nend\n"
     )
 
     path

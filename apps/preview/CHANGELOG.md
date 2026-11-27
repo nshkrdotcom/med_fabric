@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0 - 2026-11-26
+
+### Breaking changes
+
+- Compose concrete Opus and RTC providers in a separate optional BEAM service.
+  Remove base media facades, global selection and private handle matching.
+- Bind viewers and feeds to source/generation/purpose with finite capacity and
+  conservative monotonic authorization deadlines; retire stale resources.
+- Compute emitted sequence and elapsed media tick from source coordinates,
+  advancing sequence only after known successful submission.
+- Preserve latest-only disposable frames and capture independence on all failures.
+- Consume med_ex ~> 0.4.0 and providers ~> 0.3.0; publish directly with Mix.
+
+### Tests and documentation
+
+- Add capability, expiry, frame validation, ownership and bounded peer tests.
+- Document isolated runtime, direct/relay media and raw-integrity qualification.
+
 ## 0.2.1 — 2026-11-26
 
 - Align release qualification and dependency floors with MedEx 0.3.1 and its 0.2.1 providers.

@@ -1,71 +1,55 @@
-<p align="center"><img src="assets/interop.svg" width="200" alt="Healthcare record exchange" /></p>
+# Private healthcare interop
 
-<h1 align="center">Healthcare record exchange</h1>
+`mf_interop` 0.2.0 is a private component composed into `mf_exam` 0.3.0. It maps
+already committed native observations to FHIR R4, performs bounded HTTP and
+returns typed remote outcomes. It neither accepts clinical evidence nor chooses
+a reusable global database.
 
-<p align="center">
-  <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
-  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/core/interop/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
-</p>
+## Mapping after acceptance
 
-`mf_interop` (`core/interop`) is the single authoritative healthcare record
-exchange library for [Med Fabric](https://github.com/nshkrdotcom/med_fabric) (kept outside
-[MedEx](https://github.com/nshkrdotcom/med_ex)). It maps accepted observations
-into HL7 FHIR R4 `Observation` resources and delivers them idempotently over
-HTTP using `Req`. Qualified spot-check pulse rate and oxygen saturation
-are separate observations with independent delivery and retry state.
+`FhirClient.resource_checked/3` receives the native observation, the pinned
+external identifier and explicit references. It returns a representation or an
+explicit mapping error. Store acceptance does not call it. Missing references,
+destination/configuration or unsupported representation leaves the valid native
+decision intact and its delivery blocked for deliberate remediation.
 
----
+Manual pulse and eligible PLX pulse/SpO₂ selections retain exact values, unit,
+method, source event, measured/available time, device provenance and simulation
+status. `MedFabric.Interop.JSON` preserves decimal JSON numbers without binary
+floating-point rounding. `Observation.matches?/2` checks clinical content;
+server IDs/version metadata and permitted enrichment are not substitutes for
+exact identifier, quantity, reference, provenance and time comparison.
 
-## Delivery
+## Bounded delivery and confirmation
 
-`MedFabric.Interop.FhirClient` maps reviewed recording digests
-(`reviewed-auscultation-recording`) and manually entered pulse rates (LOINC
-`8867-4`, UCUM `/min`) into distinct FHIR R4 `Observation` payloads. It uses
-conditional create (`If-None-Exist`) and confirms remote identity and clinical
-values on read-back, including the presence or absence of a quantity comparator.
+The host pins mapping version, canonical resource bytes, fingerprint, destination
+and references in Store before dispatch. The external namespace derives from
+the immutable deployment UUID and is retained across restore. Delivery results
+remain tied to the exact Store attempt claim.
 
-Use `FHIR_BASE_URL` and `mix test integration` to exercise retry against native
-HAPI. See the [browser-to-record guide](https://github.com/nshkrdotcom/med_fabric/blob/main/guides/browser_to_record.md).
+`deliver/2` performs conditional creation under the existing identifier and
+returns matched, proven noncommit/permanent, conflict or unknown outcomes.
+`reconcile/2` queries that same identifier and verifies remote identity/content.
+Store alone decides whether an attempt result permits confirmed, retryable,
+blocked, conflict or unresolved state. A matching record is insufficient if an
+unsafe stale request could still create another resource. Conditional-create
+safety requires retained qualification for the destination and every possibly
+outstanding request, not an optimistic flag.
 
-## Accepted device metrics
+HTTP has bounded request/response/time limits. Automatic transport retries must
+not turn unknown submission into duplicate clinical writes. Diagnostics omit
+credentials, patient data, raw evidence and response payloads.
 
-`FhirClient.resource_checked/4` validates `device_spo2_v1` and
-`device_pulse_rate_v1` evidence before an outbox intent is written. It requires
-a qualified measurement timestamp, later availability time, the measuring
-peripheral's `Device/...` reference, immutable event/collection lineage and
-explicit simulation provenance. A gateway receipt timestamp cannot substitute
-for an unknown measurement timestamp. Manual pulse retains its existing method.
+## Verification
 
-The oxygen-saturation resource uses the R4 oxygen-saturation profile, LOINC
-`2708-6`, and UCUM `%`; device pulse uses the heart-rate profile, LOINC `8867-4`
-and UCUM `/min`. The originating exact mantissa/exponent remains in evidence.
-Decimal values are encoded as JSON numbers using `MedFabric.Interop.JSON`,
-and decoded without binary floating-point rounding. Store connections select `MedFabric.Store.JSON` in their Postgrex type module
-so outbox JSONB round trips preserve the same numeric values.
+Run unit tests for exact decimal serialization and typed content comparison.
+Run `mix test integration` against actual disposable HAPI with unique synthetic
+Patient/Encounter/Device references. Cover lost response, remote conflict,
+multiple matches, database failure after remote success, delayed stale sender,
+permanent proven noncommit and no-blind-retry behavior. Required services missing
+from that selected lane are failures, not passing skips. The independent private
+clinical-core host must prove native acceptance without export configuration and
+later exact confirmed delivery with real services.
 
-Read-back comparison requires the selected profiles and exact clinical fields,
-including method, measurement time, device, source-event lineage and simulation
-note. Server-generated IDs, version metadata, narrative and reference display
-labels may be enriched; a changed quantity type, comparator, unit, subject,
-method or time remains a conflict. A failed response leaves delivery retryable
-under the same external identifier; it never authorizes a new observation ID.
-
-Unit tests cover exact fractional JSON and typed confirmation. They do not
-replace the actual HAPI conditional-create, lost-response and read-back suite.
-
-References: [FHIR R4 oxygen saturation](https://hl7.org/fhir/R4/oxygensat.html),
-[FHIR R4 Observation](https://hl7.org/fhir/R4/observation.html),
-[Elixir JSON callbacks](https://hexdocs.pm/elixir/JSON.html),
-[Decimal numeric JSON encoding](https://hexdocs.pm/decimal/Decimal.html),
-[Postgrex JSON configuration](https://hexdocs.pm/postgrex/readme.html).
-
-Run the real response-loss regression against an isolated local HTTP HAPI R4 instance:
-
-```bash
-FHIR_BASE_URL=http://127.0.0.1:18080/fhir mix test integration
-```
-
-It creates uniquely named synthetic Patient, Encounter and Device fixtures, forwards
-a real conditional POST through a TCP proxy that discards HAPI's response, then
-retries directly and checks that exactly one typed observation exists. Fixtures
-are cleaned up afterward. Required service absence is a failure, not a passing skip.
+Run strict Credo, Dialyzer and ExDoc before composition. This private source
+component is not separately published.

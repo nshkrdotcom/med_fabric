@@ -5,7 +5,7 @@ defmodule MedFabric.RuntimeConfigTest do
   use ExUnit.Case, async: false
 
   @root Path.expand("..", __DIR__)
-  @env ~w(MF_LAB MF_EXAM_LEGACY_MEDIA MF_PREVIEW_PORT MF_PREVIEW_URL
+  @env ~w(MF_LAB MF_PREVIEW_CONFIG MF_PREVIEW_PORT MF_PREVIEW_URL
           MF_PREVIEW_CREDENTIAL_FILE MF_ENCOUNTERS_FILE MF_HTTP_PORT MF_PUBLIC_ORIGIN
           MF_PROXY_SECRET MF_TURN_URLS MF_TURN_SECRET MF_RELAY_ONLY MF_DEVICE_TLS_CERTFILE
           MF_DEVICE_TLS_KEYFILE MF_ARTIFACT_DIR MF_SECRET_KEY_BASE DATABASE_URL)
@@ -18,6 +18,19 @@ defmodule MedFabric.RuntimeConfigTest do
     File.write!(credential, "synthetic-preview-test-credential\n")
     System.put_env("MF_PREVIEW_CREDENTIAL_FILE", credential)
     System.put_env("MF_PREVIEW_PORT", "4090")
+    config = Path.join(dir, "preview.json")
+
+    File.write!(
+      config,
+      JSON.encode!(%{
+        "port" => 4090,
+        "credential_file" => credential,
+        "trusted_clock" => true,
+        "clock_error_ms" => 100
+      })
+    )
+
+    System.put_env("MF_PREVIEW_CONFIG", config)
 
     on_exit(fn ->
       Enum.each(previous, fn {key, value} ->
@@ -32,12 +45,12 @@ defmodule MedFabric.RuntimeConfigTest do
     config = read("preview")
     assert config[:mf_preview][:listen][:port] == 4090
     assert config[:mf_preview][:listen][:secret] == "synthetic-preview-test-credential"
-    assert config[:med_ex][:rtc_provider] == MedEx.RTC.Provider
+    refute Keyword.has_key?(config, :med_ex)
   end
 
   test "Preview refuses empty credentials", %{credential: credential} do
     File.write!(credential, " \n\t")
-    assert_raise RuntimeError, ~r/Empty Preview credential/, fn -> read("preview") end
+    assert_raise RuntimeError, ~r/Unreadable Preview credential/, fn -> read("preview") end
   end
 
   test "Preview refuses out-of-range environment ports" do
@@ -82,6 +95,6 @@ defmodule MedFabric.RuntimeConfigTest do
   defp read(app) do
     @root
     |> Path.join("apps/#{app}/config/runtime.exs")
-    |> Config.Reader.read!(env: :test, target: :host)
+    |> Config.Reader.read!(env: if(app == "preview", do: :prod, else: :test), target: :host)
   end
 end

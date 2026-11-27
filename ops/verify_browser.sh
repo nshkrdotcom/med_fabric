@@ -8,20 +8,38 @@ for tool in mix node openssl curl psql jq ps timeout; do
 done
 [[ -d ops/node_modules/playwright ]] || { echo "Run ./onboard.sh --integration." >&2; exit 1; }
 
-mode="${1:-}"
-[[ -z "$mode" || "$mode" == "--release" ]] || { echo "Usage: $0 [--release]" >&2; exit 1; }
+mode=
+installed_consumers=
+while (( $# )); do
+  case "$1" in
+    --release) mode=--release; shift ;;
+    --installed-consumers)
+      [[ $# -ge 2 ]] || exit 2
+      installed_consumers=$(realpath -e -- "$2")
+      shift 2 ;;
+    *) echo "Usage: $0 [--release --installed-consumers DIR]" >&2; exit 2 ;;
+  esac
+done
+if [[ "$mode" == --release && -z "$installed_consumers" ]]; then
+  echo 'Release verification requires the exact installed archive consumers; no source release fallback.' >&2
+  exit 2
+fi
+fabric=$(pwd -P)
+exam_project=${installed_consumers:+$installed_consumers/exam}
+exam_project=${exam_project:-$fabric/apps/exam}
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/med-fabric-browser.XXXXXXXX")"
-export MF_EXAM_LEGACY_MEDIA=1
 export MF_EXAM_ID="exam-$(openssl rand -hex 8)"
 export MF_LAB=1
+export MF_DEPLOYMENT_UUID="$(node -e 'console.log(require("node:crypto").randomUUID())')"
 export MF_HTTP_PORT="${MF_HTTP_PORT:-14000}"
 export MF_PATIENT_ACCESS_KEY="$(openssl rand -hex 24)"
 export MF_CLINICIAN_ACCESS_KEY="$(openssl rand -hex 24)"
 export MF_PATIENT_ACTOR="patient"
 export MF_CLINICIAN_ACTOR="clinician"
 export MF_SECRET_KEY_BASE="$(openssl rand -hex 48)"
-export MF_ARTIFACT_DIR="$work/recordings"
+export MF_ARTIFACT_DIR="$work/acquisitions"
+export MF_BROWSER_EVIDENCE="$work/browser-evidence.json"
 export MF_SERVICE_STATE="$work/services"
 
 owns_hapi=false
@@ -90,22 +108,28 @@ curl -fsS --max-time 5 -H 'Accept: application/fhir+json' "${FHIR_BASE_URL%/}/me
 
 
 export MF_ENCOUNTERS_FILE="$work/refs.json"
-for mix_env in dev test; do
-  (cd apps/exam && env -u MF_LAB MIX_ENV="$mix_env" mix deps.get)
-done
-(cd apps/exam && env -u MF_LAB mix run --no-start ../../ops/seed_exam.exs)
+if [[ -n "$installed_consumers" ]]; then
+  elixir ops/detached_artifacts.exs installed "$installed_consumers/artifacts.json" \
+    "$exam_project" exam "$work/exam-installed.json"
+  (cd "$exam_project" && env -u MF_LAB MIX_ENV=prod mix run --no-start "$fabric/ops/seed_exam.exs")
+else
+  for mix_env in dev test; do
+    (cd "$exam_project" && env -u MF_LAB MIX_ENV="$mix_env" mix deps.get)
+  done
+  (cd "$exam_project" && env -u MF_LAB mix run --no-start "$fabric/ops/seed_exam.exs")
+fi
 
 # Native transition checks share the browser verifier's isolated services.
 # Core projects have their own dependency/build roots outside the exam overlay.
 for package in core/store core/interop; do
   (cd "$package" && env -u MIX_EXS -u MIX_DEPS_PATH -u MIX_BUILD_PATH -u MIX_BUILD_ROOT -u MIX_LOCKFILE \
-    -u MF_MED_EX_PATH -u MIX_ENV -u MF_LAB mix test integration)
+    -u MIX_ENV -u MF_LAB mix test integration)
 done
-(cd apps/exam && env -u MF_LAB mix test integration/{recording,encounter_scope}_test.exs)
+(cd apps/exam && env -u MF_LAB mix test integration)
 
 if [[ "$mode" == "--release" ]]; then
-  (cd apps/exam && export MIX_ENV=prod && unset MF_LAB && mix deps.get &&
-    mix release --path "$work/release" --overwrite) >"$work/release.log" 2>&1 ||
+  (cd "$exam_project" && export MIX_ENV=prod && unset MF_LAB &&
+    mix release mf_exam --path "$work/release") >"$work/release.log" 2>&1 ||
     { cat "$work/release.log" >&2; exit 1; }
 fi
 
@@ -122,7 +146,7 @@ start_exam() {
   if [[ "$mode" == "--release" ]]; then
     (cd "$work" && exec "$work/release/bin/mf_exam" start) >>"$work/exam.log" 2>&1 &
   else
-    (cd apps/exam && exec mix run --no-halt) >>"$work/exam.log" 2>&1 &
+    (cd "$exam_project" && exec mix run --no-halt) >>"$work/exam.log" 2>&1 &
   fi
   pid=$!
   for ((attempt=0; attempt<120; attempt++)); do

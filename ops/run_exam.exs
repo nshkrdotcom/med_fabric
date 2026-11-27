@@ -4,9 +4,16 @@ defmodule MedFabric.ExamLabTimings do
   def append(event, measurements, metadata, path) do
     sample = %{
       at_ms: System.system_time(:millisecond),
-      stream: metadata.stream,
+      stream: metadata[:stream],
       stage: List.last(event),
-      duration_us: measurements.duration_us
+      duration_us: measurements[:duration_us],
+      measurements:
+        Map.take(measurements, [
+          :max_frame_bytes,
+          :max_payload_bytes,
+          :max_pending_bytes,
+          :max_pending_frames
+        ])
     }
 
     File.write!(path, [JSON.encode_to_iodata!(sample), "\n"], [:append])
@@ -21,6 +28,7 @@ c = File.read!(Keyword.fetch!(opts, :config)) |> JSON.decode!()
 entries = Map.new(c["encounters"], &{&1["exam"], &1})
 
 Application.put_env(:mf_exam, :lab, %{
+  deployment_uuid: Map.fetch!(c, "deployment_uuid"),
   device_enabled: true,
   encounters: entries,
   local?: true,
@@ -56,14 +64,15 @@ Application.put_env(
 
 if path = c["checkpoint_timings"] do
   {:ok, _} = Application.ensure_all_started(:telemetry)
-  File.write!(path, "", [:exclusive])
+  File.write!(path, "", [:append])
 
   :ok =
     :telemetry.attach_many(
       {__MODULE__, path},
       [
-        [:mf_exam, :device_ingress, :checkpoint],
-        [:mf_exam, :device_ingress, :writer_checkpoint]
+        [:mf_exam, :acquisition_ingress, :checkpoint],
+        [:mf_exam, :acquisition_ingress, :writer_checkpoint],
+        [:mf_exam, :acquisition_ingress, :bounds]
       ],
       &MedFabric.ExamLabTimings.append/4,
       path
@@ -72,16 +81,18 @@ end
 
 {:ok, _} = Application.ensure_all_started(:mf_exam)
 alias MedFabric.Store.DeviceSessions
+db = MedFabric.Exam.context().db
 
 for d <- c["devices"] do
-  true = DeviceSessions.enroll(d["id"], File.read!(d["credential_file"]) |> String.trim())
+  true = DeviceSessions.enroll(db, d["id"], File.read!(d["credential_file"]) |> String.trim())
 
   if c["authorize_scenarios"] do
     for p <- ~w(paired_exam plx_spot_check) do
       e = Map.fetch!(entries, d["exam"])
 
-      :ok =
+      {:ok, :ok} =
         DeviceSessions.authorize(
+          db,
           e["exam"],
           d["id"],
           p,

@@ -1,69 +1,70 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/nshkrdotcom/med_fabric/main/apps/handheld/assets/handheld.svg" alt="Med Fabric Handheld logo" width="200" />
-</p>
+# Med Fabric Handheld
 
-<h1 align="center">Med Fabric Handheld</h1>
+`mf_handheld` 0.3.0 is a direct Mix package for a reference device producer,
+its durable local spool, authenticated TLS upload, and disposable local monitor.
+It depends on `med_ex ~> 0.4.0` and Gun. Run the reference paired acoustic/ECG
+profile or the PLXS spot-check profile with an explicitly configured Exam host.
+The reference sources demonstrate software behavior; they provide no physical
+device calibration or clinical qualification.
 
-<p align="center">
-  <a href="https://github.com/nshkrdotcom/med_fabric/tree/main/apps/handheld"><img src="https://img.shields.io/badge/GitHub-mf__handheld-345366" alt="GitHub source" /></a>
-  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/apps/handheld/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
-</p>
+## Ownership
 
-`mf_handheld` is the standalone synthetic medical-peripheral client in
-[Med Fabric](https://github.com/nshkrdotcom/med_fabric). Built on the base
-[`med_ex`](https://hex.pm/packages/med_ex) SDK and `gun`, it owns synthetic
-RDP1 acoustic/ECG and PLXS pulse-oximetry peripherals, a local command journal,
-a bounded fsync-backed disk spool, and resumable TLS/WSS uplinks to `mf_exam`.
+`MedExHandheld.Session` coordinates admission, reconnect and final drain.
+`MedExHandheld.Paired` produces source records and uploads retained bytes.
+`MedExHandheld.Spool` owns local durability and its single OS `flock`.
+`MedEx.Receipt`, `MedEx.StreamCursor` and `MedEx.Wire.Credit` own technical
+receipt, progression and credit rules. `MedExHandheld.Monitor` owns a separate,
+bounded derived gain ledger and the latest disposable batch. Preview, codecs,
+RTC, clinical decisions and database access do not belong in this package.
 
-## Installation
+## Run
 
-Add `mf_handheld` to your list of dependencies in `mix.exs`:
+Add the package to a consumer:
 
 ```elixir
-def deps do
-  [
-    {:mf_handheld, "~> 0.2.1"}
-  ]
-end
+{:mf_handheld, "~> 0.3.0"}
 ```
 
-Requires Elixir `~> 1.20` (OTP 29), Linux with `util-linux` `flock`, a local
-filesystem supporting directory `fsync`, OTP TLS, and MedEx `~> 0.3.1`.
+Start the consumer applications and invoke the packaged CLI:
 
-## Key Capabilities
-
-- **Synthetic RDP1 & PLXS peripherals:** Exercises paired acoustic/ECG waveform
-  streaming and spot-check pulse-oximetry collection with explicit source clock
-  and calibration metadata.
-- **Offline-first bounded spool:** Persists frames and measurement events into a
-  local directory-locked spool (`MedExHandheld.Spool`) before uplink delivery;
-  50 Hz audio holds up to 5 frames (100 ms) in memory before atomic commit, and
-  local durability begins once records and their directory have been synced.
-- **Resumable TLS/WSS transport:** Connects to `mf_exam` using device-scoped
-  credentials and a pinned CA (`MedExHandheld.Transport`), replaying queued
-  records after network interruption without duplicating accepted evidence.
-- **Separate software monitor uplink:** Optionally streams latest-only 48 kHz
-  monitor frames over an independent credit-paced WSS connection with a 200 ms
-  local staleness cutoff.
-
-## Quick Usage
-
-From a compiled release or checkout, run a scenario via `MedExHandheld.CLI`:
-
-```bash
-bin/mf_handheld eval \
-  'Application.ensure_all_started(:mf_handheld); MedExHandheld.CLI.main(["--config", "/etc/handheld/fixture.json", "--scenario", "paired_exam"])'
+```sh
+mix run -e 'MedExHandheld.CLI.main(System.argv())' -- \
+  --config /etc/med_fabric/handheld.json --scenario paired_exam
 ```
 
-## Guides
+The second scenario is `plx_spot_check`. The JSON configuration identifies an
+approved `wss://` server, absolute credential/CA paths, device, encounter,
+acquisition and an absolute new spool root. See [Getting started](guides/getting_started.md).
+TLS certificate and hostname verification remain enabled. A local source starts
+only after authenticated revision-2 admission. The credential is never written
+to reports or evidence.
 
-- [Getting Started](https://mf-handheld.hexdocs.pm/0.2.1/getting_started.html) — Fixture configuration, TLS
-  credentials, and CLI scenarios.
-- [Spool & Recovery](https://mf-handheld.hexdocs.pm/0.2.1/spool_and_recovery.html) — Disk spool layout, journal
-  sync guarantees, and reconnect replay.
-- [Deployment](https://mf-handheld.hexdocs.pm/0.2.1/deployment.html) — Building and shipping a standalone Mix
-  release without a server checkout.
+## Durable boundaries
 
-## License
+A source batch contains at most five records. Each record is checksum verified,
+file synced and immutably installed before the source cursor advances. Audio is
+offered to the optional monitor only after the raw spool operation succeeds.
+A network connection permits up to 15 outstanding source records and 262,144
+encoded bytes; gaps consume both slot and byte credit. Volatile `accepted`
+messages release neither spool records nor credit.
 
-Released under the [MIT License](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/handheld/LICENSE).
+An authenticated `durable` reply carries the complete connection binding and a
+nested canonical receipt. The SDK checks identity/progression; the spool proves
+actual retained coverage, persists the receipt, then deletes exactly the covered
+records. A replaced or locally invalidated connection cannot update recovery
+state. A historical committed ACK can prove earlier durability while its local
+binding remains active; it never renews current authority.
+
+Stop drains the final short source batch, checkpoints before waiting for durable
+coverage, then verifies the authenticated terminal receipt/index identity and
+requests acquisition finalization. A process restart interrupts at the recovered
+local tail; it does not regenerate an unobserved interval. See [Spool and recovery](guides/spool_and_recovery.md).
+
+## Package verification
+
+Run `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix test`
+and `mix docs --warnings-as-errors` with the pinned toolchain. The test corpus
+uses the exact shared MedEx receipt vector file; detached qualification supplies
+`MEDEX_RECEIPT_VECTORS` with its SHA-256 verified by the test. Real TLS/Exam,
+PostgreSQL, filesystem-full and 1,740-second source-oracle lanes are separate
+required system gates; unit tests do not establish those results.

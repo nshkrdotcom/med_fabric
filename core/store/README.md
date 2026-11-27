@@ -1,45 +1,65 @@
-<p align="center"><img src="assets/store.svg" width="200" alt="Clinical persistence and audit" /></p>
+# Private native Store
 
-<h1 align="center">Clinical persistence and audit</h1>
+`mf_store` 0.2.0 is a private component composed into public `mf_exam` 0.3.0.
+Every reusable operation receives an explicit database or transaction. Store
+owns SQL; hosts supply authority/evidence inputs and use the public operations.
+There is no reusable global pool selection.
 
-<p align="center">
-  <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
-  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/core/store/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
-</p>
+## Schema and deployment
 
-`mf_store` (`core/store`) owns atomic persistence of encounters, typed evidence,
-clinician-accepted observations, and transactional FHIR export outbox intents in
-[Med Fabric](https://github.com/nshkrdotcom/med_fabric).
+`Postgres.start_link/1` starts the caller-configured connection. Call
+`Postgres.migrate(db, deployment_uuid)` explicitly. The one installed
+`priv/sql/001_schema_v2.sql` baseline runs transactionally under an advisory lock
+only in an empty schema. A current schema must have the exact revision,
+migration checksum, schema fingerprint and immutable deployment UUID. An older,
+partial, extra-table or changed schema is rejected; there is no migration chain
+or legacy artifact reader.
 
----
+The host independently holds the actual filesystem root lock and matches root
+and database deployment identity. Use a dedicated service filesystem and one
+capture service. Preserve the database, immutable objects/journals/indexes,
+manifest files, producer ACK/spool state and external attempt inventory together.
 
-## Persistence
+## Ownership
 
-Device ingestion records admitted attempts, durable stream progress and sealed
-manifests. Spot-check review commits accepted metrics and their FHIR delivery
-intents together. Browser recording has its own admission and recovery path.
+| Module | Durable facts |
+| --- | --- |
+| `Encounters` | Membership, browser sessions, closure and optional export configuration |
+| `DeviceSessions` | Device enrollment, authentication and clinician grants |
+| `AcquisitionSessions` | Common source authority, reservations, attempts, scoped effects, frozen facts and manifest staging/promotion |
+| `MeasurementEvents` | Exact canonical event identity/fingerprint and collection inventory |
+| `DeviceCommands` | Bounded command grants, exact outcomes and settlement |
+| `Records` | Manual evidence, review request replay, native observations and atomic intent creation |
+| `Deliveries` | Mapping pins, claims/attempts, dispatch, confirmation, conflict, unresolved and remediation |
+| `Recovery` | Checksum-bound authoritative restore inventory and fail-closed reconciliation |
 
-`MedFabric.Store.Postgres` runs the SQL files in `priv/sql/` in filename order
-under an advisory transaction lock. Use a dedicated candidate database and
-volume. Each recording has an acquisition-specific directory on that volume.
-Keep both stores across exam restarts. Existing 0.1.0 recordings retain
-their original flat file layout and database records in the 0.1.0 deployment.
+## Transactions and external effects
 
-Admission reserves an encounter, acquisition ID and producer before the writer
-receives PCM. The first accepted frame persists the browser source settings
-and server receipt time. Only a ready acquisition appears in the review list.
-The acceptance transaction compares the exact reviewed evidence and writes
-the observation and delivery intent together.
+The host takes its stream effect gate before entering Store's acquisition scope.
+A failed SQL transaction cannot erase already synced journal bytes; unknown
+outcomes require real writer retirement and storage recovery. Only committed
+native observations can produce delivery intents. Acceptance has no mapping or
+destination dependency.
 
-One running exam instance owns the configured encounters and local recording
-volume. Startup, status lookup and the next admission can reconcile an
-abandoned recording. A validated final WAV becomes ready. An attempt with
-only an unfinished file becomes interrupted and the writer's temporary file
-is removed. A filesystem or database I/O error leaves the attempt available
-for another recovery pass.
+Evidence and decision foreign keys include encounter and exact digest identity.
+Manual evidence is exclusive with acquisition/manifest evidence. Immutable rows
+and repeat/request identity prevent altered replay, cross-encounter evidence or
+duplicate child decisions. Closure blocks new mutation while an authorized exact
+committed request can return its original outcome.
 
-With `DATABASE_URL` set, the store's `mix test integration` exercises
-transaction rollback and concurrent acceptance. From `apps/exam`, use
-`mix test integration/recording_test.exs` against a dedicated test database
-with `MF_LAB` unset to exercise recording interruptions and near-limit range
-playback. [Browser-to-record guide](https://github.com/nshkrdotcom/med_fabric/blob/main/guides/browser_to_record.md)
+Delivery state preserves pinned resource/destination/external identity and
+attempt history. It distinguishes safe repetition from safe confirmation and
+rejects stale result downgrade. A remote timeout or matching remote observation
+is insufficient to erase a possible outstanding unsafe sender. Recovering a
+backup requires accounting for post-backup native and remote effects, including
+facts missing from restored rows; Boolean operator assertions alone cannot
+establish that proof.
+
+## Verification
+
+Run unit tests and `mix test integration` against a disposable dedicated real
+PostgreSQL database, then strict Credo, Dialyzer and ExDoc. Exercise actual backend
+termination, concurrent closure/review, immutable constraints, delayed dispatch,
+post-cutpoint restore gaps and two independent database contexts. The separate
+`examples/clinical_core` host also uses real FHIR and never imports Exam. Do not
+point destructive fixture setup at a retained deployment.

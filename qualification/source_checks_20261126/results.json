@@ -1,0 +1,102 @@
+{
+  "date": "2026-11-26",
+  "scope": "Source-only and available non-BEAM verification; not native release qualification",
+  "static": {
+    "scope": "non-Elixir static verification only",
+    "counts": {
+      "json_parse": 6,
+      "bash_syntax": 20,
+      "posix_sh_syntax": 2,
+      "python_ast": 5,
+      "javascript_syntax": 12,
+      "git_diff_whitespace": 2,
+      "six_package_matrix": 6,
+      "frozen_fixture_hashes": 6,
+      "local_markdown_links": 32
+    },
+    "failures": [],
+    "receipt_corpus_sha256": "00e4b87285b26e995f5f0e3bff01c3cce5a8f3c4701e41d9f3981b73a197901b"
+  },
+  "lexical_summary": {
+    "scope": "Pygments lexical delimiters/blocks only; not an Elixir parser or compiler",
+    "files": 258,
+    "flagged_files": 28,
+    "structural_failures": []
+  },
+  "environment": {
+    "missing_native_tools": {
+      "elixir": null,
+      "erl": null,
+      "mix": null,
+      "psql": null,
+      "docker": null,
+      "shellcheck": null
+    },
+    "system_opus_version": "libopus 1.5.2",
+    "installed_asset_constants": {
+      "exam.js": "adbb1090694c985530b59409de3631eba0ff9cd83f5756da3d2a7bdf4c294157",
+      "acquisition.js": "cf3fb4cb9f8e2e348fbfd84812d9fbe1feda42600da3c539c1127eb9a8f1c515",
+      "acquisition_worklet.js": "6fcb7dd5010a6b410d6a55fb4e189dbff07cec8bcb6a5e10fc65e43799f9610b"
+    },
+    "schema_files": [
+      "001_schema_v2.sql"
+    ]
+  },
+  "docset": {
+    "docset_revision": 3,
+    "documents_verified": 14,
+    "manifest_sha256": "a65bb0dbb0e7bbe3d694fc10232e57d2edbf84a86758be22c496c71e554fa25b"
+  },
+  "native_status": "NOT RUN: Elixir/Erlang/Mix, real PostgreSQL/HAPI/browser/RTC/TURN, pinned native build, physical ext4, exact six prepared/direct artifacts and full native soaks require native execution.",
+  "publication_status": "NOT PERFORMED; authorization required for future official publication",
+  "repository": "med_fabric",
+  "results": [
+    {
+      "label": "browser-acquisition",
+      "command": [
+        "node",
+        "--test",
+        "repos/med_fabric/apps/exam/test/browser_acquisition_test.mjs"
+      ],
+      "date": "2026-11-26",
+      "exit": 0,
+      "elapsed_seconds": 0.357,
+      "log": "browser-acquisition.log"
+    },
+    {
+      "label": "native-tooling",
+      "command": [
+        "python3",
+        "repos/med_fabric/ops/qc_native_test.py"
+      ],
+      "date": "2026-11-26",
+      "exit": 0,
+      "elapsed_seconds": 0.415,
+      "log": "native-tooling.log"
+    },
+    {
+      "label": "soak-verifier",
+      "command": [
+        "python3",
+        "repos/med_fabric/ops/verify_soak_report_test.py"
+      ],
+      "date": "2026-11-26",
+      "exit": 0,
+      "elapsed_seconds": 0.373,
+      "log": "soak-verifier.log"
+    },
+    {
+      "label": "docs-hook",
+      "command": [
+        "node",
+        "--test",
+        "repos/med_fabric/ops/docs_hook_test.mjs"
+      ],
+      "date": "2026-11-26",
+      "exit": 0,
+      "elapsed_seconds": 0.254,
+      "log": "docs-hook.log"
+    }
+  ],
+  "source_tree_sha256": "0881d4469fd1ca5239de4169e6f2b76a32c2e82e2d3e93c97cb1d3515f98b590"
+}

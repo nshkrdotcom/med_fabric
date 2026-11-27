@@ -2,12 +2,19 @@
 set -euo pipefail
 umask 077
 
-[[ $# == 1 ]] || { echo 'Usage: ops/qc_detached_release.sh REPORT.json' >&2; exit 2; }
+[[ $# == 3 && $2 == --artifacts ]] || {
+    echo 'Usage: ops/qc_detached_release.sh REPORT.json --artifacts MANIFEST.json' >&2
+    echo 'Provide all six exact archives and both prepared Weld identities; no source fallback is allowed.' >&2
+    exit 2
+}
 report=$(realpath -m -- "$1")
+artifact_manifest=$(realpath -e -- "$3")
 export PATH="$(pg_config --bindir):$PATH"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 [[ ! -e .mix_sources.json && ! -L .mix_sources.json ]]
 fabric=$(pwd -P)
+inputs="$report.inputs"
+mkdir -m 0700 -- "$inputs"
 lab=$(mktemp -d "${TMPDIR:-/tmp}/med-fabric-release.XXXXXXXX")
 exam_pid= relay_pid= preview_pid=
 pg_owned=false
@@ -67,16 +74,33 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-unset MF_LAB MF_EXAM_LEGACY_MEDIA
+unset MF_LAB
 unset MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE
-unset MIX_EXS MIX_TARGET MF_MED_EX_PATH
+unset MIX_EXS MIX_TARGET
 unset MF_PUBLIC_ORIGIN MF_RELAY_ONLY MF_TURN_URLS MF_TURN_SECRET
-unset MF_PROXY_SECRET MF_PREVIEW_URL MF_PREVIEW_CREDENTIAL_FILE
+unset MF_PROXY_SECRET MF_PREVIEW_URL MF_PREVIEW_CREDENTIAL_FILE MF_PREVIEW_CONFIG
 unset MF_DEVICE_BIND_IP DATABASE_URL FHIR_BASE_URL
 unset PGHOST PGHOSTADDR PGPORT PGDATABASE PGUSER
 unset PGPASSWORD PGPASSFILE PGSERVICE PGSERVICEFILE
 
+source "$fabric/ops/detached_consumers.sh"
 elixir ops/handheld_demo.exs prepare --run-dir "$lab"
+prepare_detached_consumers "$fabric" "$artifact_manifest" "$lab/consumers" "$inputs"
+
+# The combined consumer exercises all six installed packages and real media.
+# It is a separate proof from the three role processes below.
+mkdir -m 0700 -- "$lab/combined"
+cp -- "$fabric/examples/hex_smoke/mix.exs" "$lab/combined/"
+cp -R -- "$fabric/examples/hex_smoke/config" "$fabric/examples/hex_smoke/test" "$lab/combined/"
+(
+    cd "$lab/combined"
+    MIX_ENV=test mix deps.get
+    MIX_ENV=test mix deps.get --check-locked
+    elixir "$fabric/ops/detached_artifacts.exs" installed "$lab/consumers/artifacts.json" \
+        "$lab/combined" combined "$inputs/combined-installed.json"
+    cp -- mix.lock "$inputs/combined-mix.lock"
+    MIX_ENV=test mix test --warnings-as-errors | tee "$inputs/combined-tests.log"
+)
 
 cfg="$lab/server.json"
 pg_port=$(jq -er .postgres_port "$cfg")
@@ -91,14 +115,21 @@ pg_ctl -D "$lab/pgdata" -l "$lab/logs/postgres.log" \
 pg_owned=true
 
 for app in exam handheld preview; do
-    echo "Building detached $app release"
-
+    echo "Building detached $app release from its verified installed archives"
     (
-        cd "$fabric/apps/$app"
-        MIX_ENV=prod mix deps.get --check-locked
-        MIX_ENV=prod mix deps.tree
-        MIX_ENV=prod mix release --path "$lab/$app-release"
+        cd "$lab/consumers/$app"
+        MIX_ENV=prod mix release "mf_$app" --path "$lab/$app-release"
     )
+done
+
+for app in exam handheld preview; do
+    test -z "$(find "$lab/$app-release/lib" \
+        -mindepth 1 -maxdepth 1 \
+        \( -name 'med_core-*' -o -name 'med_capture-*' -o -name 'med_ex_maintainer-*' \
+        -o -name 'mf_domain-*' -o -name 'mf_store-*' -o -name 'mf_interop-*' \
+        -o -name 'med_fabric_workspace-*' -o -name 'weld-*' \
+        -o -name 'mix_workspace_ops-*' -o -name 'blitz-*' \) \
+        -print -quit)"
 done
 
 for app in exam handheld; do
@@ -106,9 +137,7 @@ for app in exam handheld; do
         -mindepth 1 -maxdepth 1 \
         \( -name 'med_ex_opus-*' -o -name 'med_ex_rtc-*' \
         -o -name 'membrane_*' -o -name 'ex_webrtc-*' \
-        -o -name 'ex_rtp-*' -o -name 'ex_rtcp-*' -o -name 'ex_srtp-*' \
-        -o -name 'med_core-*' -o -name 'med_capture-*' -o -name 'med_ex_maintainer-*' \
-        -o -name 'weld-*' -o -name 'mix_workspace_ops-*' \) \
+        -o -name 'ex_rtp-*' -o -name 'ex_rtcp-*' -o -name 'ex_srtp-*' \) \
         -print -quit)"
 done
 
@@ -126,6 +155,7 @@ preview_cookie=$(openssl rand -hex 24)
     cd "$lab"
 
     exec env -i PATH="$PATH" ERL_FLAGS="${ERL_FLAGS:-}" LC_ALL=C.UTF-8 \
+        MF_PREVIEW_CONFIG="$lab/preview-role/preview.json" \
         MF_PREVIEW_CREDENTIAL_FILE="$lab/preview-role/credential" \
         MF_PREVIEW_PORT="$preview_port" \
         RELEASE_TMP="$lab/preview-role/runtime" \
@@ -136,6 +166,7 @@ preview_cookie=$(openssl rand -hex 24)
         --tmpfs "$lab" --dir "$lab/preview-role" \
         --ro-bind "$lab/preview-release" "$lab/preview-role/release" \
         --ro-bind "$lab/preview.credential" "$lab/preview-role/credential" \
+        --ro-bind "$lab/preview.json" "$lab/preview-role/preview.json" \
         --dir "$lab/preview-role/runtime" \
         --tmpfs "$lab/preview-role/runtime" \
         --chdir "$lab/preview-role" -- /bin/sh -ec '
@@ -176,6 +207,7 @@ await_denial "$preview_pid" \
 echo 'Preview release ready and isolated'
 
 export MF_LAB=1
+export MF_DEPLOYMENT_UUID="$(jq -er .deployment_uuid "$cfg")"
 export MF_QC_SERVER_JSON="$cfg"
 export MF_ENCOUNTERS_FILE="$lab/encounters.json"
 
@@ -212,6 +244,7 @@ await_denial "$exam_pid" \
 
     timeout 30 ./exam-release/bin/mf_exam rpc '
         alias MedFabric.Store.DeviceSessions
+        db = MedFabric.Exam.context().db
 
         cfg =
           System.fetch_env!("MF_QC_SERVER_JSON")
@@ -226,13 +259,14 @@ await_denial "$exam_pid" \
             |> File.read!()
             |> String.trim()
 
-          true = DeviceSessions.enroll(device["id"], token)
+          true = DeviceSessions.enroll(db, device["id"], token)
 
           if cfg["authorize_scenarios"] do
             encounter = Map.fetch!(encounters, device["exam"])
 
             for profile <- ~w(paired_exam plx_spot_check) do
-              :ok = DeviceSessions.authorize(
+              {:ok, :ok} = DeviceSessions.authorize(
+                db,
                 encounter["exam"], device["id"], profile,
                 "Synthetic anterior site", encounter["clinician_actor"]
               )
@@ -283,7 +317,7 @@ echo 'Starting detached Handheld acquisition'
 (
     cd "$lab"
 
-    env -i PATH="$PATH" ERL_FLAGS="${ERL_FLAGS:-}" LC_ALL=C.UTF-8 HOME="$lab/handheld-home" \
+    env -i PATH="$PATH" ERL_FLAGS="${ERL_FLAGS:-}" LC_ALL=C.UTF-8 MIX_HOME="$lab/handheld-home/mix" HEX_HOME="$lab/handheld-home/hex" \
         timeout 180 ./handheld-release/bin/mf_handheld eval '
             {:ok, _} = Application.ensure_all_started(:mf_handheld)
 
@@ -295,7 +329,7 @@ echo 'Starting detached Handheld acquisition'
 )
 
 artifact_name=$(printf '%s' "$acquisition" | openssl dgst -sha256 -r)
-artifact="$MF_ARTIFACT_DIR/device-v1/${artifact_name%% *}"
+artifact="$MF_ARTIFACT_DIR/acquisitions-v2/${artifact_name%% *}"
 manifest="$artifact/manifest.mej1"
 
 manifest_digest=$(openssl dgst -sha256 -r "$manifest")
@@ -306,7 +340,7 @@ client_digest=$(jq -er .manifest_digest \
 
 database_digest=$(psql "$DATABASE_URL" -XAt \
     -v ON_ERROR_STOP=1 -v acquisition="$acquisition" <<'SQL'
-SELECT digest FROM device_manifests WHERE acquisition_id = :'acquisition';
+SELECT digest FROM acquisition_manifests WHERE acquisition_id = :'acquisition';
 SQL
 )
 
@@ -336,6 +370,14 @@ done
 printf 'PASS detached production acquisition: %s\n' "$acquisition"
 printf 'Verified manifest digest: %s\n' "$manifest_digest"
 
-jq -n --arg sha "$manifest_digest" --argjson audio "$(jq '.streams.audio.index.segments | length' "$manifest")" \
+jq -n --arg sha "$manifest_digest" --slurpfile artifacts "$lab/consumers/artifacts.json" \
+    --slurpfile registry "$lab/consumers/registry.json" \
+    --slurpfile exam "$inputs/exam-installed.json" --slurpfile handheld "$inputs/handheld-installed.json" \
+    --slurpfile preview "$inputs/preview-installed.json" --slurpfile combined "$inputs/combined-installed.json" \
+    --argjson audio "$(jq '.streams.audio.index.segments | length' "$manifest")" \
     --argjson ecg "$(jq '.streams.ecg.index.segments | length' "$manifest")" \
-    '{manifest_sha256:$sha,verified_segments:{audio:$audio,ecg:$ecg},preview_isolated:true}' > "$report"
+    '{schema:"medfabric.detached_release.v2",manifest_sha256:$sha,verified_segments:{audio:$audio,ecg:$ecg},
+      preview_isolated:true,artifact_manifest_sha256:$artifacts[0].manifest_sha256,
+      registry:$artifacts[0].registry,registry_origin:$registry[0].url,
+      installed:[$exam[0],$handheld[0],$preview[0]],
+      combined:$combined[0]}' > "$report"

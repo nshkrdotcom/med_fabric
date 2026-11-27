@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0 - 2026-11-26
+
+### Breaking changes
+
+- Unify browser microphone, paired waveform and event acquisition under revision-2
+  source authority, explicit fenced writers, canonical receipts and manifests.
+- Remove the browser WAV recorder, SDK asset route and in-process media path;
+  retain bounded Exam-owned worklet capture, verified segment playback and
+  independently authorized direct talkback.
+- Move clinical validation to pure Domain and durable SQL ownership to explicit
+  Store operations. Commit native decision, observations and delivery intent
+  atomically without FHIR mapping or destination availability.
+- Add pinned, attempt-bound delivery with distinct blocked, unresolved, retryable,
+  conflict and confirmed states and safe dispatch/confirmation predicates.
+- Replace upgrade SQL with one fresh revision-2 schema, immutable deployment UUID,
+  root ownership and fail-closed restore/startup requirements.
+- Keep one Weld monolith containing Exam, Domain, Store and Interop; consume
+  med_ex ~> 0.4.0 without optional provider dependencies.
+
+### Tests and operations
+
+- Add native acceptance, source authority, browser, recovery, schema and outbox
+  tests; update source lanes, release inventory and qualification instructions.
+- Native service/fault/detached/soak gates must pass before any publication.
+
 ## 0.2.1 — 2026-11-26
 
 - Report clinical ineligibility separately from a concurrent review change.

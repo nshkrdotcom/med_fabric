@@ -1,69 +1,59 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/nshkrdotcom/med_fabric/main/apps/exam/assets/exam.svg" alt="Med Fabric Exam logo" width="200" />
-</p>
+# Med Fabric Exam
 
-<h1 align="center">Med Fabric Exam</h1>
-
-<p align="center">
-  <a href="https://github.com/nshkrdotcom/med_fabric/tree/main/apps/exam"><img src="https://img.shields.io/badge/GitHub-mf__exam-345366" alt="GitHub source" /></a>
-  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
-</p>
-
-`mf_exam` is the deployable Phoenix + LiveView remote clinical examination
-server in [Med Fabric](https://github.com/nshkrdotcom/med_fabric). Built on
-[`med_ex`](https://hex.pm/packages/med_ex), it composes encounter domain rules,
-transactional PostgreSQL persistence, and idempotent HL7 FHIR R4 delivery into
-a single review and acquisition server.
-
-## Installation
-
-Add `mf_exam` to your list of dependencies in `mix.exs`:
+`mf_exam` **0.3.0** is the Phoenix/LiveView host for revision-2 acquisition,
+verified evidence review, native clinical acceptance and independently durable
+FHIR delivery. It is the one Weld monolith in this repository: private Domain,
+Store and Interop components are composed into the installed `mf_exam` application.
+They are not separate public packages.
 
 ```elixir
-def deps do
-  [
-    {:mf_exam, "~> 0.2.1"}
-  ]
-end
+def deps, do: [{:mf_exam, "~> 0.3.0"}]
 ```
 
-`mf_exam` requires Elixir `~> 1.20` (OTP 29), PostgreSQL for durable encounter
-and outbox storage, and the base `med_ex ~> 0.3.1` SDK.
+The package requires Elixir `~> 1.20`, its qualified OTP toolchain, PostgreSQL,
+base `med_ex ~> 0.4.0`, a dedicated service-owned artifact root and an immutable
+deployment UUID. Production capture requires the host's exclusive OS root lock.
+Use fresh revision-2 database/artifact/spool roots; startup rejects an older,
+partial, mismatched or modified schema rather than migrating it implicitly.
 
 ## Workflows
 
-- **Paired acoustic & ECG examination:** Admits enrolled handheld devices over
-  TLS, ingests resumable waveform replays, persists authoritative evidence and
-  progress, and renders verified acoustic segments, explicit gaps, and clock
-  uncertainty bounds for clinical review.
-- **Pulse-oximetry spot checks (PLXS):** Accepts replayed handheld spot-check
-  collections, tracks clinician acceptance or repeat requests, and commits each
-  accepted observation and its retryable FHIR delivery intent atomically.
-- **Browser examination:** Hosts direct two-way WebRTC talkback alongside
-  lossless 48 kHz mono PCM16LE WAV capture and clinician-entered pulse rate.
-- **Optional isolated monitor (`mf_preview`):** Forwards latest-only software
-  monitor frames to an isolated loopback [`mf_preview`](https://hex.pm/packages/mf_preview)
-  BEAM process and issues short-lived signed viewer tokens without exposing
-  database credentials or clinical artifacts.
+| Source | Evidence and authority |
+| --- | --- |
+| Paired handheld | Enrolled device, clinician grant, diagnostic audio and ECG through the common fenced writer |
+| Browser microphone | Patient session, server-created acquisition and same-page volatile MEX1 producer through that same writer |
+| PLX spot check | Canonical measurement events and immutable collection inventory; no dummy waveform stream |
+| Manual pulse | Immutable native manual evidence, followed by a separate clinician decision |
+| Talkback | Independent direct browser media with call/session-bound cooperative renewal |
+| Optional Preview | Separate `mf_preview ~> 0.3.0` process, bounded feed and signed viewer capability |
 
-## Guides
+Waveform evidence consists of immutable raw segments, journal, verified index
+and deterministic manifest. Playback synthesizes a WAV header for one verified
+segment. It does not create a continuous-WAV evidence format, insert samples for
+gaps or turn a waveform review into a synthetic clinical observation.
 
-- [Getting Started](https://mf-exam.hexdocs.pm/0.2.1/getting_started.html) — Prerequisites, configuration,
-  and Mix release startup.
-- [Browser to Record](https://mf-exam.hexdocs.pm/0.2.1/browser_to_record.html) — Two-way talkback, lossless
-  WAV capture, review, and FHIR R4 export.
-- [Handheld Integration](https://mf-exam.hexdocs.pm/0.2.1/handheld_integration.html) — Device admission,
-  TLS replay, and spot-check review.
-- [Architecture](https://mf-exam.hexdocs.pm/0.2.1/architecture.html) — Domain, store, interop, and web
-  boundaries.
+Clinical acceptance commits native decisions, observations and delivery intents
+atomically. Mapping, destination lookup and HTTP occur afterward. Missing export
+configuration or an unsupported representation blocks delivery while retaining
+valid native acceptance. Unknown remote effects remain unresolved until the
+outbox can prove a safe next action under the same external identifier.
 
-## Optional Legacy Media Profile
+## Running and qualification
 
-The published Hex package depends only on base `:med_ex` (zero native media or
-Git dependencies). When running from a source checkout, set
-`MF_EXAM_LEGACY_MEDIA=1` to build the optional in-VM browser media profile in
-its own isolated Mix context.
+See [Getting Started](guides/getting_started.md) for `/etc/med_fabric/exam.json`,
+release overlays and local operation, [Browser to Record](guides/browser_to_record.md)
+for capture/review semantics, [Handheld Integration](guides/handheld_integration.md)
+for source authority, and [Architecture](guides/architecture.md) for ownership.
 
-## License
+The package contains its own `exam.js`, `acquisition.js` and
+`acquisition_worklet.js` assets. It has no codec/RTC runtime dependency. Preview
+is built and run separately with concrete `med_ex_opus` and `med_ex_rtc` packages.
 
-Released under the [MIT License](https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/LICENSE).
+Run formatting, warning-free compilation, unit/integration tests, strict Credo,
+Dialyzer and ExDoc before packaging. Required PostgreSQL/HAPI/TLS/browser/native
+fixtures must fail when absent from an explicitly selected qualification lane;
+a source-only test run does not qualify a deployment. Both Preview-off and
+isolated-Preview native runs, fault injection, ext4 exhaustion and the full
+1,740-second soak are release gates.
+
+MIT license; see [LICENSE](LICENSE).

@@ -35,18 +35,22 @@ defmodule MedFabric.Exam.ClockObservations do
   def now, do: System.monotonic_time(:microsecond)
 
   def freeze(name, spec, facts) do
-    with %{"body" => a} <-
+    frozen = Enum.find_value(Enum.reverse(facts), fn
+      %{"type" => "clock_freeze", "body" => body} -> body
+      _ -> nil
+    end)
+    with %{"host_generation" => generation, "host_monotonic_us" => host_now} <- frozen, %{"body" => a} <-
            Enum.find(facts, &(&1["type"] == "anchor" and &1["body"]["stream"] == name)),
          "fixture_acquisition_tick" <- a["method"],
          probes when probes != [] <-
            for(
              %{"type" => "probe", "body" => p} <- facts,
-             p["stream"] == name and p["host_generation"] == host_generation(),
+             p["stream"] == name and p["host_generation"] == generation,
              do: p
            ),
          %{domain_id: _, tick_rate: {tick, den}} <- spec.clock,
          true <- tick > 0 do
-      gen = {host_generation(), spec.boot_id}
+      gen = {generation, spec.boot_id}
 
       ps =
         Enum.map(probes, fn p ->
@@ -76,7 +80,7 @@ defmodule MedFabric.Exam.ClockObservations do
         a_min: {999_900, 1_000_000},
         a_max: {1_000_100, 1_000_000},
         epsilon_us: 2,
-        host_now_us: now(),
+        host_now_us: n(host_now),
         max_probe_age_us: 1_800_000_000,
         valid_device_us: {max(0, min_d - margin_us), max_d + margin_us},
         holdover_rate: {1, 10_000}
@@ -87,7 +91,7 @@ defmodule MedFabric.Exam.ClockObservations do
           %{
             "state" => "bounded",
             "estimate" => Serialization.to_map(est),
-            "wall_mapping" => wall_mapping(),
+            "wall_mapping" => frozen,
             "anchor" => Serialization.to_map(anchor),
             "qualification" => "synthetic reference peripheral only"
           }

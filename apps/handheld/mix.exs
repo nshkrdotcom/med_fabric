@@ -20,7 +20,7 @@ defmodule MedExHandheld.MixProject do
       source_url: @source_url,
       homepage_url: @source_url,
       dialyzer: [plt_add_apps: [:mix]],
-      aliases: [quality: ["format --check-formatted", "compile --warnings-as-errors"]],
+      aliases: [quality: ["format --check-formatted", "compile --warnings-as-errors", "credo --strict", "dialyzer"]],
       deps: deps,
       docs: docs(),
       package: package()
@@ -41,9 +41,7 @@ defmodule MedExHandheld.MixProject do
       {:ex_doc, "~> 0.40.5", only: :dev, runtime: false}
     ]
 
-    if Code.ensure_loaded?(MedFabric.BuildSources) and
-         (File.regular?(Path.expand("../../.mix_sources.json", __DIR__)) or
-            is_binary(System.get_env("MF_MED_EX_PATH"))) do
+    if Code.ensure_loaded?(MedFabric.BuildSources) do
       MedFabric.BuildSources.resolve(
         [
           MedFabric.BuildSources.med_ex_dependency(:med_ex),
@@ -54,7 +52,7 @@ defmodule MedExHandheld.MixProject do
       )
     else
       {[
-         {:med_ex, "~> 0.3.1", hex: "med_ex", repo: "hexpm"},
+         {:med_ex, "~> 0.4.0", hex: "med_ex", repo: "hexpm"},
          {:gun, "~> 2.8.0"}
        ] ++ dev_deps, []}
     end
@@ -62,7 +60,7 @@ defmodule MedExHandheld.MixProject do
 
   defp package do
     [
-      files: ~w(.formatter.exs mix.exs VERSION LICENSE README.md CHANGELOG.md assets guides lib),
+      files: ~w(.formatter.exs mix.exs mix.lock VERSION LICENSE README.md CHANGELOG.md assets guides lib),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,

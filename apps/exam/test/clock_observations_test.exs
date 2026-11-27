@@ -43,6 +43,7 @@ defmodule MedFabric.Exam.ClockObservationsTest do
     host_now = ClockObservations.now()
 
     facts = [
+      %{"type" => "clock_freeze", "body" => ClockObservations.wall_mapping()},
       %{
         "type" => "anchor",
         "body" => %{

@@ -1,9 +1,5 @@
 defmodule MedFabric.Exam.Context do
-  @moduledoc "Store, capture supervision, notifications and storage for an exam workflow."
-
-  defstruct db: MedFabric.Store.Postgres,
-            captures: MedFabric.Exam.Captures,
-            pubsub: MedFabric.Exam.PubSub,
-            artifact_dir: nil,
-            encounter_ids: []
+  @moduledoc "Explicit host composition. Reusable Domain, Store and Interop never select a global database."
+  @enforce_keys [:db,:artifact_dir,:root_owner,:registry,:writers,:pubsub]
+  defstruct @enforce_keys
 end

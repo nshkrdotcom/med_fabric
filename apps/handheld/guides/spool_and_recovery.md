@@ -1,39 +1,92 @@
-# Spool & Recovery
+# Spool and recovery
 
-`mf_handheld` is designed so that network outages between the handheld device
-and `mf_exam` do not lose committed clinical acquisitions.
+## One durable local owner
 
-## Durability Boundary
+Each acquisition uses one `MedExHandheld.Spool` process and one real OS `flock`
+child. Concurrent ownership is refused. A fresh spool has `namespace.json`
+containing schema `mf_handheld.spool` and revision `2`. A nonempty directory
+without that exact marker is incompatible and is preserved for operator review.
+No startup routine converts or resets an old namespace.
 
-1. Handheld syncs synthetic waveform frames and measurement events with
-   directory sync in a bounded local spool under an exclusive `flock` lock.
-   For 50 Hz audio capture, up to 5 frames (100 ms) are held in memory and
-   staged together before atomic rename and directory sync (flushing
-   immediately on gaps, stop, or completion); uncommitted temp files left by
-   a hard crash are discarded on restart. After dispatch, the spool owns
-   staged files. A caller timeout leaves the batch outcome uncertain, and
-   restart recovers the exact durable prefix.
-2. The authenticated WSS connection can pipeline up to 15 waveform records
-   per stream with Exam 0.1.1. The single-credit mode remains available for
-   peers that do not negotiate a larger window.
-3. An accepted receipt can cover frames still in Exam memory. Handheld
-   persists a verified durable receipt before reclaiming its covered
-   waveform prefix. Measurement events use their own durable acknowledgment
-   and sealed inventory.
+The persisted source identity includes device, encounter, acquisition, profile,
+boot and API revision. Each waveform directory stores its immutable descriptor.
+Installed records use `<sequence>-<first_sample>.rec`, with a 32-byte SHA-256
+followed by the exact MEX1 frame or gap payload. Including both coordinates lets
+a sample-only gap and its following frame have distinct filenames. Source
+progression and gap validity are planned through the SDK `StreamCursor`.
+Gap payloads are canonical JSON with exactly `id`, `first`, `end`,
+`first_sequence`, `next_sequence`, `irreversible` and `cause`; coordinates are
+canonical decimal strings. There is no second gap file representation.
 
-## Disconnect & Replay
+A source batch contains at most five records. Each record is staged, file
+synced and exclusively installed with a directory barrier before becoming a
+local durable fact. A crash can leave a verified prefix of a batch; restart
+reconstructs it from checksummed installed records, the saved source watermark
+and the previous durable ACK. Missing or conflicting coverage is refusal,
+never manufactured source samples. Known staging remnants are not committed
+records. A caller timeout or effect exception requires recovery before reuse.
 
-When the uplink drops:
+The default byte budget is 67,108,864; metadata is bounded to 100,000 retained
+records. Capacity refusal retains required evidence. Physical ENOSPC can fail a
+write, sync or terminal operation and is distinct from logical capacity.
 
-- Active acquisition continues writing into the bounded disk spool.
-- On reconnect, `MedExHandheld.Session` resumes from the verified server
-  durable boundary and replays retained records after it.
-- `mf_exam` deduplicates replayed segments and events by acquisition ID and
-  sequence range, preserving exact source hashes.
+## Connection and receipt validation
 
-## Software Monitor Separation
+Each active waveform binding includes `acquisition`, `profile`, canonical
+`generation`, unique `connection`, `stream`, `fence` and `journal_id`.
+`accepted` is volatile. `durable` and `stream_finished` contain a separate strict
+11-field SDK receipt. Activation parses the receipt before field access,
+requires full durability, verifies descriptor/binding and progression, then
+proves coverage before replacing valid local recovery state.
 
-Live monitor audio (`MedExHandheld.Monitor`) uses a separate credit-paced WSS
-connection. It retains only the single latest 20 ms frame and discards frames
-older than 200 ms locally—monitor congestion never blocks authoritative spool
-writes or replay.
+A fence change requires an authenticated host assertion describing the actual
+previous receipt, successor receipt and imported prefix. Handheld compares any
+newer previous receipt through `Receipt.observe`, verifies the handoff through
+`Receipt.handoff`, and independently proves every newly covered local interval.
+The device trusts the authenticated host storage assertion; it does not claim
+to have independently read the server filesystem.
+
+`ack.json` atomically contains the binding and canonical receipt. This file is
+synced before record deletion. After restart one bounded sweep reclaims records
+covered by an already persisted ACK. Subsequent ACKs visit only newly covered
+records and expose `reclamation_visits` for the native complexity measurement.
+Repeated ACKs do not release credit or delete a second time. Local invalidation
+or connection replacement rejects late replies from the old incarnation.
+
+## Credits, final drain and events
+
+The SDK credit ledger tracks each distinct outstanding frame/gap by operation
+identity, fingerprint, encoded bytes and planned ending sequence/sample. A gap
+consumes one slot and its complete encoded control size. Exact outstanding
+replay consumes no additional slot; conflicting replay is refused. A matching
+known refusal releases its charge while retaining source bytes. Unknown effects
+retire the connection and reconcile through a newly authorized binding.
+
+Source stop freezes exact produced coordinates and flushes the final batch.
+The uploader explicitly checkpoints pending records before waiting for their
+ACK, then seals only after durable coverage. A lost terminal reply uses the same
+open/reconcile path. A restarted source ends at the verified local tail with
+`source_reset`; it does not regenerate missing physical time.
+
+PLX `events/<sequence>.rec` retains the canonical SDK `MeasurementEvent` body,
+including exact characteristic bytes, sparse metrics, source statuses and
+explicitly qualified or unknown source time. `events/binding.json` retains the
+last admitted connection metadata solely to reject generation rollback; it
+does not grant new authority. Each durable event ACK
+binds its event ID and canonical fingerprint to the active control connection.
+The complete authenticated final inventory is persisted as `events/seal.json`
+before event files are reclaimed. A crash during reclamation resumes against
+that identical inventory; a waveform receipt never acknowledges an event.
+An exact authenticated final inventory also reconciles an event whose individual
+ACK was lost; each surviving local body is verified before its deletion.
+
+## Optional derived monitoring
+
+Raw spool success precedes `Monitor.offer/3`. The offer overwrites one ETS batch
+and returns without a monitor call. A missing table, dead/suspended monitor or
+trace failure does not change raw source evidence. The monitor is temporary and
+has its own trace budget. One atomic control slot bounds commands under
+suspension. The poll nonce, boot, generation and deadline are checked before
+application, with deadlines anchored to poll start and current local authority.
+An exact persisted result contains application time and first derived source
+coordinate. Current gain alone never resolves a historical unknown outcome.

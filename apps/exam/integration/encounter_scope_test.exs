@@ -1,68 +1,42 @@
-defmodule MedFabric.Exam.EncounterScopeTest do
-  use ExUnit.Case, async: true
+Code.require_file("support/fixtures.exs",__DIR__)
+defmodule MedFabric.Exam.NativeScopeTest do
+  use ExUnit.Case,async: false
+  alias MedFabric.Exam.IntegrationFixtures,as: F
+  alias MedFabric.Store.{Records,Encounters,Deliveries,AcquisitionSessions}
+  @tag :tmp_dir
+  test "native manual acceptance is atomic, replayable after closure, and independent of destination",%{tmp_dir: root} do
+    c=F.context(root)
+    {:ok,evidence}=MedFabric.Domain.Evidence.pulse_rate(76,~U[2026-11-24 12:00:00Z],"clinician")
+    assert {:ok,"manual_one"}=Records.put_manual(c.db,"encounter","manual_one","clinician",evidence)
+    assert {:error,:unauthorized}=Records.put_manual(c.db,"encounter","manual_two","patient",evidence)
+    {:ok,source}=Records.manual(c.db,"encounter","manual_one","clinician")
+    {:ok,plan}=MedFabric.Domain.Review.plan(source,"clinician","review_one",%{"decision"=>"accept"},~U[2026-11-24 12:01:00Z])
+    tasks=for _<-1..2,do: Task.async(fn->Records.accept_plan(c.db,plan) end)
+    [first,second]=Enum.map(tasks,&Task.await(&1,10_000))
+    assert first == second
+    assert {:ok,%{observations: [id]}}=first
+    assert {:ok,%{status: "pending",destination: nil,resource: nil,identifier_value: ^id}}=Deliveries.get(c.db,id)
+    assert [[1]]=AcquisitionSessions.rows(c.db,"SELECT count(*) FROM reviews",[])
+    assert [[1]]=AcquisitionSessions.rows(c.db,"SELECT count(*) FROM observations",[])
+    assert {:ok,"blocked"}=MedFabric.Exam.DeliveryWorker.run(c,id) |> normalize_blocked(c,id)
+    assert {:ok,:ok}=Encounters.close(c.db,"encounter","clinician")
+    assert ^first=Records.accept_plan(c.db,plan)
+    {:ok,other}=MedFabric.Domain.Review.plan(source,"clinician","new_request",%{"decision"=>"accept"},DateTime.utc_now())
+    assert {:error,:unauthorized}=Records.accept_plan(c.db,other)
+    assert {:ok,%{status: "blocked"}}=Deliveries.get(c.db,id)
+  end
+  defp normalize_blocked(_,c,id) do
+    {:ok,intent}=Deliveries.get(c.db,id)
+    {:ok,intent.status}
+  end
 
-  alias MedFabric.Exam
-  alias MedFabric.Exam.Context
-  alias MedFabric.Store.{Encounters, Postgres, Records}
-
-  test "a clinician accepts only their patient's evidence and freezes that encounter's destination" do
-    db = start_supervised!({Postgres, url: System.fetch_env!("DATABASE_URL")})
-    {:ok, :ok} = Postgres.migrate(db)
-    pubsub = __MODULE__.PubSub
-    start_supervised!({Phoenix.PubSub, name: pubsub})
-    context = %Context{db: db, pubsub: pubsub}
-    suffix = Base.encode16(:crypto.strong_rand_bytes(8))
-
-    [a, b] =
-      for name <- ["A", "B"] do
-        id = "exam-#{name}-#{suffix}"
-
-        entry = %{
-          "exam" => id,
-          "patient_actor" => "p-#{id}",
-          "clinician_actor" => "c-#{id}",
-          "patient_ref" => "Patient/#{id}",
-          "encounter_ref" => "Encounter/#{id}",
-          "destination" => "http://example.invalid/#{name}/fhir"
-        }
-
-        assert {:ok, :ok} = Encounters.open(db, entry)
-        entry
-      end
-
-    Phoenix.PubSub.subscribe(pubsub, "exam:" <> b["exam"])
-    assert :ok = Exam.pulse(a["exam"], a["clinician_actor"], 70, context)
-    refute_received :exam_changed
-    assert :ok = Exam.pulse(b["exam"], b["clinician_actor"], 80, context)
-    assert_receive :exam_changed
-
-    for {entry, other} <- [{a, b}, {b, a}] do
-      id = entry["exam"]
-      assert Exam.member?(id, entry["patient_actor"], "patient", db)
-      assert Exam.member?(id, entry["clinician_actor"], :clinician, db)
-      refute Exam.member?(id, entry["patient_actor"], "clinician", db)
-      refute Exam.member?(id, entry["clinician_actor"], "unknown", db)
-      assert {:error, :unauthorized} = Exam.pulse(id, entry["patient_actor"], 75, context)
-      assert {:ok, [%{id: acquisition}]} = Records.list(db, id)
-
-      assert {:error, :unauthorized} =
-               Exam.accept(id, acquisition, other["clinician_actor"], context)
-
-      assert :ok = Exam.accept(id, acquisition, entry["clinician_actor"], context)
-      assert {:ok, destination, resource, nil} = Records.delivery(db, id, acquisition)
-      assert destination == entry["destination"]
-      assert resource["subject"]["reference"] == entry["patient_ref"]
-      assert resource["encounter"]["reference"] == entry["encounter_ref"]
-      assert {:error, :review_required} = Records.delivery(db, other["exam"], acquisition)
-
-      assert {:error, :unauthorized} =
-               Exam.deliver(id, acquisition, other["clinician_actor"], context)
-
-      Postgrex.query!(db, "UPDATE encounters SET closed_at=now() WHERE id=$1", [id])
-      refute Exam.member?(id, entry["clinician_actor"], :clinician, db)
-
-      assert {:error, :unauthorized} =
-               Exam.accept(id, acquisition, entry["clinician_actor"], context)
-    end
+  @tag :tmp_dir
+  test "manual evidence id cannot be reused across encounters even for identical body",%{tmp_dir: root} do
+    c=F.context(root)
+    {:ok,:ok}=Encounters.open(c.db,%{"exam"=>"other","patient_actor"=>"other-patient","clinician_actor"=>"clinician"})
+    {:ok,evidence}=MedFabric.Domain.Evidence.pulse_rate(0,DateTime.utc_now(),"clinician")
+    assert {:ok,_}=Records.put_manual(c.db,"encounter","same_id","clinician",evidence)
+    assert {:error,:manual_evidence_conflict}=Records.put_manual(c.db,"other","same_id","clinician",evidence)
+    assert {:error,:unknown_evidence}=Records.manual(c.db,"other","same_id","clinician")
   end
 end

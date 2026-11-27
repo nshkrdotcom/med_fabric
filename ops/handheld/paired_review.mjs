@@ -11,13 +11,12 @@ try {
   const page = await browser.newPage();
   await page.goto(encounterUrl + "?key=" + encounter.clinician_key);
   await page.goto(encounterUrl + "/devices");
-  await page.getByRole("button", { name: "Confirm readiness and authorize collection" }).waitFor();
-  const row = page.locator("#device-" + acquisition);
-  await row.getByText(/Gateway reference-gateway · capture sealed/).waitFor();
+  await page.getByRole("button", { name: "Authorize device" }).waitFor();
+  const row = page.locator("#acquisition-" + acquisition);
   await row.getByText(/Synthetic anterior site/).waitFor();
-  await row.getByText(new RegExp("Review decision " + review)).waitFor();
+  await row.getByText(new RegExp("Clinical decision: " + review)).waitFor();
 
-  const audio = row.getByLabel("First verified acoustic segment");
+  const audio = row.locator("audio[src*='/segment/audio/']").first();
   const source = await audio.getAttribute("src");
   const wav = await page.request.get(new URL(source, page.url()).href);
   assert.equal(wav.status(), 200);

@@ -2,7 +2,7 @@ defmodule MedFabric.BuildSources do
   @moduledoc false
 
   @med_ex_apps [:med_ex, :med_ex_opus, :med_ex_rtc]
-  @repo_apps ~w(med_ex med_ex_opus med_ex_rtc mf_domain mf_store mf_interop)
+  @repo_apps ~w(med_ex med_ex_opus med_ex_rtc)
   @git_keys [:github, :git, :ref, :subdir]
   @scm @git_keys ++ ~w(branch tag path in_umbrella sparse submodules depth hex repo organization)a
   @mix_paths ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE)
@@ -15,65 +15,37 @@ defmodule MedFabric.BuildSources do
   def med_ex_dependency(app) when app in @med_ex_apps do
     requirement =
       case app do
-        :med_ex -> "~> 0.3.1"
-        :med_ex_opus -> "~> 0.2.1"
-        :med_ex_rtc -> "~> 0.2.1"
+        :med_ex -> "~> 0.4.0"
+        :med_ex_opus -> "~> 0.3.0"
+        :med_ex_rtc -> "~> 0.3.0"
       end
 
     options = [hex: Atom.to_string(app), repo: "hexpm"]
-    options = if app == :med_ex, do: Keyword.put(options, :override, true), else: options
     {app, requirement, options}
   end
 
   # Loaded only by the repository-owned Mix projects.
-  def resolve(defaults, project_dir, repo_root, options \\ []) do
+  def resolve(defaults, project_dir, repo_root) do
     file = Path.join(repo_root, ".mix_sources.json")
-    profile = Keyword.get(options, :profile, :default)
     declared = Enum.map(defaults, fn dep -> dep |> elem(0) |> Atom.to_string() end)
     choices = selections!(file)
-    # Store is the only participating internal project with selectable deps.
-    # Its domain selection also changes the dependency consumer's closure.
-    effective_apps = if "mf_store" in declared, do: ["mf_domain" | declared], else: declared
-    active = Map.take(choices, effective_apps)
-
-    # Validate the effective Store -> Domain choice even in its outer consumer.
-    if "mf_store" in declared and "mf_domain" not in declared and active["mf_domain"] do
-      choice = active["mf_domain"]
-      if path = choice[:path], do: check_identity!(:mf_domain, path, nil)
-
-      if choice[:hex],
-        do: Mix.raise("Hex selection requires a committed version requirement for mf_domain")
-    end
+    active = Map.take(choices, declared)
 
     deps = Enum.map(defaults, &apply_choice!(&1, active))
 
-    if active == %{} and profile == :default do
+    if active == %{} do
       {deps, []}
     else
-      {deps, context_paths!(deps, active, Path.expand(project_dir), profile)}
+      {deps, context_paths!(deps, active, Path.expand(project_dir))}
     end
   end
 
   defp selections!(file) do
-    input = File.read(file)
-    legacy = System.get_env("MF_MED_EX_PATH")
-
     data =
-      case {input, legacy} do
-        {{:ok, _bytes}, path} when is_binary(path) ->
-          Mix.raise("Choose .mix_sources.json or the deprecated MF_MED_EX_PATH")
-
-        {{:ok, bytes}, nil} ->
-          read_object!(bytes, file)
-
-        {{:error, :enoent}, path} when is_binary(path) ->
-          %{"med_ex" => %{"path" => path}}
-
-        {{:error, :enoent}, nil} ->
-          %{}
-
-        {{:error, reason}, _} ->
-          Mix.raise("Cannot read #{file}: #{inspect(reason)}")
+      case File.read(file) do
+        {:ok, bytes} -> read_object!(bytes, file)
+        {:error, :enoent} -> %{}
+        {:error, reason} -> Mix.raise("Cannot read #{file}: #{inspect(reason)}")
       end
 
     unless Enum.all?(Map.keys(data), &(&1 in @repo_apps)),
@@ -105,9 +77,9 @@ defmodule MedFabric.BuildSources do
     end
   end
 
-  defp context_paths!(deps, active, project, profile) do
+  defp context_paths!(deps, active, project) do
     for name <- @mix_paths, System.get_env(name) do
-      Mix.raise("#{name} conflicts with source/profile isolation; unset it for this invocation")
+      Mix.raise("#{name} conflicts with source isolation; unset it for this invocation")
     end
 
     normalized =
@@ -144,12 +116,12 @@ defmodule MedFabric.BuildSources do
 
     # Resolver inputs can stay stable across a materialization-only asset or source change.
     resolution =
-      {project, profile, normalized, Enum.sort(active), Enum.sort(graph), hex, lock_digest,
+      {project, normalized, Enum.sort(active), Enum.sort(graph), hex, lock_digest,
        System.version(), otp_version, Mix.env(), Mix.target()}
 
     # Each mutable Mix context remains private. The verified Hex download cache is
     # outside this tree. In particular, native objects are never copied across paths.
-    identity = {4, resolution, Enum.sort(frozen), build_identity()}
+    identity = {5, resolution, Enum.sort(frozen), build_identity()}
 
     context = digest(:erlang.term_to_binary(identity))
     root = Path.join([project, "_build", "source_contexts", context])
@@ -191,7 +163,10 @@ defmodule MedFabric.BuildSources do
 
         # Preserve filesystem traversal through symlinks and `..`, exactly as
         # the provider's Makefile reads this already-absolute override.
-        {path, optional_digest(path)}
+        case File.lstat(path) do
+          {:ok, %{type: :regular}} -> {path, digest(File.read!(path))}
+          _ -> Mix.raise("MED_EX_OPUS_TARBALL must be a readable regular file")
+        end
 
       _ ->
         nil
@@ -304,6 +279,25 @@ defmodule MedFabric.BuildSources do
         node, acc ->
           {node, acc}
       end)
+
+    version_file = Path.join(path, "VERSION")
+
+    unless File.regular?(version_file) and
+             Version.match?(String.trim(File.read!(version_file)), requirement),
+           do: Mix.raise("Selected project VERSION does not satisfy #{app} #{requirement}")
+
+    if app == :med_ex do
+      contracts =
+        Path.wildcard(
+          Path.join(path, "{lib,core/*/lib,components/core/*/lib}/med_ex/contract.ex")
+        )
+
+      unless Enum.any?(
+               contracts,
+               &(File.read!(&1) =~ ~r/def\s+api_revision(?:\(\))?,\s*do:\s*2\b/)
+             ),
+             do: Mix.raise("Selected med_ex project must declare API revision 2")
+    end
 
     for body <- declarations do
       metadata = literal_project_metadata(body)

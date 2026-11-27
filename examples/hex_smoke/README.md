@@ -1,53 +1,39 @@
-# Med Fabric Hex smoke test
+# Six-package installed smoke
 
-Run all six published packages in one Mix project using synthetic inputs.
-You can copy this directory out of the Fabric checkout and run it on its own.
+This private Mix consumer installs exact coordinated candidates:
 
-## Quick start on Ubuntu Linux
+| Package | Version | Artifact owner |
+|---|---|---|
+| med_ex | 0.4.0 | Weld prepared SDK |
+| med_ex_opus | 0.3.0 | Direct Mix provider |
+| med_ex_rtc | 0.3.0 | Direct Mix provider |
+| mf_exam | 0.3.0 | Weld prepared monolith |
+| mf_handheld | 0.3.0 | Direct Mix client |
+| mf_preview | 0.3.0 | Direct Mix sidecar |
 
-Install Elixir 1.20 with a compatible Erlang/OTP installation. Install Hex
-and Rebar with `mix local.hex --force` and `mix local.rebar --force` if
-they are missing. Install the native build tools:
+Copy this directory to a directory outside both repositories. Resolve it against
+the authenticated signed candidate registry during qualification, then against
+the official registry after the separately authorised release. Keep exact locks
+and archive/checksum identities. Candidate checksums are generated from actual
+archives; no checksum is guessed or copied from an earlier release.
 
 ```sh
-sudo apt-get install build-essential pkg-config libssl-dev curl ca-certificates
+mix deps.get
+mix compile --warnings-as-errors
+mix test --warnings-as-errors
 ```
 
-From this directory, in a checkout path without whitespace:
+Once the exact lock exists, repeat dependency resolution with `--check-locked`.
+Elixir 1.20, compatible OTP, native compiler, make, pkg-config, OpenSSL development
+headers and loopback UDP are required. The Opus package verifies its pinned source
+before every cache use. An explicitly selected offline source must be absolute,
+readable and match the pin.
 
-```sh
-mix deps.get --check-locked
-mix test
-```
-
-The first build fetches Hex dependencies, builds the WebRTC native
-dependencies, and compiles the Opus encoder. Subsequent runs reuse the
-build. The test starts a loopback Preview listener on an ephemeral port
-and uses local UDP for WebRTC. It needs no browser, PostgreSQL, or TURN server.
-
-## What runs
-
-- Exam serves its packaged JavaScript and the MedEx PCM worklet.
-- Handheld runs a simulated pulse-oximeter report and validates the event
-  through MedEx's measurement contract.
-- Preview handles an authenticated offer and a synthetic MedEx PCM feed.
-  Its C encoder produces Opus, and the MedEx RTC provider sends the packet
-  to a local receive-only WebRTC peer. The test requires an RTP payload.
-
-The tests call the local HTTP plugs directly. For the full device upload
-and database-backed clinician workflow, see the
-[Fabric local demonstration](../../README.md#run-a-local-demonstration).
-
-## Native build notes
-
-`med_ex_opus` downloads the pinned Opus 1.5.2 source archive, checks its
-SHA-256, and links it statically into the encoder executable. It uses the
-system C compiler and Make. You do not need a system Opus development package.
-The default archive cache is `$HOME/.cache/med_ex_opus` or
-`$XDG_CACHE_HOME/med_ex_opus` when set. To supply the archive yourself,
-set `MED_EX_OPUS_TARBALL` to its absolute path before running `mix test`.
-It must match the checksum in the package's `c_src/vendor/SHA256SUMS`.
-That override supplies only Opus. Other native dependencies may still
-need network access on a clean build.
-
-See [LICENSE](LICENSE) for the example's license.
+Tests check API revision 2, Exam-owned browser assets, absence of SDK browser
+assets, a synthetic PLX reading through the SDK codec, and actual PCM encoding
+and RTP delivery through isolated Preview ownership and the concrete Opus/RTC
+capabilities. Preview uses a bounded purpose/source/generation/viewer capability;
+no application-global provider selection exists. The local test listener uses an
+ephemeral port. These smoke tests require neither a database nor a browser; they
+do not replace the detached native browser, PostgreSQL/HAPI, TLS, loss/recovery,
+conditional-create or full duration ext4 qualification gates.

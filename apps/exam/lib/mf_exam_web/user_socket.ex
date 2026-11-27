@@ -1,35 +1,16 @@
 defmodule MedFabric.ExamWeb.UserSocket do
   @moduledoc false
   use Phoenix.Socket
-
   alias MedFabric.Exam
-  alias MedFabric.ExamWeb.{Endpoint, ProxyIdentity}
-
-  channel("signaling:*", MedFabric.ExamWeb.SignalingChannel)
-  channel("talkback:*", MedFabric.ExamWeb.TalkbackChannel)
-
-  @impl true
-  def connect(%{"token" => token}, socket, info) when is_binary(token) do
-    case Phoenix.Token.verify(Endpoint, "exam-preview", token, max_age: 3600) do
-      {:ok, {encounter_id, actor, role}} when role in [:patient, :clinician] ->
-        if ProxyIdentity.matches?(
-             info[:x_headers] || [],
-             actor,
-             Exam.lab()
-           ) and
-             Exam.member?(encounter_id, actor, role) do
-          {:ok, assign(socket, encounter_id: encounter_id, actor: actor, role: role)}
-        else
-          :error
-        end
-
-      _ ->
-        :error
-    end
+  alias MedFabric.ExamWeb.{Endpoint,ProxyIdentity}
+  channel("talkback:*",MedFabric.ExamWeb.TalkbackChannel)
+  def connect(%{"token"=>token},socket,info) when is_binary(token) and byte_size(token)<=4096 do
+    with {:ok,{enc,actor,role,session,"talkback"}} <- Phoenix.Token.verify(Endpoint,"exam-talkback",token,max_age: 3600),
+         true <- role in [:patient,:clinician],true <- ProxyIdentity.matches?(info[:x_headers] || [],actor,Exam.lab()),
+         true <- MedFabric.Store.Encounters.session_authorized?(Exam.context().db,session,enc,actor,role) do
+      {:ok,assign(socket,encounter_id: enc,actor: actor,role: role,session: session)}
+    else _ -> :error end
   end
-
-  def connect(_params, _socket, _info), do: :error
-
-  @impl true
-  def id(_socket), do: nil
+  def connect(_,_,_),do: :error
+  def id(socket),do: "talkback-session:"<>socket.assigns.session
 end

@@ -7,7 +7,7 @@ defmodule MedFabric.HardeningCheckTest do
 
   @moduletag :tmp_dir
   @script Path.expand("check_hardening.exs", __DIR__)
-  @guides ~w(failure_matrix operations_and_telemetry security_and_clinical_boundary core_api_and_compatibility)
+  @guides ~w(failure_matrix operations_and_telemetry security_and_clinical_boundary clinical_core)
 
   setup %{tmp_dir: root} do
     for directory <- ["ops", "guides", "apps/exam/lib", "apps/exam/test"] do

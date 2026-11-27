@@ -1,4 +1,14 @@
-# Med Fabric changelog
+# Changelog
+
+## 0.4.0 - 2026-11-26
+
+Coordinated revision-2 protocol and unified acquisition architecture for
+`mf_exam`, `mf_handheld` and `mf_preview` 0.3.0, consuming `med_ex` 0.4.0 and
+independent media providers 0.3.0. See each package changelog for complete changes.
+Domain, Store and Interop 0.2.0 remain private parts of the Exam monolith.
+The workspace version advances independently from 0.3.1 to 0.4.0.
+The release requires fresh schema/artifact/spool namespaces and all six exact
+artifact qualification gates; no publication or native gate success is implied.
 
 ## Unreleased
 

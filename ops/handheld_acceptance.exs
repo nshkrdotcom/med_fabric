@@ -10,13 +10,15 @@ defmodule MedFabric.HandheldAcceptance do
   import Oracle, only: [check!: 2, read: 1, sha: 1, integer: 1]
 
   @root Path.expand("..", __DIR__)
-  @suites ~w(paired spot-check legacy-browser)
+  @suites ~w(paired spot-check browser-microphone)
   @checkpoint_suite "checkpoint-recovery"
   @limits %{
     pending_frames: 16,
     pending_bytes: 262_144,
     spool_bytes: 67_108_864,
+    # Preserve the payload baseline; account for MEX1's 48-byte envelope apart.
     frame_bytes: 65_536,
+    wire_frame_bytes: 65_584,
     metadata_records: 100_000
   }
   @faults ~w(accepted_before_durable.audio durable_before_ack.audio journal_sync.audio after_object_install.audio manifest_install.all db_completion.all)
@@ -30,7 +32,8 @@ defmodule MedFabric.HandheldAcceptance do
           preview: :string,
           fhir: :string,
           report: :string,
-          seconds: :integer
+          seconds: :integer,
+          installed_consumers: :string
         ]
       )
 
@@ -42,15 +45,21 @@ defmodule MedFabric.HandheldAcceptance do
       rest in [[], ["acceptance"]] and errors == [] and
         suite in (@suites ++ ["all", "soak", "paired-faults", @checkpoint_suite]) and
         preview in ["off", "isolated"],
-      "Usage: elixir ops/handheld_acceptance.exs --suite paired|spot-check|legacy-browser|paired-faults|checkpoint-recovery|all|soak --preview off|isolated [--fhir hapi] [--run-dir DIR] [--report FILE] [--seconds 3..1740]"
+      "Usage: elixir ops/handheld_acceptance.exs --suite paired|spot-check|browser-microphone|paired-faults|checkpoint-recovery|all|soak --preview off|isolated [--fhir hapi] [--run-dir DIR] [--report FILE] [--seconds 3..1740] [--installed-consumers DIR]"
     )
 
     check!(
       if(suite == "soak",
-        do: seconds in 3..1740 and preview == "off",
+        do: seconds in 3..1740,
         else: is_nil(opts[:seconds])
       ),
-      "Soak requires no Preview and a duration from 3 to 1740 seconds"
+      "Soak requires a duration from 3 to 1740 seconds"
+    )
+
+    check!(
+      not (suite == "all" or (suite == "soak" and seconds == 1740)) or
+        is_binary(opts[:installed_consumers]),
+      "Release native and full soak gates require verified installed archive consumers"
     )
 
     required = if suite == "all", do: @suites, else: [suite]
@@ -91,14 +100,14 @@ defmodule MedFabric.HandheldAcceptance do
         "paired-faults" => 180_000,
         @checkpoint_suite => 120_000,
         "spot-check" => 300_000,
-        "legacy-browser" => 300_000,
+        "browser-microphone" => 300_000,
         "all" => 1_500_000,
         "soak" => (seconds + 180) * 1000
       }[suite]
     )
 
     Process.put(:mf_report, %{
-      schema: "medfabric.acceptance.v1",
+      schema: "medfabric.acceptance.v2",
       runner: "elixir-native",
       passed: false,
       required_suites: required,
@@ -120,7 +129,7 @@ defmodule MedFabric.HandheldAcceptance do
     try do
       prerequisites!()
       Demo.prepare!(directory)
-      lab = initialize!(directory, required, preview)
+      lab = initialize!(directory, required, preview, opts[:installed_consumers])
 
       Enum.reduce(required, lab, fn name, lab ->
         start = System.monotonic_time(:millisecond)
@@ -151,8 +160,8 @@ defmodule MedFabric.HandheldAcceptance do
             "spot-check" ->
               spot!(lab)
 
-            "legacy-browser" ->
-              legacy!(lab)
+            "browser-microphone" ->
+              browser!(lab)
           end
 
         scenario(name <> "-elapsed-seconds", (System.monotonic_time(:millisecond) - start) / 1000)
@@ -240,7 +249,7 @@ defmodule MedFabric.HandheldAcceptance do
     :ok = :httpc.set_options(cookies: :enabled)
   end
 
-  defp initialize!(directory, required, preview) do
+  defp initialize!(directory, required, preview, installed_consumers) do
     cfg = read(Path.join(directory, "server.json"))
     client = read(Path.join(directory, "handheld-a.json"))
 
@@ -248,7 +257,7 @@ defmodule MedFabric.HandheldAcceptance do
       System.get_env()
       |> Enum.reject(fn {key, _} ->
         String.starts_with?(key, "PG") or
-          key in ~w(SSLKEYLOGFILE MF_EXAM_LEGACY_MEDIA MIX_ENV DATABASE_URL MF_LAB)
+          key in ~w(SSLKEYLOGFILE MIX_ENV MIX_EXS MIX_TARGET MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE DATABASE_URL MF_LAB)
       end)
       |> Map.new()
       |> Map.merge(%{
@@ -266,8 +275,45 @@ defmodule MedFabric.HandheldAcceptance do
       env: env,
       server: nil,
       preview: nil,
-      preview?: preview == "isolated"
+      preview?: preview == "isolated",
+      installed_consumers: if(installed_consumers, do: Path.expand(installed_consumers))
     }
+
+    if lab.installed_consumers do
+      inputs = Path.join(lab.installed_consumers, "artifacts.json")
+      verified = read(inputs)
+      registry = read(Path.join(lab.installed_consumers, "registry.json"))
+
+      check!(
+        verified["schema"] == "medfabric.detached_verified.v2",
+        "Missing verified archive inputs"
+      )
+
+      check!(registry["kind"] == verified["registry"], "Installed registry identity differs")
+
+      installed =
+        for role <- ~w(exam handheld preview) do
+          output = at(lab, "#{role}-installed.json")
+
+          run!(lab, "verify-installed-#{role}", "elixir", [
+            Path.join(@root, "ops/detached_artifacts.exs"),
+            "installed",
+            inputs,
+            Path.join(lab.installed_consumers, role),
+            role,
+            output
+          ])
+
+          read(output)
+        end
+
+      record(%{
+        installed_artifacts: installed,
+        artifact_manifest_sha256: verified["manifest_sha256"],
+        registry: verified["registry"],
+        registry_origin: registry["url"]
+      })
+    end
 
     # Record hashes/coordinates, never raw selector content (which could contain
     # embedded credentials). Git status is recorded only if a real repo exists.
@@ -331,10 +377,7 @@ defmodule MedFabric.HandheldAcceptance do
     lab = if "spot-check" in required, do: hapi!(lab), else: lab
     lab = if lab.preview?, do: start_preview!(lab), else: lab
 
-    lab =
-      if "soak" in required,
-        do: put_in(lab.cfg["checkpoint_timings"], at(lab, "artifact/checkpoint-timings.jsonl")),
-        else: lab
+    lab = put_in(lab.cfg["checkpoint_timings"], at(lab, "artifact/checkpoint-timings.jsonl"))
 
     save(at(lab, "server.json"), lab.cfg)
     lab = start_server!(lab)
@@ -535,7 +578,10 @@ defmodule MedFabric.HandheldAcceptance do
     do: File.regular?(child.log) and String.contains?(File.read!(child.log), text)
 
   defp isolate!(lab, role, exe, args, config, env \\ nil) do
-    cwd = Path.join([@root, "apps", role])
+    cwd =
+      if lab.installed_consumers,
+        do: Path.join(lab.installed_consumers, role),
+        else: Path.join([@root, "apps", role])
 
     base = [
       "--die-with-parent",
@@ -565,11 +611,11 @@ defmodule MedFabric.HandheldAcceptance do
     {files, dirs} =
       case role do
         "exam" ->
-          {~w(server.json cert.pem key.pem device.credential secondary.credential preview.credential),
+          {~w(server.json encounters.json cert.pem key.pem device.credential secondary.credential preview.credential),
            ~w(artifact barriers)}
 
         "preview" ->
-          {["preview.credential"], []}
+          {["preview.credential", "preview.json"], []}
 
         "handheld" ->
           cfg = read(config)
@@ -591,6 +637,41 @@ defmodule MedFabric.HandheldAcceptance do
         end)
 
     env = env || lab.env
+    env = if lab.installed_consumers, do: Map.put(env, "MIX_ENV", "prod"), else: env
+
+    env =
+      if lab.installed_consumers and role == "exam" do
+        # The composed application's bootstrap reapplies its packaged config.
+        # Supply the complete disposable deployment through that public runtime
+        # boundary before Mix and the application evaluate either config entry.
+        values = %{
+          "MF_LAB" => "1",
+          "MF_DEPLOYMENT_UUID" => lab.cfg["deployment_uuid"],
+          "MF_ENCOUNTERS_FILE" => at(lab, "encounters.json"),
+          "DATABASE_URL" => lab.cfg["database_url"],
+          "MF_ARTIFACT_DIR" => lab.cfg["artifact_dir"],
+          "MF_SECRET_KEY_BASE" => lab.cfg["cookie_secret"],
+          "MF_HTTP_PORT" => to_string(lab.cfg["http_port"]),
+          "MF_DEVICE_TLS_PORT" => to_string(lab.cfg["tls_port"]),
+          "MF_DEVICE_TLS_CERTFILE" => lab.cfg["cert"],
+          "MF_DEVICE_TLS_KEYFILE" => lab.cfg["key"],
+          "MF_DEVICE_BIND_IP" => "127.0.0.1",
+          "MF_PUBLIC_ORIGIN" => "http://localhost:#{lab.cfg["http_port"]}"
+        }
+
+        values =
+          if lab.cfg["preview_url"],
+            do:
+              Map.merge(values, %{
+                "MF_PREVIEW_URL" => lab.cfg["preview_url"],
+                "MF_PREVIEW_CREDENTIAL_FILE" => lab.cfg["preview_credential_file"]
+              }),
+            else: values
+
+        Map.merge(env, values)
+      else
+        env
+      end
 
     env =
       if role == "exam",
@@ -600,8 +681,11 @@ defmodule MedFabric.HandheldAcceptance do
             String.starts_with?(key, ["PG", "DATABASE_", "FHIR_"]) or
               (String.starts_with?(key, "MF_") and
                  not (role == "preview" and
-                        key in ["MF_PREVIEW_CREDENTIAL_FILE", "MF_PREVIEW_PORT"]) and
-                 key != "MF_MED_EX_PATH")
+                        key in [
+                          "MF_PREVIEW_CREDENTIAL_FILE",
+                          "MF_PREVIEW_PORT",
+                          "MF_PREVIEW_CONFIG"
+                        ]))
           end)
 
     # Check the mounted namespace, not just the intended mount list. The
@@ -636,6 +720,7 @@ defmodule MedFabric.HandheldAcceptance do
 
     env =
       Map.merge(lab.env, %{
+        "MF_PREVIEW_CONFIG" => at(lab, "preview.json"),
         "MF_PREVIEW_CREDENTIAL_FILE" => cfg["preview_credential_file"],
         "MF_PREVIEW_PORT" => to_string(cfg["preview_port"])
       })
@@ -680,6 +765,8 @@ defmodule MedFabric.HandheldAcceptance do
   end
 
   defp start_server!(lab) do
+    save(at(lab, "encounters.json"), lab.cfg["encounters"])
+
     server =
       isolate!(
         lab,
@@ -719,9 +806,19 @@ defmodule MedFabric.HandheldAcceptance do
     {status, _} =
       request(
         :post,
-        lab.base <> "/devices/#{id}/action",
+        lab.base <>
+          if(action == "deliver",
+            do: "/observations/#{id}/deliver",
+            else: "/acquisitions/#{id}/action"
+          ),
         [{"x-csrf-token", lab.csrf}],
-        Map.put(fields, "action", action)
+        fields
+        |> Map.put("action", action)
+        |> then(fn body ->
+          if action == "review",
+            do: Map.put_new(body, "request_id", sha(JSON.encode!(body))),
+            else: body
+        end)
       )
 
     check!(status == expected, "#{action} returned #{status}, expected #{expected}")
@@ -750,7 +847,7 @@ defmodule MedFabric.HandheldAcceptance do
 
     entry =
       if cfg["local_monitor_fault"],
-        do: ["integration/local_monitor_fault.exs"],
+        do: [Path.join(@root, "apps/handheld/integration/local_monitor_fault.exs")],
         else: ["-e", "MedExHandheld.CLI.main(System.argv())"]
 
     isolate!(
@@ -771,14 +868,14 @@ defmodule MedFabric.HandheldAcceptance do
   end
 
   defp manifest!(lab, cfg) do
-    root = at(lab, "artifact/device-v1/" <> sha(cfg["acquisition"]))
+    root = at(lab, "artifact/acquisitions-v2/" <> sha(cfg["acquisition"]))
     bytes = File.read!(Path.join(root, "manifest.mej1"))
     digest = sha(bytes)
 
     check!(
       sql!(
         lab,
-        "SELECT digest FROM device_manifests WHERE acquisition_id='#{cfg["acquisition"]}'"
+        "SELECT digest FROM acquisition_manifests WHERE acquisition_id='#{cfg["acquisition"]}'"
       ) == digest,
       "Manifest DB digest differs"
     )
@@ -834,7 +931,11 @@ defmodule MedFabric.HandheldAcceptance do
 
     ProcessLab.wait!(
       fn ->
-        count!(lab, "device_facts", "acquisition_id='#{id}' AND kind='command_outcome_unknown'") >
+        count!(
+          lab,
+          "acquisition_facts",
+          "acquisition_id='#{id}' AND kind='command_outcome_unknown'"
+        ) >
           0
       end,
       30_000,
@@ -849,10 +950,14 @@ defmodule MedFabric.HandheldAcceptance do
     counters = fn ->
       {sql!(
          lab,
-         "SELECT coalesce(sum(durable_acks),0) FROM device_limits_observed l JOIN stream_attempts a USING(fence) WHERE a.acquisition_id='#{id}' AND stream='audio'"
+         "SELECT coalesce(max((receipt->>'journal_generation')::bigint),0) FROM stream_attempts WHERE acquisition_id='#{id}' AND stream='audio'"
        )
        |> integer(),
-       sql!(lab, "SELECT count FROM device_heartbeats WHERE acquisition_id='#{id}'") |> integer()}
+       sql!(
+         lab,
+         "SELECT floor(extract(epoch FROM expires_at)*1000)::bigint FROM acquisition_sessions WHERE id='#{id}'"
+       )
+       |> integer()}
     end
 
     device = Enum.at(lab.cfg["devices"], 1)
@@ -871,9 +976,8 @@ defmodule MedFabric.HandheldAcceptance do
     ProcessLab.wait!(
       fn ->
         sql!(lab, """
-        SELECT count(DISTINCT stream) FROM device_limits_observed l
-        JOIN stream_attempts a USING(fence)
-        WHERE a.acquisition_id='#{other_id}' AND durable_acks>0
+        SELECT count(DISTINCT stream) FROM stream_attempts
+        WHERE acquisition_id='#{other_id}' AND (receipt->>'journal_generation')::bigint>0
         """) == "2"
       end,
       15_000,
@@ -888,7 +992,7 @@ defmodule MedFabric.HandheldAcceptance do
 
     record(%{
       sibling_stall_audio_receipts: new_audio - audio,
-      sibling_stall_heartbeats: new_beats - beats
+      sibling_stall_lease_extension_ms: new_beats - beats
     })
 
     lab =
@@ -926,7 +1030,7 @@ defmodule MedFabric.HandheldAcceptance do
         fn ->
           count!(
             lab,
-            "device_facts",
+            "acquisition_facts",
             "acquisition_id='#{cfg["acquisition"]}' AND kind='command_outcome_unknown'"
           ) > 0
         end,
@@ -966,7 +1070,7 @@ defmodule MedFabric.HandheldAcceptance do
             [digest, encoded] =
               sql!(
                 lab,
-                "SELECT digest,encode(bytes,'hex') FROM device_manifest_staging WHERE acquisition_id='#{cfg["acquisition"]}'"
+                "SELECT digest,encode(bytes,'hex') FROM acquisition_manifest_staging WHERE acquisition_id='#{cfg["acquisition"]}'"
               )
               |> String.split("|")
 
@@ -1240,6 +1344,34 @@ defmodule MedFabric.HandheldAcceptance do
 
     id = cfg["acquisition"]
     started = System.monotonic_time(:millisecond)
+    viewer_stop = at(lab, "soak-viewer.stop")
+    viewer_metrics = Path.join(evidence, "soak-preview.json")
+
+    viewer =
+      if lab.preview? do
+        ready = at(lab, "soak-viewer.ready")
+
+        process =
+          launch!(lab, "soak-rtc-viewer", "node", [
+            Path.join(@root, "ops/handheld/monitor_viewer.mjs"),
+            at(lab, "server.json"),
+            id,
+            ready,
+            viewer_stop,
+            viewer_metrics,
+            to_string(seconds),
+            at(lab, "spool/" <> cfg["acquisition"])
+          ])
+
+        ProcessLab.wait!(
+          fn -> File.regular?(ready) end,
+          30_000,
+          process,
+          "soak actual RTP viewer"
+        )
+
+        process
+      end
 
     IO.puts(
       "Soak started: #{seconds}s of capture. Rates and lag every #{div(Soak.interval_ms(), 1_000)}s."
@@ -1262,7 +1394,16 @@ defmodule MedFabric.HandheldAcceptance do
         end
       end)
 
-    result = report().scenarios["soak"]
+    preview =
+      if viewer do
+        File.write!(viewer_stop, "capture complete\n", [:exclusive])
+        ProcessLab.await_success!(viewer, 10_000)
+        read(viewer_metrics)
+      else
+        %{"enabled" => false}
+      end
+
+    result = Map.put(report().scenarios["soak"], :preview, preview)
     performance = Map.put(result.performance, :failures, failures)
     result = Map.merge(result, %{performance: performance, client_exit: exit_status})
     scenario("soak", result)
@@ -1270,17 +1411,15 @@ defmodule MedFabric.HandheldAcceptance do
     progress =
       sql!(lab, """
       SELECT json_build_object(
-        'phase', s.phase, 'generation', s.generation,
+        'state', a.state, 'authority_state', s.authority_state, 'generation', s.generation,
         'streams', (SELECT json_object_agg(stream, json_build_object(
           'durable_sequence', receipt->>'durable_sequence',
           'durable_sample', receipt->>'durable_sample',
           'terminal', sealed_index->>'terminal',
-          'checkpoints', (SELECT coalesce(sum(l.durable_acks), 0)
-                          FROM device_limits_observed l JOIN stream_attempts a USING(fence)
-                          WHERE a.acquisition_id=s.id AND a.stream=attempts.stream)))
+          'checkpoints', receipt->>'journal_generation'))
         FROM (SELECT DISTINCT ON (stream) stream,receipt,sealed_index FROM stream_attempts
           WHERE acquisition_id=s.id ORDER BY stream,generation DESC) attempts))
-      FROM device_sessions s WHERE s.id='#{id}'
+      FROM acquisition_sessions s JOIN acquisitions a USING(id) WHERE s.id='#{id}'
       """)
       |> case do
         "" -> nil
@@ -1293,6 +1432,29 @@ defmodule MedFabric.HandheldAcceptance do
         progress: progress
       })
 
+    spool_root = at(lab, "spool/" <> cfg["acquisition"])
+    spool_result = read(Path.join(spool_root, "result.json"))
+
+    source_records =
+      Enum.reduce(~w(audio ecg), 0, fn name, total ->
+        total + integer(read(Path.join([spool_root, name, "source.json"]))["sequence"])
+      end)
+
+    visits = spool_result["spool"]["reclamation_visits"]
+
+    check!(
+      is_integer(visits) and visits >= source_records and visits <= source_records * 2,
+      "Spool reclaim work exceeded the linear source-record bound"
+    )
+
+    result =
+      Map.put(result, :reclamation, %{
+        visits: visits,
+        source_records: source_records,
+        max_visits: source_records * 2
+      })
+
+    measured_bounds!(lab)
     scenario("soak", result)
     check!(failures == [], "Soak exceeded its performance guardrail")
     check!(exit_status == 0, "Soak acquisition did not seal")
@@ -1337,7 +1499,7 @@ defmodule MedFabric.HandheldAcceptance do
     action!(lab, id, "review", %{"digest" => digest, "choice" => choice})
 
     check!(
-      count!(lab, "device_reviews", "acquisition_id='#{id}' AND digest='#{digest}'") == 1,
+      count!(lab, "reviews", "acquisition_id='#{id}' AND manifest_digest='#{digest}'") == 1,
       "Soak review did not persist"
     )
 
@@ -1390,13 +1552,19 @@ defmodule MedFabric.HandheldAcceptance do
     check!(reset.coverage["ecg"].samples == 75, "ECG reset cutoff differs")
     paired_restart!(lab)
 
-    [frame, bytes, frames] =
-      sql!(
-        lab,
-        "SELECT max(max_frame_bytes),max(max_pending_bytes),max(max_pending_frames) FROM device_limits_observed"
-      )
-      |> String.split("|")
-      |> Enum.map(&integer/1)
+    measured_bounds!(lab)
+    lab
+  end
+
+  defp measured_bounds!(lab) do
+    observations = lab.cfg["checkpoint_timings"] |> File.stream!() |> Enum.map(&JSON.decode!/1)
+    bounds = Enum.filter(observations, &(&1["stage"] == "bounds"))
+    check!(bounds != [], "Missing actual frame and pending-credit measurements")
+
+    [frame, payload, bytes, frames] =
+      for key <- ~w(max_frame_bytes max_payload_bytes max_pending_bytes max_pending_frames) do
+        bounds |> Enum.map(&Map.fetch!(&1["measurements"], key)) |> Enum.max()
+      end
 
     spool =
       Path.wildcard(at(lab, "spool/*/result.json"))
@@ -1411,7 +1579,8 @@ defmodule MedFabric.HandheldAcceptance do
       |> integer()
 
     maxima = %{
-      frame_bytes: frame,
+      frame_bytes: payload,
+      wire_frame_bytes: frame,
       pending_bytes: bytes,
       pending_frames: frames,
       spool_bytes: spool,
@@ -1444,7 +1613,13 @@ defmodule MedFabric.HandheldAcceptance do
     save(path, cfg)
 
     child =
-      isolate!(lab, "handheld", "mix", ["run", "integration/network_denials.exs", path], path)
+      isolate!(
+        lab,
+        "handheld",
+        "mix",
+        ["run", Path.join(@root, "apps/handheld/integration/network_denials.exs"), path],
+        path
+      )
 
     ProcessLab.await_success!(child, 60_000)
     result = read(cfg["negative_result"])
@@ -1582,7 +1757,7 @@ defmodule MedFabric.HandheldAcceptance do
     final =
       sql!(
         lab,
-        "SELECT final_inventory->>'count',final_inventory->>'digest' FROM device_sessions WHERE id='#{cfg["acquisition"]}'"
+        "SELECT final_inventory->>'count',final_inventory->>'digest' FROM acquisition_sessions WHERE id='#{cfg["acquisition"]}'"
       )
 
     check!(
@@ -1609,12 +1784,28 @@ defmodule MedFabric.HandheldAcceptance do
     )
 
     check!(
-      unusable["event"]["metrics"]["spo2"] == %{"missing" => "nan"},
+      unusable["event"]["metrics"]["spo2"] == ["missing", "nan"],
       "Unusable event unexpectedly eligible"
     )
 
     event = usable["event"]
-    check!(event["repeat_of"] == unusable["event"]["event_id"], "Missing PLXS repeat linkage")
+
+    check!(
+      %{"name" => "repeat_of", "origin" => "observed", "value" => unusable["event"]["event_id"]} in event[
+        "provenance"
+      ],
+      "Missing PLXS repeat linkage"
+    )
+
+    %{
+      "clock_id" => "unix_us",
+      "boot_id" => "fixture",
+      "ticks" => measured_at,
+      "uncertainty_ticks" => "0"
+    } =
+      event["device_time"]
+
+    measured_at = measured_at |> integer() |> DateTime.from_unix!(:microsecond)
 
     choice = %{
       "decision" => "accept_metrics",
@@ -1640,16 +1831,19 @@ defmodule MedFabric.HandheldAcceptance do
     action!(lab, id, "review", %{"digest" => digest, "choice" => choice})
 
     metrics =
-      sql!(lab, "SELECT id FROM acquisitions WHERE parent_acquisition_id='#{id}' ORDER BY id")
+      sql!(
+        lab,
+        "SELECT o.id FROM observations o JOIN reviews r ON r.id=o.decision_id WHERE r.acquisition_id='#{id}' ORDER BY o.id"
+      )
       |> String.split("\n", trim: true)
 
-    check!(length(Enum.uniq(metrics)) == 2, "Expected two distinct eligible metric acquisitions")
+    check!(length(Enum.uniq(metrics)) == 2, "Expected two distinct eligible native observations")
     Enum.each(metrics, &action!(lab, &1, "deliver"))
 
     remote =
       sql!(
         lab,
-        "SELECT external_id,remote_ref FROM outbox_deliveries WHERE acquisition_id IN (SELECT id FROM acquisitions WHERE parent_acquisition_id='#{id}')"
+        "SELECT d.identifier_system,d.identifier_value,d.remote_ref FROM outbox_deliveries d JOIN observations o ON o.id=d.observation_id JOIN reviews r ON r.id=o.decision_id WHERE r.acquisition_id='#{id}' ORDER BY d.id"
       )
       |> String.split("\n", trim: true)
 
@@ -1658,14 +1852,14 @@ defmodule MedFabric.HandheldAcceptance do
 
     observations =
       for row <- remote do
-        [external, ref] = String.split(row, "|")
+        [system, external, ref] = String.split(row, "|")
         check!(String.starts_with?(ref, "Observation/"), "Invalid remote observation reference")
 
         bundle =
           get!(
             base <>
               "/Observation?" <>
-              URI.encode_query(%{"identifier" => "urn:med-fabric:observation|" <> external})
+              URI.encode_query(%{"identifier" => system <> "|" <> external})
           )
           |> JSON.decode!()
 
@@ -1675,7 +1869,11 @@ defmodule MedFabric.HandheldAcceptance do
               do: entry["resource"]
 
         check!(
-          resource["effectiveDateTime"] == event["measured_at"],
+          match?({:ok, _, _}, DateTime.from_iso8601(resource["effectiveDateTime"])) and
+            DateTime.compare(
+              elem(DateTime.from_iso8601(resource["effectiveDateTime"]), 1),
+              measured_at
+            ) == :eq,
           "FHIR observation measurement time differs"
         )
 
@@ -1711,27 +1909,22 @@ defmodule MedFabric.HandheldAcceptance do
     lab
   end
 
-  defp legacy!(lab) do
-    ProcessLab.stop!(lab.server, "TERM")
-
-    lab =
-      %{lab | env: Map.put(lab.env, "MF_EXAM_LEGACY_MEDIA", "1")} |> start_server!() |> login!()
-
+  defp browser!(lab) do
     run!(
       lab,
-      "legacy-capture",
+      "browser-capture",
       "mix",
-      ["test", "integration/recording_test.exs", "integration/encounter_scope_test.exs"],
+      ["test", "integration"],
       Path.join(@root, "apps/exam"),
       Map.put(lab.env, "DATABASE_URL", lab.cfg["database_url"])
     )
 
-    run!(lab, "legacy-browser", "node", [
-      Path.join(@root, "ops/handheld/legacy_browser.mjs"),
+    run!(lab, "browser-microphone", "node", [
+      Path.join(@root, "ops/handheld/browser_capture.mjs"),
       at(lab, "server.json")
     ])
 
-    scenario("legacy-browser", %{
+    scenario("browser-microphone", %{
       actual_browser_playback: true,
       encounter_scope: true,
       recording: true

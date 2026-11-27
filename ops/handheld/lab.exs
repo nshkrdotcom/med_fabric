@@ -72,6 +72,7 @@ defmodule MedFabric.HandheldDemo do
     }
 
     server = %{
+      deployment_uuid: deployment_uuid(),
       http_port: http,
       tls_port: tls,
       proxy_port: proxy,
@@ -107,6 +108,23 @@ defmodule MedFabric.HandheldDemo do
       preview: false
     }
 
+    # Synthetic roles run on the same host clock. The bounded clock assumption
+    # is explicit in the sidecar config and retained with qualification evidence.
+    private_file!(
+      directory,
+      "preview.json",
+      JSON.encode_to_iodata!(%{
+        port: preview,
+        credential_file: preview_credential,
+        trusted_clock: true,
+        clock_error_ms: 100,
+        max_peers: 8,
+        max_source_peers: 2,
+        ice_servers: [],
+        ice_transport_policy: "all"
+      })
+    )
+
     private_file!(directory, "server.json", JSON.encode_to_iodata!(server))
     private_file!(directory, "handheld-a.json", JSON.encode_to_iodata!(handheld))
     IO.puts("Prepared synthetic lab at #{directory}")
@@ -128,6 +146,16 @@ defmodule MedFabric.HandheldDemo do
     after
       Enum.each(sockets, &:gen_tcp.close/1)
     end
+  end
+
+  defp deployment_uuid do
+    <<a::32, b::16, _::4, c::12, _::2, d::14, e::48>> = :crypto.strong_rand_bytes(16)
+
+    <<first::binary-size(8), second::binary-size(4), third::binary-size(4),
+      fourth::binary-size(4), fifth::binary-size(12)>> =
+      Base.encode16(<<a::32, b::16, 4::4, c::12, 2::2, d::14, e::48>>, case: :lower)
+
+    Enum.join([first, second, third, fourth, fifth], "-")
   end
 
   defp certificates!(directory) do

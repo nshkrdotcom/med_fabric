@@ -1,227 +1,121 @@
 defmodule MedFabric.ExamWeb.DeviceLive do
+  @moduledoc false
   use Phoenix.LiveView
   alias MedFabric.Exam
-  alias MedFabric.Exam.{DeviceReviews, DeviceWorkflow}
-  alias MedFabric.ExamWeb.ProxyIdentity
-  alias MedFabric.Store.{DeviceCommands, DeviceSessions, Postgres}
-
-  def mount(
-        %{"encounter_id" => enc},
-        %{"lab_encounter" => enc, "exam_actor" => actor, "exam_role" => "clinician"},
-        socket
-      ) do
-    ok =
-      not connected?(socket) or
-        ProxyIdentity.matches?(
-          get_connect_info(socket, :x_headers) || [],
-          actor,
-          Exam.lab()
-        )
-
-    if ok and Exam.lab()[:device_enabled] == true and Exam.member?(enc, actor, :clinician) do
-      if connected?(socket), do: Process.send_after(self(), :refresh, 1000)
-
-      devices =
-        DeviceSessions.rows(
-          Postgres,
-          "SELECT device_id FROM device_credentials WHERE NOT revoked ORDER BY device_id",
-          []
-        )
-        |> List.flatten()
-
-      {:ok,
-       assign(socket,
-         enc: enc,
-         actor: actor,
-         devices: devices,
-         rows: DeviceWorkflow.list(enc),
-         message: nil,
-         band: nil
-       )}
-    else
-      {:ok, redirect(socket, to: "/")}
-    end
+  alias MedFabric.Exam.AcquisitionWorkflow
+  alias MedFabric.Store.{DeviceSessions,Encounters}
+  def mount(%{"encounter_id"=>enc},%{"lab_encounter"=>enc,"exam_actor"=>actor,"exam_role"=>"clinician","exam_session"=>session},socket) do
+    if Encounters.session_authorized?(Exam.context().db,session,enc,actor,:clinician,:read) and (not connected?(socket) or MedFabric.ExamWeb.ProxyIdentity.matches?(get_connect_info(socket,:x_headers)||[],actor,Exam.lab())) do
+      if connected?(socket),do: Process.send_after(self(),:refresh,1000)
+      {:ok,assign(socket,enc: enc,actor: actor,session: session,devices: DeviceSessions.list(Exam.context().db),rows: AcquisitionWorkflow.list(Exam.context(),enc,actor),bands: %{},message: nil)}
+    else {:ok,redirect(socket,to: "/")} end
   end
-
-  def mount(_, _, socket), do: {:ok, redirect(socket, to: "/")}
-
-  def handle_info(:refresh, s) do
-    if Exam.member?(s.assigns.enc, s.assigns.actor, :clinician) do
-      Process.send_after(self(), :refresh, 1000)
-      {:noreply, assign(s, :rows, DeviceWorkflow.list(s.assigns.enc))}
-    else
-      {:noreply, redirect(s, to: "/")}
-    end
+  def mount(_,_,socket),do: {:ok,redirect(socket,to: "/")}
+  def handle_info(:refresh,s) do
+    if Encounters.session_authorized?(Exam.context().db,s.assigns.session,s.assigns.enc,s.assigns.actor,:clinician,:read) do
+      Process.send_after(self(),:refresh,1000)
+      {:noreply,assign(s,:rows,AcquisitionWorkflow.list(Exam.context(),s.assigns.enc,s.assigns.actor))}
+    else {:noreply,redirect(s,to: "/")} end
   end
-
-  def handle_event("grant", p, s),
-    do:
-      result(
-        s,
-        DeviceSessions.authorize(
-          s.assigns.enc,
-          p["device"],
-          p["profile"],
-          p["site"],
-          s.assigns.actor
-        )
-      )
-
-  def handle_event("stop", %{"id" => id}, s),
-    do: result(s, DeviceWorkflow.stop(s.assigns.enc, id, s.assigns.actor))
-
-  def handle_event("gain", p, s),
-    do: result(s, DeviceCommands.request(s.assigns.enc, p["_id"], s.assigns.actor, p["gain"]))
-
-  def handle_event("deliver", %{"id" => id}, s),
-    do: result(s, Exam.deliver(s.assigns.enc, id, s.assigns.actor))
-
-  def handle_event("band", p, s) do
-    row = Enum.find(s.assigns.rows, &(&1.id == p["_id"] and &1.digest == p["digest"]))
-
-    band =
-      with %{manifest: %{} = m} <- row,
-           {i, ""} <- Integer.parse(p["sample"]),
-           do: DeviceWorkflow.band(m, i)
-
-    {:noreply, assign(s, :band, {p["_id"], band})}
+  def handle_event(event,params,s) do
+    if Encounters.session_authorized?(Exam.context().db,s.assigns.session,s.assigns.enc,s.assigns.actor,:clinician,:read),
+      do: event(event,params,s),else: {:noreply,redirect(s,to: "/")}
   end
-
-  def handle_event("review", p, s) do
-    m =
-      Enum.find_value(s.assigns.rows, fn r ->
-        if r.id == p["_id"] and r.digest == p["digest"], do: r.manifest
-      end)
-
-    if m do
-      choice = %{
-        "decision" => p["decision"],
-        "note" => p["note"] || "",
-        "metrics" => Enum.sort(p["metrics"] || []),
-        "event_id" => p["event_id"],
-        "acknowledged" => if(p["ack"] == "yes", do: m["defects"], else: []),
-        "ranges" => review_ranges(p["range"])
-      }
-
-      result(
-        s,
-        DeviceReviews.review_verified(
-          s.assigns.enc,
-          p["_id"],
-          s.assigns.actor,
-          p["digest"],
-          choice
-        )
-      )
-    else
-      result(s, {:error, :review_changed})
-    end
+  defp event("grant",p,s) do
+    result=DeviceSessions.authorize(Exam.context().db,s.assigns.enc,p["device"],p["profile"],p["site"],s.assigns.actor)
+    {:noreply,assign(s,:message,if(match?({:ok,_},result),do: "Authorized",else: "Authorization refused"))}
   end
-
-  defp review_ranges(range) when range in [nil, ""], do: []
-
-  defp review_ranges(range) do
-    case String.split(range, ":") do
-      [stream, first, last] -> [%{"stream" => stream, "first" => first, "end" => last}]
-      _ -> []
-    end
+  defp event("band",%{"id"=>id,"sample"=>sample},s) do
+    result=with {:ok,index} <- MedFabric.Domain.Review.counter(sample),
+                row when not is_nil(row) <- Enum.find(s.assigns.rows,&(&1.id == id)),
+                true <- is_map(row.manifest) and row.profile == "paired_exam",
+                {:ok,manifest} <- MedFabric.Exam.AcquisitionManifest.promoted(Exam.context(),s.assigns.enc,id,s.assigns.actor,row.digest) do
+      AcquisitionWorkflow.band(manifest,index)
+    else _ -> :unavailable end
+    {:noreply,assign(s,:bands,Map.put(s.assigns.bands,id,result))}
   end
-
-  defp result(s, r),
-    do:
-      {:noreply,
-       assign(s,
-         message: if(r in [:ok, {:ok, :ok}], do: "Saved", else: "Action refused: " <> inspect(r)),
-         rows: DeviceWorkflow.list(s.assigns.enc)
-       )}
-
-  defp metric(%{"mantissa" => m, "exponent" => e}, unit) do
-    n = String.to_integer(m)
-    value = Decimal.new(if(n < 0, do: -1, else: 1), abs(n), String.to_integer(e))
-    Decimal.to_string(value, :normal) <> " " <> unit
+  defp event("deliver",%{"id"=>id},s) do
+    result=Exam.deliver(s.assigns.enc,id,s.assigns.actor)
+    {:noreply,assign(s,:message,if(match?({:ok,_},result),do: "Delivery requested",else: "Delivery refused"))}
   end
-
-  defp metric(%{"missing" => reason}, _), do: "Unavailable (" <> reason <> ")"
-
-  defp segment_path(enc, row, stream, segment),
-    do:
-      "/encounters/#{enc}/devices/#{row.id}/segment/#{stream}/#{segment["first_sample"]}/#{segment["sha256"]}?revision=#{row.digest}"
-
+  defp event("stop",%{"id"=>id},s) do
+    result=AcquisitionWorkflow.stop(Exam.context(),s.assigns.enc,id,s.assigns.actor)
+    {:noreply,assign(s,:message,if(match?({:ok,_},result),do: "Stop requested",else: "Stop refused"))}
+  end
+  defp event("gain",%{"id"=>id,"gain"=>gain},s) do
+    result=MedFabric.Store.DeviceCommands.request(Exam.context().db,s.assigns.enc,id,s.assigns.actor,gain)
+    {:noreply,assign(s,:message,if(match?({:ok,_},result),do: "Monitor command requested",else: "Command refused"))}
+  end
+  defp event(_,_,s),do: {:noreply,s}
+  defp metric_text(["value",m,e,unit]),do: m<>" × 10^"<>e<>" "<>unit
+  defp metric_text(["missing",reason]),do: "Unavailable: "<>reason
+  defp metric_text(value),do: Jason.encode!(value)
+  defp provenance_text(facts) do
+    facts |> Enum.filter(&(&1["name"] in ~w(source simulated phase time_basis peripheral_redelivery repeat_of)))
+    |> Enum.map_join("; ",fn fact -> fact["name"]<>" ("<>fact["origin"]<>"): "<>Jason.encode!(fact["value"]) end)
+  end
+  defp band_text(:unavailable),do: "Clock alignment unavailable; no correspondence inferred"
+  defp band_text(ranges) when is_list(ranges),do: "Possible ECG ranges: "<>Enum.map_join(ranges,", ",fn {a,b}->"#{a}–#{b}" end)
   def render(assigns) do
     ~H"""
-    <main>
-      <header class="mf-topbar">
-        <a href={"/encounters/#{@enc}"}>&larr; Encounter</a>
-        <span class="mf-brand">Med Fabric · Handheld Review</span>
-      </header>
-      <h1>Simulated handheld examinations</h1>
-      <form class="mf-panel" phx-submit="grant">
-        <label>Assigned device <select name="device"><option :for={d <- @devices}>{d}</option></select></label>
-        <label>Protocol <select name="profile"><option value="paired_exam">Paired acoustic and ECG</option><option value="plx_spot_check">Pulse oximeter spot check</option></select></label>
-        <label>Recording site <input required maxlength="100" name="site" /></label>
-        <button>Confirm readiness and authorize collection</button>
+    <main><h1>Acquisitions</h1><a href={"/encounters/#{@enc}"}>Encounter</a><p>{@message}</p>
+      <form phx-submit="grant"><select name="device"><option :for={device <- @devices} value={device}>{device}</option></select>
+        <select name="profile"><option value="paired_exam">Paired audio / ECG</option><option value="plx_spot_check">PLX spot check</option></select>
+        <input name="site" placeholder="Site" required /><button>Authorize device</button>
       </form>
-      <p role="status">{@message}</p>
-      <section :for={r <- @rows} id={"device-"<>r.id}>
-        <h2>{r.profile} · {r.site}</h2>
-        <p class="mf-meta">Gateway {r.device} · capture {r.phase}</p>
-        <p class="mf-meta" :for={{name,spec}<-r.descriptors}>{name} · {spec["modality"]} · {spec["encoding"]} · {Enum.join(spec["sample_rate"], "/")} samples/s · {spec["boot_id"]}</p>
-        <figure :if={r.live}>
-          <svg viewBox="0 0 800 125" role="img" aria-label="Latest received ECG frame"><polyline points={r.live.points} fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-          <figcaption>Latest received ECG · samples {r.live.first}–{r.live.end_sample} · {r.live.low}–{r.live.high} {r.live.unit}. Network transit time unknown.</figcaption>
-        </figure>
-        <p class="mf-meta" :for={[kind,fact] <- r.facts}>{kind} · {JSON.encode!(fact)}</p>
-        <div class="mf-controls" :if={r.phase=="capturing"}>
-          <button phx-click="stop" phx-value-id={r.id}>Request stop</button>
-          <form :if={r.profile=="paired_exam"} phx-submit="gain">
-            <input type="hidden" name="_id" value={r.id} />
-            <label>Handheld software monitor <select name="gain"><option>unity</option><option>half</option></select></label>
-            <button>Apply gain</button>
+      <article :for={row <- @rows} id={"acquisition-#{row.id}"} data-acquisition={row.id} data-digest={row.digest} data-state={row.phase}>
+        <h2>{row.profile}</h2><p>{row.site} · {row.phase}</p>
+        <button :if={row.phase == "capturing"} phx-click="stop" phx-value-id={row.id}>Request source stop</button>
+        <div :if={row.live} id={"live-ecg-#{row.id}"}>
+          <p>Live synthetic ECG · {row.live.unit} · samples {row.live.first}–{row.live.end_sample}; display only</p>
+          <svg viewBox="0 0 800 125" role="img" aria-label="Live ECG"><polyline points={row.live.points} fill="none" stroke="currentColor" /></svg>
+        </div>
+        <form :if={row.profile == "paired_exam" && row.phase == "capturing"} phx-submit="gain">
+          <input type="hidden" name="id" value={row.id} /><label>Monitor gain <select name="gain"><option value="unity">Unity</option><option value="half">Half</option></select></label><button>Request monitor gain</button>
+        </form>
+        <section :if={row.phase == "capturing"} id={"monitor-#{row.id}"} phx-hook="DeviceMonitor" phx-update="ignore" data-endpoint={"/encounters/#{@enc}/acquisitions/#{row.id}/preview"} data-encounter={@enc}>
+          <button type="button">Monitor audio</button><audio autoplay controls></audio><output></output>
+        </section>
+        <p :if={row.manifest && row.manifest["defects"] != []}>Evidence contains explicit defects: {Enum.map_join(row.manifest["defects"],", ",& &1["code"])}</p>
+        <div :if={row.manifest}>
+          <section :if={row.profile == "plx_spot_check"}>
+            <h3>Preserved spot-check events</h3>
+            <p>Simulated PLXS source. Clinical acceptance checks exact values, device status and qualified source time. Unusable and unknown values remain visible.</p>
+            <details :for={entry <- row.manifest["inventory"]} data-event={entry["event"]["event_id"]}>
+              <summary>Event {entry["event"]["event_id"]} · gateway sequence {entry["event"]["gateway_sequence"]}</summary>
+              <p :for={{code,value} <- Enum.sort(entry["event"]["metrics"])}>{code}: {metric_text(value)}</p>
+              <p>Source status: {Jason.encode!(entry["event"]["device_status"])}</p>
+              <p>Source time: {Jason.encode!(entry["event"]["device_time"])}</p>
+              <p>Provenance: {provenance_text(entry["event"]["provenance"])}</p>
+            </details>
+            <p :if={row.manifest["inventory"] == []}>No measurements were committed.</p>
+          </section>
+          <div :for={{name,stream} <- row.manifest["streams"]}>
+            <h3>{name}</h3>
+            <div :for={segment <- Enum.sort_by(stream["index"]["segments"], &String.to_integer(&1["first_sample"]))}>
+              <audio :if={name == "audio"} controls preload="none" data-first-sample={segment["first_sample"]} src={"/encounters/#{@enc}/acquisitions/#{row.id}/segment/#{name}/#{segment["first_sample"]}/#{segment["sha256"]}?revision=#{row.digest}"}></audio>
+              <img :if={name == "ecg"} alt="Verified synthetic ECG segment" src={"/encounters/#{@enc}/acquisitions/#{row.id}/segment/#{name}/#{segment["first_sample"]}/#{segment["sha256"]}?revision=#{row.digest}"} />
+              <a href={"/encounters/#{@enc}/acquisitions/#{row.id}/segment/#{name}/#{segment["first_sample"]}/#{segment["sha256"]}?revision=#{row.digest}"}>Verified segment {segment["first_sample"]}–{segment["end_sample"]}</a>
+            </div>
+            <p>Clock mapping: {stream["clock"]["state"]}. Source uncertainty remains part of the evidence.</p>
+            <p :for={span <- stream["index"]["spans"]}>{span["code"]}: samples {span["first_sample"]}–{span["end_sample"]}</p>
+          </div>
+          <form :if={row.profile == "paired_exam"} phx-submit="band">
+            <input type="hidden" name="id" value={row.id} /><label>Audio sample <input name="sample" inputmode="numeric" required /></label><button>Find corresponding ECG ranges</button>
           </form>
-          <div :if={r.profile=="paired_exam"} id={"listen-"<>r.id} phx-hook="DeviceMonitor" phx-update="ignore" data-endpoint={"/encounters/#{@enc}/devices/#{r.id}/preview"}>
-            <button type="button">Listen to monitor</button><audio controls autoplay></audio><output>Disconnected</output>
+          <output :if={Map.has_key?(@bands,row.id)}>{band_text(@bands[row.id])}</output>
+          <form :if={!row.choice} id={"review-#{row.id}"} phx-hook="AcquisitionReview" phx-update="ignore" data-endpoint={"/encounters/#{@enc}/acquisitions/#{row.id}/action"} data-digest={row.digest} data-defects={Jason.encode!(row.manifest["defects"])}>
+            <select name="decision"><option value="complete">Complete waveform review</option><option value="partial">Partial waveform review</option><option value="accept_metrics">Accept selected metrics</option><option value="reject">Reject</option><option value="repeat">Repeat</option></select>
+            <input name="range" placeholder="audio:first:end" /><input name="event_id" placeholder="Event ID" />
+            <label><input type="checkbox" name="spo2" />SpO₂</label><label><input type="checkbox" name="pulse_rate" />Pulse</label>
+            <label><input type="checkbox" name="acknowledged" />Acknowledge defects</label><textarea name="note"></textarea><button>Save clinical decision</button><output></output>
+          </form>
+          <p :if={row.choice}>Clinical decision: {row.choice["decision"]}</p>
+          <div :for={[id,kind,status] <- row.metrics} data-observation={id} data-delivery={status}>
+            <p>{kind}: export {status}</p><button :if={status != "confirmed"} phx-click="deliver" phx-value-id={id}>Request delivery</button>
           </div>
         </div>
-        <article :if={r.manifest}>
-          <p>Manifest <code>{r.digest}</code></p>
-          <p class="mf-meta">Integrity {if r.manifest["defects"] == [], do: "complete", else: JSON.encode!(r.manifest["defects"])}</p>
-          <div class="mf-stream" :for={{name,v} <- r.manifest["streams"]}>
-            <h3>{name} · {v["index"]["stream"]["encoding"]}</h3>
-            <p class="mf-meta">Alignment {v["clock"]["state"]}</p>
-            <p :if={v["index"]["terminal"] == "interrupted"}>
-              Capture interrupted · {v["index"]["terminal_reason"]}
-            </p>
-            <p :for={gap <- Enum.filter(v["index"]["spans"], &(&1["code"] == "source_gap"))}>
-              Source gap · samples {gap["first_sample"]}–{gap["end_sample"]}
-            </p>
-            <audio :if={name == "audio" && match?([_, "1"], v["index"]["stream"]["sample_rate"]) && v["index"]["segments"] != []}
-              aria-label="First verified acoustic segment" controls preload="none"
-              src={segment_path(@enc, r, name, hd(v["index"]["segments"]))}></audio>
-            <details><summary>Verified source intervals</summary>
-              <div :for={seg <- v["index"]["segments"]}>
-                <a href={segment_path(@enc, r, name, seg)}>{seg["first_sample"]}–{seg["end_sample"]} · inspect segment</a>
-              </div>
-            </details>
-          </div>
-          <form :if={r.profile=="paired_exam"} phx-submit="band"><input type="hidden" name="_id" value={r.id}/><input type="hidden" name="digest" value={r.digest}/><label>Audio sample <input name="sample" type="number" min="0" required/></label><button>Find corresponding ECG ranges</button></form>
-          <p :if={@band && elem(@band,0)==r.id}>Possible ECG ranges {inspect(elem(@band,1))}</p>
-          <div class="mf-stream" :for={x <- r.manifest["inventory"]}>
-            <p>{x["event"]["event_id"]} · Source {x["event"]["source"]} · SpO₂ {metric(x["event"]["metrics"]["spo2"],"%")} · device pulse {metric(x["event"]["metrics"]["pulse_rate"],"beats/min")} · source status {JSON.encode!(x["event"]["source_status"])}</p>
-            <p class="mf-meta">Measured {x["event"]["measured_at"] || "unknown"} ({x["event"]["time_basis"]}) · received {x["received_at"]} · repeat of {x["event"]["repeat_of"] || "none"}</p>
-          </div>
-          <form :if={!r.choice} phx-submit="review">
-            <input type="hidden" name="_id" value={r.id}/><input type="hidden" name="digest" value={r.digest}/>
-            <label>Decision <select name="decision"><option :for={v <- (if r.profile=="paired_exam", do: ~w(complete partial reject repeat), else: ~w(accept_metrics reject repeat))}>{if v == "complete", do: "Accept interval from complete capture", else: v}</option></select></label>
-            <label :if={r.profile=="paired_exam"}>Selected interval (stream:first:end, within one configuration epoch and without gaps)<input name="range"/></label>
-            <label :if={r.manifest["defects"] != []}><input type="checkbox" name="ack" value="yes"/>Acknowledge the listed defects</label>
-            <div :if={r.profile=="plx_spot_check"}><label>Completed event <select name="event_id"><option :for={x<-r.manifest["inventory"]}>{x["event"]["event_id"]}</option></select></label>
-              <label :for={m<- ~w(spo2 pulse_rate)}><input type="checkbox" name="metrics[]" value={m}/>{m}</label></div>
-            <label>Review note <input name="note" maxlength="2000"/></label><button>Record review</button>
-          </form>
-          <p :if={r.choice}>Review decision {r.choice["decision"]} · {r.choice["note"]}</p>
-          <p :for={[id,kind,remote]<-r.metrics}>{kind} · {remote || "pending export"} <button :if={!remote} phx-click="deliver" phx-value-id={id}>Deliver to FHIR</button></p>
-        </article>
-      </section>
+      </article>
     </main>
     """
   end

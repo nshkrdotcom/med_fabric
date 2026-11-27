@@ -1,474 +1,221 @@
+Code.require_file("support/fixture.exs", __DIR__)
+
 defmodule MedFabric.Store.DeviceAdmissionTest do
   use ExUnit.Case, async: false
+  alias MedEx.Serialization
+  alias MedFabric.Store.{AcquisitionSessions, DeviceCommands, DeviceSessions, Encounters, MeasurementEvents, Postgres}
+  alias MedFabric.Store.IntegrationFixture, as: F
 
-  alias MedFabric.Store.DeviceCommands
-  alias MedFabric.Store.DeviceSessions, as: S
-  alias MedFabric.Store.{MeasurementEvents, Postgres, Records}
-
-  # Run explicitly against an isolated integration database:
-  # DATABASE_URL=... mix test integration/device_admission_test.exs
   setup do
-    db =
-      start_supervised!(
-        {Postgres, url: System.fetch_env!("DATABASE_URL"), name: Postgres, pool_size: 6}
-      )
-
-    assert {:ok, :ok} = Postgres.migrate(db)
-    suffix = Base.encode16(:crypto.strong_rand_bytes(10), case: :lower)
-    enc = "admission-" <> suffix
-    device = "handheld-" <> suffix
-    actor = "clinician-" <> suffix
-    token = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
-    assert :ok = Records.open(db, enc, "patient-" <> suffix, actor)
-    assert S.enroll(device, token)
-
-    for profile <- ["paired_exam", "plx_spot_check"] do
-      assert :ok = S.authorize(enc, device, profile, "left-upper-chest", actor)
-    end
-
-    %{db: db, enc: enc, device: device, actor: actor, token: token}
+    fixture = F.database()
+    F.encounter(fixture.db)
+    principal = F.device(fixture.db)
+    Map.put(fixture, :principal, principal)
   end
 
-  test "schema migration repeats without losing existing legacy or device records", c do
-    before = S.rows(c.db, "SELECT name FROM mf_schema_history ORDER BY name", [])
-    assert ["005_device_acquisitions.sql"] in before
-    assert {:ok, :ok} = Postgres.migrate(c.db)
-    assert S.rows(c.db, "SELECT name FROM mf_schema_history ORDER BY name", []) == before
-    device = c.device
-    assert {:ok, ^device} = S.authenticate(c.token)
-
-    assert :ok =
-             Records.reserve(
-               c.db,
-               c.enc,
-               "legacy-" <> c.enc,
-               "patient-" <> String.replace_prefix(c.enc, "admission-", "")
-             )
-
-    assert {:ok, _} = reserve(c, "plx_spot_check", "device-" <> c.enc)
+  test "fresh schema bootstrap is idempotent under concurrent startup and preserves native identity", c do
+    tasks = for _ <- 1..2, do: Task.async(fn -> Postgres.migrate(c.db, c.uuid) end)
+    assert Enum.map(tasks, &Task.await(&1, 10_000)) == [{:ok, :ok}, {:ok, :ok}]
+    assert {:ok, %{deployment_uuid: uuid, revision: 2, recovery_state: "current"}} = Postgres.identity(c.db)
+    assert uuid == c.uuid
+    assert {:ok, "gateway"} = DeviceSessions.authenticate(c.db, String.duplicate("t", 48))
+    assert {:error, :denied} = DeviceSessions.authenticate(c.db, String.duplicate("x", 48))
+    assert {:error, :incompatible_deployment} = Postgres.migrate(c.db, "00000000-0000-4000-8000-000000000099")
+    assert [["acquisition_sessions"]] = AcquisitionSessions.rows(c.db,
+      "SELECT tablename FROM pg_tables WHERE schemaname=current_schema() AND tablename='acquisition_sessions'", [])
+    assert [] = AcquisitionSessions.rows(c.db,
+      "SELECT tablename FROM pg_tables WHERE schemaname=current_schema() AND tablename IN ('mf_schema_history','device_sessions','captures')", [])
   end
 
-  test "distinct profiles run concurrently while duplicate same-profile slots conflict, including pending finalization",
-       c do
-    assert {:ok, paired} = reserve(c, "paired_exam", "paired-" <> c.enc)
-    assert {:ok, plx} = reserve(c, "plx_spot_check", "plx-" <> c.enc)
-
-    other = c.device <> "-second"
-    assert S.enroll(other, :crypto.strong_rand_bytes(32))
-    assert :ok = S.authorize(c.enc, other, "paired_exam", "left-upper-chest", c.actor)
-
-    assert {:error, :active_slot_busy} =
-             S.reserve(other, c.enc, "other-" <> c.enc, "paired_exam", "boot-b", %{})
-
-    tasks =
-      for suffix <- ["a", "b"] do
-        Task.async(fn -> reserve(c, "plx_spot_check", "dup-#{suffix}-" <> c.enc) end)
-      end
-
-    results = Enum.map(tasks, &Task.await(&1, 10_000))
-    assert Enum.all?(results, &(&1 == {:error, :active_slot_busy}))
-
-    S.rows(c.db, "UPDATE device_sessions SET phase='finalizing' WHERE id=$1", [plx.id])
-    assert {:error, :active_slot_busy} = reserve(c, "plx_spot_check", "next-" <> c.enc)
-    assert {:error, :active_slot_busy} = reserve(c, "paired_exam", "next-paired-" <> c.enc)
-    assert paired.id != plx.id
+  test "paired, PLX and browser profiles coexist while same-profile admission remains exclusive", c do
+    assert {:ok, paired} = AcquisitionSessions.admit(c.db, c.principal, F.hello("paired_exam", "paired"))
+    assert {:ok, plx} = AcquisitionSessions.admit(c.db, c.principal, F.hello("plx_spot_check", "plx"))
+    assert {:ok, :ok} = Encounters.browser_session(c.db, "patient_session", "encounter", "patient", :patient)
+    assert {:ok, creation} = AcquisitionSessions.create_browser(c.db, "encounter", "patient", "patient_session", "page", "create_request")
+    browser_hello = F.hello("browser_microphone", creation.acquisition, "page", "patient") |> Map.put("creation", creation.creation)
+    assert {:ok, browser} = AcquisitionSessions.admit(c.db, %{kind: :browser, id: "patient", session: "patient_session"}, browser_hello)
+    assert length(Enum.uniq([paired.id, plx.id, browser.id])) == 3
+    tasks = for id <- ["competing_one", "competing_two"], do: Task.async(fn -> AcquisitionSessions.admit(c.db, c.principal, F.hello("paired_exam", id)) end)
+    assert Enum.map(tasks, &Task.await(&1, 10_000)) == [{:error, :active_profile_busy}, {:error, :active_profile_busy}]
+    assert {:ok, :ok} = AcquisitionSessions.freeze(c.db, paired, %{}, %{"fixture" => "explicit_clock"})
+    assert {:error, :active_profile_busy} = AcquisitionSessions.admit(c.db, c.principal, F.hello("paired_exam", "during_finalization"))
   end
 
-  test "resume rotates the generation and revocation fences every admitted effect", c do
-    assert {:ok, old} = reserve(c, "paired_exam", "resume-" <> c.enc)
-    assert {:ok, current} = reserve(c, "paired_exam", old.id)
-    assert current.generation == old.generation + 1
-    refute current.lease == old.lease
-    assert {:error, :stale_lease} = S.scoped(old, fn _, _ -> :should_not_run end)
-    assert {:ok, :admitted} = S.scoped(current, fn _, _ -> :admitted end)
-
-    assert {:error, :resume_conflict} =
-             S.reserve(c.device, c.enc, old.id, "paired_exam", "different-boot", %{})
-
-    assert {:error, :denied} =
-             S.authorize(c.enc, c.device, "paired_exam", "site", "other-clinician")
-
-    assert {:error, :grant_denied} =
-             S.reserve(c.device, "other-encounter", "other", "paired_exam", "boot-a", %{})
-
-    S.rows(c.db, "UPDATE device_credentials SET revoked=true WHERE device_id=$1", [c.device])
-    assert {:error, :denied} = S.authenticate(c.token)
-    assert {:error, :stale_lease} = S.scoped(current, fn _, _ -> :should_not_run end)
+  test "generation rotation invalidates old admission, descriptor boot mismatch and changed source are refused", c do
+    hello = F.hello()
+    assert {:ok, old} = AcquisitionSessions.admit(c.db, c.principal, hello)
+    assert {:ok, current} = AcquisitionSessions.admit(c.db, c.principal, hello)
+    assert current.generation == old.generation + 1 and current.lease != old.lease and current.connection != old.connection
+    assert {:error, :stale_binding} = AcquisitionSessions.scoped(c.db, old, fn _, _ -> flunk("obsolete binding executed") end)
+    assert {:ok, :current} = AcquisitionSessions.scoped(c.db, current, fn _, _ -> :current end)
+    assert {:error, :immutable_source_changed} = AcquisitionSessions.admit(c.db, c.principal, F.hello("paired_exam", "acquisition", "different_boot"))
+    mismatched = put_in(hello, ["descriptors", "audio"], Serialization.to_map(F.spec("audio", "acquisition", "gateway", "different_boot")))
+    assert {:error, :invalid_hello} = AcquisitionSessions.admit(c.db, c.principal, mismatched)
+    assert {:error, :unauthorized} = DeviceSessions.authorize(c.db, "encounter", "gateway", "paired_exam", "site", "other_actor")
+    assert {:ok, :ok} = DeviceSessions.revoke(c.db, "encounter", "gateway", "paired_exam", "clinician")
+    assert {:error, :stale_binding} = AcquisitionSessions.scoped(c.db, current, fn _, _ -> flunk("revoked binding executed") end)
+    assert {:error, :grant_denied} = AcquisitionSessions.admit(c.db, c.principal, hello)
   end
 
-  test "resume waiting on a session does not block a scoped grant read", c do
-    assert {:ok, bind} = reserve(c, "paired_exam", "lock-order-" <> c.enc)
-    owner = self()
-
-    holder =
-      Task.async(fn ->
-        Postgrex.transaction(c.db, fn tx ->
-          [[backend]] = S.rows(tx, "SELECT pg_backend_pid()", [])
-          S.rows(tx, "SELECT id FROM device_sessions WHERE id=$1 FOR SHARE", [bind.id])
-          send(owner, {:session_locked, backend})
-
-          receive do
-            :read_grant ->
-              S.rows(
-                tx,
-                """
-                SELECT site FROM device_grants
-                WHERE encounter_id=$1 AND device_id=$2 AND profile='paired_exam' FOR SHARE
-                """,
-                [c.enc, c.device]
-              )
-          after
-            5000 -> raise "resume did not reach the held session lock"
-          end
-        end)
-      end)
-
-    assert_receive {:session_locked, backend}, 2000
-    resume = Task.async(fn -> reserve(c, "paired_exam", bind.id) end)
-
-    assert Enum.any?(1..100, fn _ ->
-             [[waiting]] =
-               S.rows(
-                 c.db,
-                 "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))",
-                 [backend]
-               )
-
-             unless waiting, do: Process.sleep(10)
-             waiting
-           end)
-
-    send(holder.pid, :read_grant)
-    assert {:ok, [["left-upper-chest"]]} = Task.await(holder)
-    assert {:ok, next} = Task.await(resume)
-    assert next.generation == bind.generation + 1
+  test "admission near maximum lifetime grants only the remaining server authority", c do
+    hello = F.hello()
+    # Maximum lifetime is immutable source identity. Model a previously created
+    # short-lived source at INSERT, without disabling or bypassing that guard.
+    assert {:ok, :ok} = Postgrex.transaction(c.db, fn tx ->
+      AcquisitionSessions.rows(tx, "INSERT INTO acquisitions(id,encounter_id,source_kind,principal,profile,state) VALUES($1,$2,'device',$3,$4,'capturing')",
+        [hello["acquisition"], hello["encounter"], c.principal.id, hello["profile"]])
+      AcquisitionSessions.rows(tx, "INSERT INTO acquisition_sessions(id,encounter_id,source_kind,principal,profile,device_id,boot,site,descriptors,lease_hash,expires_at,maximum_at) VALUES($1,$2,'device',$3,$4,$3,$5,$6,$7,$8,clock_timestamp()+interval '2 seconds',clock_timestamp()+interval '2 seconds')",
+        [hello["acquisition"], hello["encounter"], c.principal.id, hello["profile"], hello["boot"],
+          "Synthetic anterior site", hello["descriptors"], AcquisitionSessions.hash("initial_fixture_lease")])
+      :ok
+    end)
+    assert {:ok, resumed} = AcquisitionSessions.admit(c.db, c.principal, hello)
+    assert resumed.authority_ms in 1..2000
+    AcquisitionSessions.rows(c.db, "UPDATE acquisition_sessions SET expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [resumed.id])
+    assert {:error, :stale_binding} = AcquisitionSessions.heartbeat(c.db, resumed, "expired_poll")
+    assert {:error, :stale_binding} = DeviceCommands.poll(c.db, resumed, "expired_command_poll")
   end
 
-  test "exact measurement replay is idempotent and conflict or unseen sealed input is quarantined",
-       c do
-    assert {:ok, bind} = reserve(c, "plx_spot_check", "inventory-" <> c.enc)
-    event = %{"event_id" => "one", "gateway_sequence" => "0", "simulated" => true}
-    assert {:ok, :durable} = MeasurementEvents.put(bind, event, S.hash("one"))
-    assert {:ok, :durable} = MeasurementEvents.put(bind, event, S.hash("one"))
-    assert {:ok, :quarantined} = MeasurementEvents.put(bind, event, S.hash("changed"))
-    S.rows(c.db, "UPDATE device_sessions SET phase='sealed' WHERE id=$1", [bind.id])
-    assert {:ok, :durable} = MeasurementEvents.put(bind, event, S.hash("one"))
-
-    assert {:ok, :quarantined} =
-             MeasurementEvents.put(
-               bind,
-               %{"event_id" => "two", "gateway_sequence" => "1"},
-               S.hash("two")
-             )
-
-    assert [[1]] =
-             S.rows(c.db, "SELECT count(*) FROM measurement_events WHERE acquisition_id=$1", [
-               bind.id
-             ])
-
-    assert [[2]] =
-             S.rows(
-               c.db,
-               "SELECT count(*) FROM device_facts WHERE acquisition_id=$1 AND kind='quarantine'",
-               [bind.id]
-             )
+  test "a quiescent used fence needs a new admission generation before another writable attempt", c do
+    hello = F.hello()
+    {:ok, bind} = AcquisitionSessions.admit(c.db, c.principal, hello)
+    assert {:ok, first} = AcquisitionSessions.scoped(c.db, bind, fn tx, s -> AcquisitionSessions.reserve_attempt(tx, s, "audio") end, :update)
+    assert {:ok, ^first} = AcquisitionSessions.scoped(c.db, bind, fn tx, s -> AcquisitionSessions.reserve_attempt(tx, s, "audio") end, :update)
+    assert {:ok, _} = AcquisitionSessions.scoped(c.db, bind, fn tx, _ -> AcquisitionSessions.mark_attempt(tx, first.fence, "quiescent") end, :update)
+    assert {:error, :readmission_required} = AcquisitionSessions.scoped(c.db, bind, fn tx, s -> AcquisitionSessions.reserve_attempt(tx, s, "audio") end, :update)
+    {:ok, next_bind} = AcquisitionSessions.admit(c.db, c.principal, hello)
+    assert {:ok, next} = AcquisitionSessions.scoped(c.db, next_bind, fn tx, s -> AcquisitionSessions.reserve_attempt(tx, s, "audio") end, :update)
+    assert next.fence != first.fence and next.generation == first.generation + 1
   end
 
-  test "command uses the highest confirmed epoch for the admitted boot", c do
-    assert {:ok, bind} = reserve(c, "paired_exam", "epochs-" <> c.enc)
-
-    for {suffix, boot, epoch, seconds_old} <- [
-          {"older", bind.boot, "10", 20},
-          {"newer", bind.boot, "2", 10},
-          {"other-boot", "other-boot", "99", 1}
-        ] do
-      S.rows(
-        c.db,
-        """
-        INSERT INTO device_commands(id,acquisition_id,fingerprint,request,state,result,updated_at)
-        VALUES($1,$2,'test',$3,'applied',$4,clock_timestamp()-$5::int*interval '1 second')
-        """,
-        [bind.id <> suffix, bind.id, %{"boot" => boot}, %{"epoch" => epoch}, seconds_old]
-      )
-    end
-
-    assert {:ok, :ok} = DeviceCommands.request(c.enc, bind.id, c.actor, "half")
-    assert {:ok, %{"type" => "command", "expected_epoch" => "10"}} = DeviceCommands.poll(bind)
-  end
-
-  test "timed out command stays unknown until a matching state result reconciles it", c do
-    assert {:ok, bind} = reserve(c, "paired_exam", "command-" <> c.enc)
-    assert {:ok, :ok} = DeviceCommands.request(c.enc, bind.id, c.actor, "half")
-    assert {:ok, %{"type" => "command"} = command} = DeviceCommands.poll(bind)
-    assert {:ok, %{"type" => "heartbeat"}} = DeviceCommands.poll(bind)
-
-    S.rows(c.db, "UPDATE device_commands SET updated_at=now()-interval '4 seconds' WHERE id=$1", [
-      command["id"]
-    ])
-
-    assert {:ok, %{"type" => "state_query"} = query} = DeviceCommands.poll(bind)
-    assert query["id"] == command["id"]
-
-    assert {:error, :reconciliation_required} =
-             DeviceCommands.request(c.enc, bind.id, c.actor, "unity")
-
-    result =
-      Map.take(command, ["id", "fingerprint", "boot", "gain"])
-      |> Map.merge(%{"status" => "reconciled", "epoch" => "1"})
-
-    assert {:error, :command_conflict} =
-             DeviceCommands.result(bind, Map.put(result, "boot", "wrong-boot"))
-
-    assert {:ok, :ok} = DeviceCommands.result(bind, result)
-    assert {:ok, :ok} = DeviceCommands.result(bind, result)
-
-    assert [["command_dispatching"], ["command_outcome_unknown"], ["command_reconciled"]] =
-             S.rows(
-               c.db,
-               "SELECT kind FROM device_facts WHERE acquisition_id=$1 AND kind != 'command_requested' ORDER BY ordinal",
-               [bind.id]
-             )
-
-    assert {:ok, :ok} = DeviceCommands.request(c.enc, bind.id, c.actor, "unity")
-  end
-
-  test "command and heartbeat progress during a locked stream, then revocation fences both", c do
-    assert {:ok, bind} = reserve(c, "paired_exam", "stall-" <> c.enc)
-    audio = create_attempt(c.db, bind, "audio", 1)
-    ecg = create_attempt(c.db, bind, "ecg", 2)
+  test "shared admission scope and rotation follow encounter-first exclusion without grant lock inversion", c do
+    hello = F.hello()
+    {:ok, bind} = AcquisitionSessions.admit(c.db, c.principal, hello)
     parent = self()
+    holder = Task.async(fn -> AcquisitionSessions.scoped(c.db, bind, fn tx, _ ->
+      send(parent, {:admission_locked, Postgres.backend_id(tx)})
+      receive do :read_grant -> AcquisitionSessions.rows(tx,
+        "SELECT site FROM device_grants WHERE encounter_id='encounter' AND device_id='gateway' AND profile='paired_exam' FOR SHARE", [])
+      after 10_000 -> raise "admission barrier was not released" end
+    end) end)
+    assert_receive {:admission_locked, backend}, 3000
+    rotation = Task.async(fn -> AcquisitionSessions.admit(c.db, c.principal, hello) end)
+    assert F.blocked_by?(c.db, backend)
+    send(holder.pid, :read_grant)
+    assert {:ok, [["Synthetic anterior site"]]} = Task.await(holder, 10_000)
+    assert {:ok, rotated} = Task.await(rotation, 10_000)
+    assert rotated.generation == bind.generation + 1
+    assert {:error, :stale_binding} = AcquisitionSessions.scoped(c.db, bind, fn _, _ -> :obsolete end)
+  end
 
-    stalled =
-      Task.async(fn ->
-        S.scoped(bind, fn tx, _ ->
-          update_receipt(tx, ecg, "13")
-          hold_transaction(tx, parent, :stream_held)
-        end)
-      end)
-
-    assert_receive {:stream_held, stream_backend}, 3000
-
-    assert {:error, %Postgrex.Error{postgres: %{code: :lock_not_available}}} =
-             Postgrex.query(
-               c.db,
-               "SELECT fence FROM stream_attempts WHERE fence=$1 FOR UPDATE NOWAIT",
-               [ecg]
-             )
-
-    gate =
-      Task.async(fn ->
-        Postgrex.transaction(c.db, fn tx ->
-          S.rows(tx, "SELECT pg_advisory_xact_lock(hashtextextended($1,73160650))", [bind.id])
-          hold_transaction(tx, parent, :command_gate_held)
-        end)
-      end)
-
-    assert_receive {:command_gate_held, command_backend}, 3000
-    request = Task.async(fn -> DeviceCommands.request(c.enc, bind.id, c.actor, "half") end)
-    assert_blocked_by(c.db, command_backend)
-    send(gate.pid, :release)
-    assert {:ok, :released} = Task.await(gate, 3000)
+  test "heartbeat and command exchange progress during a stalled admitted effect while revoke waits", c do
+    {:ok, bind} = AcquisitionSessions.admit(c.db, c.principal, F.hello())
+    parent = self()
+    effect = Task.async(fn -> AcquisitionSessions.scoped(c.db, bind, fn tx, _ ->
+      send(parent, {:effect_locked, Postgres.backend_id(tx)})
+      receive do :release -> :settled after 10_000 -> raise "effect barrier was not released" end
+    end) end)
+    assert_receive {:effect_locked, backend}, 3000
+    heartbeat = Task.async(fn -> AcquisitionSessions.heartbeat(c.db, bind, "during_effect") end)
+    assert {:ok, %{nonce: "during_effect", remaining_ms: remaining}} = Task.await(heartbeat, 3000)
+    assert remaining in 1..30_000
+    request = Task.async(fn -> DeviceCommands.request(c.db, "encounter", bind.id, "clinician", "half") end)
     assert {:ok, :ok} = Task.await(request, 3000)
-
-    sibling =
-      Task.async(fn ->
-        S.scoped(bind, fn tx, _ -> update_receipt(tx, audio, "4") end)
-      end)
-
-    heartbeat = Task.async(fn -> S.heartbeat(bind) end)
-    assert {:ok, [[^audio]]} = Task.await(sibling, 3000)
-    assert {:ok, :ok} = Task.await(heartbeat, 3000)
-
-    assert {:ok,
-            %{"type" => "command", "watermarks" => %{"audio" => "0", "ecg" => "0"}} = command} =
-             DeviceCommands.poll(bind)
-
-    assert [[1]] =
-             S.rows(c.db, "SELECT count FROM device_heartbeats WHERE acquisition_id=$1", [bind.id])
-
-    assert receipt_sample(c.db, audio) == "4"
-
-    assert receipt_sample(c.db, ecg) == "0"
-
-    revoke =
-      Task.async(fn ->
-        S.rows(
-          c.db,
-          "UPDATE device_credentials SET revoked=true WHERE device_id=$1 RETURNING device_id",
-          [c.device]
-        )
-      end)
-
-    assert_blocked_by(c.db, stream_backend)
-    send(stalled.pid, :release)
-    assert {:ok, :released} = Task.await(stalled, 3000)
-    assert [[device]] = Task.await(revoke, 3000)
-    assert device == c.device
-    assert receipt_sample(c.db, ecg) == "13"
-
-    result =
-      command
-      |> Map.take(~w(id fingerprint boot gain))
-      |> Map.merge(%{"status" => "applied", "epoch" => "1", "first_sample" => "0"})
-
-    assert {:error, :stale_lease} = DeviceCommands.result(bind, result)
-    assert {:error, :stale_lease} = DeviceCommands.poll(bind)
-    assert {:error, :stale_lease} = S.heartbeat(bind)
-    assert {:error, :stale_lease} = S.scoped(bind, fn tx, _ -> update_receipt(tx, audio, "9") end)
-
-    assert receipt_sample(c.db, audio) == "4"
-
-    assert S.rows(c.db, "SELECT state,result FROM device_commands WHERE id=$1", [command["id"]]) ==
-             [["dispatching", %{}]]
-
-    assert [[1]] =
-             S.rows(c.db, "SELECT count FROM device_heartbeats WHERE acquisition_id=$1", [bind.id])
+    poll = Task.async(fn -> DeviceCommands.poll(c.db, bind, "command_during_effect") end)
+    assert {:ok, %{"type" => "command", "command" => command}} = Task.await(poll, 3000)
+    result = Task.async(fn -> DeviceCommands.result(c.db, bind, F.applied(command)) end)
+    assert {:ok, :ok} = Task.await(result, 3000)
+    revoke = Task.async(fn -> DeviceSessions.revoke(c.db, "encounter", "gateway", "paired_exam", "clinician") end)
+    assert F.blocked_by?(c.db, backend)
+    send(effect.pid, :release)
+    assert {:ok, :settled} = Task.await(effect, 10_000)
+    assert {:ok, :ok} = Task.await(revoke, 10_000)
+    assert {:error, :stale_binding} = AcquisitionSessions.heartbeat(c.db, bind, "after_revoke")
+    assert {:error, :stale_binding} = DeviceCommands.poll(c.db, bind, "after_revoke")
+    assert {:error, :stale_binding} = DeviceCommands.result(c.db, bind, F.applied(command))
+    assert [["applied"]] = AcquisitionSessions.rows(c.db, "SELECT state FROM device_commands WHERE id=$1", [command["id"]])
   end
 
-  test "heartbeat cannot revive an expired lease or a stale generation", c do
-    assert {:ok, old} = reserve(c, "paired_exam", "expired-" <> c.enc)
-    assert {:ok, bind} = reserve(c, "paired_exam", old.id)
-    assert {:error, :stale_lease} = S.heartbeat(old)
-    assert {:error, :stale_lease} = DeviceCommands.poll(old)
-    assert {:ok, :ok} = DeviceCommands.request(c.enc, bind.id, c.actor, "half")
-    assert {:ok, :ok} = S.heartbeat(bind)
-
-    S.rows(
-      c.db,
-      "UPDATE device_heartbeats SET seen_at=now()-interval '61 seconds' WHERE acquisition_id=$1",
-      [bind.id]
-    )
-
-    S.rows(c.db, "UPDATE device_sessions SET expires_at=now()-interval '1 second' WHERE id=$1", [
-      bind.id
-    ])
-
-    assert {:error, :stale_lease} = S.heartbeat(bind)
-    assert {:error, :stale_lease} = DeviceCommands.poll(bind)
-
-    assert [[1]] =
-             S.rows(c.db, "SELECT count FROM device_heartbeats WHERE acquisition_id=$1", [bind.id])
-
-    assert [["requested"]] =
-             S.rows(c.db, "SELECT state FROM device_commands WHERE acquisition_id=$1", [bind.id])
+  test "typed PLX events replay exactly and conflicting identities cannot alter the frozen inventory", c do
+    {:ok, bind} = AcquisitionSessions.admit(c.db, c.principal, F.hello("plx_spot_check", "plx"))
+    event = F.event(bind.id)
+    assert {:ok, ack} = MeasurementEvents.put(c.db, bind, event)
+    assert ack.event_id == event["event_id"] and ack.fingerprint == Serialization.digest(event)
+    assert {:ok, ^ack} = MeasurementEvents.put(c.db, bind, event)
+    assert {:error, :event_conflict} = MeasurementEvents.put(c.db, bind, F.event(bind.id, "event_one", 0, 730))
+    assert {:error, :event_conflict} = MeasurementEvents.put(c.db, bind, F.event(bind.id, "other_id", 0))
+    final = %{"count" => "1", "digest" => Serialization.digest([[event["event_id"], ack.fingerprint]])}
+    assert {:ok, :ok} = AcquisitionSessions.freeze(c.db, bind, final, %{"fixture" => "explicit_clock"})
+    assert {:ok, ^ack} = MeasurementEvents.put(c.db, bind, event)
+    assert {:error, :inventory_conflict} = MeasurementEvents.put(c.db, bind, F.event(bind.id, "late_event", 1))
+    assert [[1]] = AcquisitionSessions.rows(c.db, "SELECT count(*) FROM measurement_events", [])
+    assert_raise Postgrex.Error, fn -> AcquisitionSessions.rows(c.db, "DELETE FROM measurement_events", []) end
   end
 
-  test "finalization cancels an undispatched command before reading frozen facts", c do
-    assert {:ok, bind} = reserve(c, "paired_exam", "command-cancel-" <> c.enc)
-    assert {:ok, :ok} = DeviceCommands.request(c.enc, bind.id, c.actor, "half")
-
-    assert [requested, closed] = facts_at_freeze(bind)
-    assert %{"type" => "command_requested", "body" => %{"id" => id}} = requested
-
-    assert %{
-             "type" => "command_cancelled_before_dispatch",
-             "body" => %{"id" => ^id, "reason" => "collection_ended"}
-           } = closed
-
-    assert {:ok, %{"type" => "heartbeat"}} = DeviceCommands.poll(bind)
-    assert facts_at_freeze(bind) == [requested, closed]
+  test "timed-out command requires exact historical application and preserves an unknown sample boundary", c do
+    {:ok, bind} = AcquisitionSessions.admit(c.db, c.principal, F.hello())
+    assert {:ok, :ok} = DeviceCommands.request(c.db, "encounter", bind.id, "clinician", "half")
+    assert {:ok, %{"type" => "command", "nonce" => "first_poll", "command" => command, "command_remaining_ms" => remaining}} = DeviceCommands.poll(c.db, bind, "first_poll")
+    assert remaining in 1..30_000
+    assert command["boot"] == bind.boot and command["generation"] == to_string(bind.generation)
+    assert {:error, :reconciliation_required} = DeviceCommands.request(c.db, "encounter", bind.id, "clinician", "unity")
+    AcquisitionSessions.rows(c.db, "UPDATE device_commands SET updated_at=clock_timestamp()-interval '4 seconds' WHERE id=$1", [command["id"]])
+    assert {:ok, %{"type" => "state_query", "id" => id}} = DeviceCommands.poll(c.db, bind, "readback_poll")
+    assert id == command["id"]
+    assert {:error, :command_conflict} = DeviceCommands.result(c.db, bind, %{"id" => id, "gain" => "half", "expected_epoch" => "0", "epoch" => "1", "status" => "applied"})
+    result = F.applied(command, "unknown")
+    for {key, value} <- [{"fingerprint", String.duplicate("f", 64)}, {"boot", "another_boot"}, {"target", "raw_source"}, {"generation", "0"}, {"epoch", "2"}] do
+      assert {:error, :command_conflict} = DeviceCommands.result(c.db, bind, Map.put(result, key, value))
+    end
+    assert {:ok, :ok} = DeviceCommands.result(c.db, bind, result)
+    assert {:ok, :ok} = DeviceCommands.result(c.db, bind, result)
+    assert [["applied", ^result]] = AcquisitionSessions.rows(c.db, "SELECT state,result FROM device_commands WHERE id=$1", [id])
+    assert [["command_requested"], ["command_dispatching"], ["command_outcome_unknown"], ["command_applied"]] = AcquisitionSessions.rows(c.db,
+      "SELECT kind FROM acquisition_facts WHERE acquisition_id=$1 ORDER BY ordinal", [bind.id])
+    assert {:ok, :ok} = DeviceCommands.request(c.db, "encounter", bind.id, "clinician", "unity")
+    assert {:ok, %{"command" => %{"expected_epoch" => "1"}}} = DeviceCommands.poll(c.db, bind, "next_poll")
   end
 
-  test "finalization freezes an unanswered dispatch as outcome unknown before readback", c do
-    assert {:ok, bind} = reserve(c, "paired_exam", "command-freeze-" <> c.enc)
-    assert {:ok, :ok} = DeviceCommands.request(c.enc, bind.id, c.actor, "half")
-    assert {:ok, %{"type" => "command", "id" => id}} = DeviceCommands.poll(bind)
-
-    assert [requested, dispatched, closed] = facts_at_freeze(bind)
-    assert %{"type" => "command_requested", "body" => %{"id" => ^id}} = requested
-    assert %{"type" => "command_dispatching", "body" => %{"id" => ^id}} = dispatched
-
-    assert %{
-             "type" => "command_outcome_unknown",
-             "body" => %{"id" => ^id, "reason" => "collection_ended_without_result"}
-           } = closed
-
-    assert [[state, result, 0]] =
-             S.rows(c.db, "SELECT state,result,readback_count FROM device_commands WHERE id=$1", [
-               id
-             ])
-
-    assert state == "outcome_unknown"
-    assert result == %{"reason" => "collection_ended_without_result"}
-    assert facts_at_freeze(bind) == [requested, dispatched, closed]
+  test "expired requested command is known rejected and readback attempts remain bounded", c do
+    {:ok, bind} = AcquisitionSessions.admit(c.db, c.principal, F.hello())
+    assert {:ok, :ok} = DeviceCommands.request(c.db, "encounter", bind.id, "clinician", "half")
+    AcquisitionSessions.rows(c.db, "UPDATE device_commands SET expires_at=clock_timestamp()-interval '1 second' WHERE acquisition_id=$1", [bind.id])
+    assert {:ok, %{"type" => "heartbeat_reply"}} = DeviceCommands.poll(c.db, bind, "expired_request")
+    assert [["rejected", %{"reason" => "expired_before_dispatch"}]] = AcquisitionSessions.rows(c.db, "SELECT state,result FROM device_commands", [])
+    assert {:ok, :ok} = DeviceCommands.request(c.db, "encounter", bind.id, "clinician", "unity")
+    {:ok, %{"command" => command}} = DeviceCommands.poll(c.db, bind, "dispatch")
+    AcquisitionSessions.rows(c.db, "UPDATE device_commands SET updated_at=clock_timestamp()-interval '4 seconds' WHERE id=$1", [command["id"]])
+    assert {:ok, %{"type" => "state_query"}} = DeviceCommands.poll(c.db, bind, "timeout")
+    for n <- 1..3 do
+      AcquisitionSessions.rows(c.db, "UPDATE device_commands SET updated_at=clock_timestamp()-interval '2 seconds' WHERE id=$1", [command["id"]])
+      assert {:ok, %{"type" => "state_query"}} = DeviceCommands.poll(c.db, bind, "query_#{n}")
+    end
+    AcquisitionSessions.rows(c.db, "UPDATE device_commands SET updated_at=clock_timestamp()-interval '2 seconds' WHERE id=$1", [command["id"]])
+    assert {:ok, %{"type" => "heartbeat_reply"}} = DeviceCommands.poll(c.db, bind, "query_exhausted")
+    assert [[3, "outcome_unknown"]] = AcquisitionSessions.rows(c.db, "SELECT readback_count,state FROM device_commands WHERE id=$1", [command["id"]])
   end
 
-  defp create_attempt(db, bind, stream, number) do
-    fence = S.nonce()
-
-    S.rows(
-      db,
-      "INSERT INTO stream_attempts(acquisition_id,stream,number,generation,fence,receipt) VALUES($1,$2,$3,$4,$5,$6)",
-      [bind.id, stream, number, bind.generation, fence, %{"durable_sample" => "0"}]
-    )
-
-    fence
-  end
-
-  defp receipt_sample(db, fence) do
-    [[sample]] =
-      S.rows(db, "SELECT receipt->>'durable_sample' FROM stream_attempts WHERE fence=$1", [fence])
-
-    sample
-  end
-
-  defp update_receipt(tx, fence, sample) do
-    S.rows(tx, "UPDATE stream_attempts SET receipt=$2 WHERE fence=$1 RETURNING fence", [
-      fence,
-      %{"durable_sample" => sample}
-    ])
-  end
-
-  defp hold_transaction(tx, parent, marker) do
-    [[backend]] = S.rows(tx, "SELECT pg_backend_pid()", [])
-    send(parent, {marker, backend})
-
-    receive do
-      :release -> :released
-    after
-      15_000 -> raise "test database lock was never released"
+  test "freeze records undispatched rejection or dispatched unknown exactly once and refuses late result", c do
+    for dispatched? <- [false, true] do
+      # Separate fixture namespace permits the same profile while retaining
+      # both immutable source histories and exercising the public Store path.
+      local = if dispatched?, do: F.database(), else: c
+      if dispatched? do F.encounter(local.db); F.device(local.db) end
+      {:ok, bind} = AcquisitionSessions.admit(local.db, c.principal, F.hello())
+      assert {:ok, :ok} = DeviceCommands.request(local.db, "encounter", bind.id, "clinician", "half")
+      command = if dispatched? do
+        {:ok, %{"command" => command}} = DeviceCommands.poll(local.db, bind, "dispatch")
+        command
+      end
+      assert {:ok, :ok} = AcquisitionSessions.freeze(local.db, bind, %{}, %{"fixture" => "explicit_clock"})
+      {:ok, before} = AcquisitionSessions.settlement(local.db, bind.id, fn tx, _ -> AcquisitionSessions.facts(tx, bind.id) end)
+      assert {:ok, :ok} = AcquisitionSessions.freeze(local.db, bind, %{}, %{"fixture" => "ignored_on_exact_retry"})
+      {:ok, after_retry} = AcquisitionSessions.settlement(local.db, bind.id, fn tx, _ -> AcquisitionSessions.facts(tx, bind.id) end)
+      assert after_retry == before
+      expected = if dispatched?, do: "outcome_unknown", else: "rejected"
+      assert [[^expected]] = AcquisitionSessions.rows(local.db, "SELECT state FROM device_commands", [])
+      if command, do: assert({:error, :frozen_evidence} = DeviceCommands.result(local.db, bind, F.applied(command)))
+      assert {:error, :inactive} = DeviceCommands.request(local.db, "encounter", bind.id, "clinician", "unity")
     end
   end
-
-  defp assert_blocked_by(db, backend) do
-    assert blocked_by?(db, backend, System.monotonic_time(:millisecond) + 3000),
-           "expected a PostgreSQL lock wait on backend #{backend}"
-  end
-
-  defp blocked_by?(db, backend, deadline) do
-    case S.rows(
-           db,
-           "SELECT 1 FROM pg_stat_activity WHERE $1::int=ANY(pg_blocking_pids(pid))",
-           [backend]
-         ) do
-      [] ->
-        if System.monotonic_time(:millisecond) < deadline do
-          Process.sleep(10)
-          blocked_by?(db, backend, deadline)
-        else
-          false
-        end
-
-      _ ->
-        true
-    end
-  end
-
-  defp facts_at_freeze(bind) do
-    assert {:ok, facts} =
-             S.scoped(
-               bind,
-               fn tx, _ ->
-                 S.rows(tx, "UPDATE device_sessions SET phase='finalizing' WHERE id=$1", [bind.id])
-
-                 :ok = DeviceCommands.close_pending(tx, bind.id)
-                 S.facts(tx, bind.id)
-               end,
-               :update
-             )
-
-    facts
-  end
-
-  defp reserve(c, profile, id), do: S.reserve(c.device, c.enc, id, profile, "boot-a", %{})
 end

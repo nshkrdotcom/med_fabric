@@ -163,7 +163,7 @@ defmodule MedFabric.Acceptance.Oracle do
     )
 
     [mutation] = Map.values(monitor["cache"])
-    changed = integer(mutation["first_sample"])
+    changed = integer(mutation["result"]["application"]["first_sample"])
 
     {count, raw, expected} =
       File.stream!(Path.join(root, "monitor-truth.jsonl"))
@@ -270,16 +270,16 @@ defmodule MedFabric.Acceptance.Oracle do
     check!(not cursor["done"], "Restart fixture already completed")
     sequence = integer(cursor["sequence"])
     sample = integer(cursor["sample"])
-    receipt_path = Path.join(root, "receipt.json")
+    receipt_path = Path.join(root, "ack.json")
 
     if File.exists?(receipt_path) do
-      receipt = read(receipt_path)
+      receipt = read(receipt_path)["receipt"]
       durable_sequence = integer(receipt["durable_sequence"])
       durable_sample = integer(receipt["durable_sample"])
 
       check!(
-        (durable_sequence < sequence and durable_sample < sample) or
-          (durable_sequence > sequence and durable_sample > sample) or
+        (durable_sequence <= sequence and durable_sample < sample) or
+          (durable_sequence >= sequence and durable_sample > sample) or
           {durable_sequence, durable_sample} == {sequence, sample},
         "Restart receipt and source cursor disagree"
       )
@@ -291,7 +291,7 @@ defmodule MedFabric.Acceptance.Oracle do
   end
 
   defp cutoff!(root, sequence, sample) do
-    path = Path.join(root, "#{sequence}.rec")
+    path = Path.join(root, "#{sequence}-#{sample}.rec")
 
     case File.read(path) do
       {:error, :enoent} ->
@@ -300,10 +300,40 @@ defmodule MedFabric.Acceptance.Oracle do
       {:ok, <<digest::binary-size(32), frame::binary>>} ->
         check!(:crypto.hash(:sha256, frame) == digest, "Corrupt independent spool record")
 
-        <<"MEX1", _::binary-size(16), ^sequence::unsigned-big-64, ^sample::unsigned-big-64,
-          count::unsigned-big-32, _::binary>> = frame
+        case frame do
+          <<"MEX1", 1, 0, 48::unsigned-big-16, _handle::32, _epoch::32, _config::32,
+            ^sequence::unsigned-big-64, ^sample::unsigned-big-64, count::unsigned-big-32,
+            size::unsigned-big-32, 0::32, payload::binary>>
+          when size == byte_size(payload) ->
+            check!(count > 0 and size > 0 and size <= 65_536, "Invalid independent frame")
+            cutoff!(root, sequence + 1, sample + count)
 
-        cutoff!(root, sequence + 1, sample + count)
+          _ ->
+            gap = JSON.decode!(frame)
+
+            check!(
+              Enum.sort(Map.keys(gap)) ==
+                Enum.sort(~w(id first end first_sequence next_sequence irreversible cause)) and
+                is_binary(gap["id"]) and gap["id"] != "" and
+                is_binary(gap["cause"]) and gap["cause"] != "" and
+                gap["irreversible"] == true and
+                Enum.all?(~w(first end first_sequence next_sequence), fn key ->
+                  is_binary(gap[key]) and Regex.match?(~r/\A(?:0|[1-9][0-9]*)\z/, gap[key])
+                end) and integer(gap["first_sequence"]) == sequence and
+                integer(gap["first"]) == sample,
+              "Invalid independent source gap"
+            )
+
+            next_sequence = integer(gap["next_sequence"])
+            next_sample = integer(gap["end"])
+
+            check!(
+              next_sequence >= sequence and next_sample > sample,
+              "Nonprogressing source gap"
+            )
+
+            cutoff!(root, next_sequence, next_sample)
+        end
 
       other ->
         raise "Invalid spool record: #{inspect(elem(other, 0))}"

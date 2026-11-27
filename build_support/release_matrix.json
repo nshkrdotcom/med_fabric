@@ -1,0 +1,57 @@
+{
+  "schema": "medfabric.release.v2",
+  "date": "2026-11-26",
+  "api_revision": 2,
+  "docset_revision": 3,
+  "status": "source implementation; native qualification required",
+  "packages": [
+    {
+      "name": "med_ex",
+      "version": "0.4.0",
+      "repository": "med_ex",
+      "path": ".",
+      "build": "weld",
+      "requirement": "~> 0.4.0"
+    },
+    {
+      "name": "med_ex_opus",
+      "version": "0.3.0",
+      "repository": "med_ex",
+      "path": "extensions/med_ex_opus",
+      "build": "mix",
+      "requirement": "~> 0.3.0"
+    },
+    {
+      "name": "med_ex_rtc",
+      "version": "0.3.0",
+      "repository": "med_ex",
+      "path": "extensions/med_ex_rtc",
+      "build": "mix",
+      "requirement": "~> 0.3.0"
+    },
+    {
+      "name": "mf_exam",
+      "version": "0.3.0",
+      "repository": "med_fabric",
+      "path": "apps/exam",
+      "build": "weld",
+      "requirement": "~> 0.3.0"
+    },
+    {
+      "name": "mf_handheld",
+      "version": "0.3.0",
+      "repository": "med_fabric",
+      "path": "apps/handheld",
+      "build": "mix",
+      "requirement": "~> 0.3.0"
+    },
+    {
+      "name": "mf_preview",
+      "version": "0.3.0",
+      "repository": "med_fabric",
+      "path": "apps/preview",
+      "build": "mix",
+      "requirement": "~> 0.3.0"
+    }
+  ]
+}

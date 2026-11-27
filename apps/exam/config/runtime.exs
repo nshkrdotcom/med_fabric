@@ -43,17 +43,12 @@ if settings != nil or System.get_env("MF_LAB") == "1" do
       %{
         "exam" => id,
         "patient_actor" => patient,
-        "clinician_actor" => clinician,
-        "patient_ref" => patient_ref,
-        "encounter_ref" => encounter_ref,
-        "destination" => destination
+        "clinician_actor" => clinician
       } = entry
 
       unless Regex.match?(~r/\A[a-zA-Z0-9-]{1,48}\z/, id) and
-               Enum.all?([patient, clinician, destination], &(is_binary(&1) and &1 != "")) and
-               patient != clinician and
-               Regex.match?(~r/\APatient\/[A-Za-z0-9.\-]{1,64}\z/, patient_ref) and
-               Regex.match?(~r/\AEncounter\/[A-Za-z0-9.\-]{1,64}\z/, encounter_ref) do
+               Enum.all?([patient, clinician], &(is_binary(&1) and &1 != "")) and
+               patient != clinician do
         raise "Invalid encounter configuration for #{inspect(id)}"
       end
 
@@ -73,6 +68,8 @@ if settings != nil or System.get_env("MF_LAB") == "1" do
            uri.path in [nil, "", "/"] and is_nil(uri.userinfo) and is_nil(uri.query) and
            is_nil(uri.fragment),
          do: raise("public origin must be a localhost HTTP origin or a public HTTPS origin")
+
+  public_uri = uri
 
   proxy_secret = secret.("proxy_secret", "MF_PROXY_SECRET")
 
@@ -140,11 +137,16 @@ if settings != nil or System.get_env("MF_LAB") == "1" do
       |> File.read!()
       |> String.trim()
 
-    if preview_secret == "", do: raise("Empty Preview credential")
+    if byte_size(preview_secret) < 32, do: raise("Preview credential requires at least 32 bytes")
     config :mf_exam, :sidecar, %{url: sidecar, secret: preview_secret}
   end
 
+  deployment_uuid = required.("deployment_uuid", "MF_DEPLOYMENT_UUID")
+  unless is_binary(deployment_uuid) and Regex.match?(~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/, deployment_uuid), do: raise("A valid immutable deployment UUID is required")
+
   config :mf_exam, :lab, %{
+    deployment_uuid: deployment_uuid,
+    public_origin: origin,
     device_enabled: not is_nil(cert),
     encounters: entries,
     local?: local?,
@@ -164,14 +166,9 @@ if settings != nil or System.get_env("MF_LAB") == "1" do
     live_view: [signing_salt: "med_fabric_exam_lv_salt"],
     server: true,
     check_origin: if(local?, do: ["//localhost:#{port}", "//127.0.0.1:#{port}"], else: [origin]),
-    url: [scheme: uri.scheme, host: uri.host, port: uri.port],
+    url: [scheme: public_uri.scheme, host: public_uri.host, port: public_uri.port],
     http: [ip: {127, 0, 0, 1}, port: port],
     secret_key_base:
       secret.("secret_key_base", "MF_SECRET_KEY_BASE") ||
         raise("Missing secret_key_base credential")
-end
-
-if is_nil(settings) and System.get_env("MF_EXAM_LEGACY_MEDIA") == "1" do
-  config :med_ex, :rtc_provider, MedEx.RTC.Provider
-  config :med_ex, :preview_provider, MedEx.Opus.Provider
 end

@@ -8,19 +8,15 @@ defmodule MedFabric.Exam.MixProject do
   @source_url "https://github.com/nshkrdotcom/med_fabric"
 
   def project do
-    legacy_media? = System.get_env("MF_EXAM_LEGACY_MEDIA") == "1"
-    profile = if legacy_media?, do: :legacy_media, else: :default
-
     {deps, paths} =
       if Code.ensure_loaded?(MedFabric.BuildSources) do
         MedFabric.BuildSources.resolve(
-          deps(legacy_media?),
+          deps(),
           __DIR__,
-          Path.expand("../..", __DIR__),
-          profile: profile
+          Path.expand("../..", __DIR__)
         )
       else
-        {deps(legacy_media?), []}
+        {deps(), []}
       end
 
     [
@@ -42,11 +38,11 @@ defmodule MedFabric.Exam.MixProject do
     [mod: {MedFabric.Exam.Application, []}]
   end
 
-  defp deps(legacy_media?) do
+  defp deps() do
     med_ex_dep =
       if Code.ensure_loaded?(MedFabric.BuildSources),
         do: MedFabric.BuildSources.med_ex_dependency(:med_ex),
-        else: {:med_ex, "~> 0.3.1"}
+        else: {:med_ex, "~> 0.4.0"}
 
     [
       {:mf_domain, path: "../../core/domain"},
@@ -62,14 +58,7 @@ defmodule MedFabric.Exam.MixProject do
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40.5", only: :dev, runtime: false}
-    ] ++
-      if(legacy_media?,
-        do: [
-          MedFabric.BuildSources.med_ex_dependency(:med_ex_opus),
-          MedFabric.BuildSources.med_ex_dependency(:med_ex_rtc)
-        ],
-        else: []
-      )
+    ]
   end
 
   defp docs do
@@ -107,18 +96,17 @@ defmodule MedFabric.Exam.MixProject do
           MedFabric.Exam.Context,
           MedFabric.Exam.Barrier
         ],
-        "Device Ingestion & Workflow": [
-          MedFabric.Exam.DeviceIngress,
-          MedFabric.Exam.DeviceManifest,
-          MedFabric.Exam.DeviceWorkflow,
-          MedFabric.Exam.DeviceReviews,
-          MedFabric.Exam.DeviceExpiry,
+        "Acquisition & Workflow": [
+          MedFabric.Exam.AcquisitionIngress,
+          MedFabric.Exam.AcquisitionManifest,
+          MedFabric.Exam.AcquisitionWorkflow,
+          MedFabric.Exam.AcquisitionReviews,
+          MedFabric.Exam.AcquisitionExpiry,
+          MedFabric.Exam.AcquisitionRecovery,
           MedFabric.Exam.DeviceRootLock,
           MedFabric.Exam.ClockObservations
         ],
-        "Recordings & Preview": [
-          MedFabric.Exam.Artifact,
-          MedFabric.Exam.Recordings,
+        "Optional Monitoring": [
           MedFabric.Exam.PreviewGateway,
           MedFabric.Exam.ICE
         ],
@@ -131,9 +119,9 @@ defmodule MedFabric.Exam.MixProject do
           MedFabric.ExamWeb.DeviceAction,
           MedFabric.ExamWeb.DeviceSegment,
           MedFabric.ExamWeb.DeviceSocket,
-          MedFabric.ExamWeb.PCMSocket,
+          MedFabric.ExamWeb.BrowserStreamSocket,
+          MedFabric.ExamWeb.AcquisitionSocket,
           MedFabric.ExamWeb.UserSocket,
-          MedFabric.ExamWeb.SignalingChannel,
           MedFabric.ExamWeb.TalkbackChannel,
           MedFabric.ExamWeb.ProxyIdentity
         ]

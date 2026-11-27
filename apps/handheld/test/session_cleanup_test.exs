@@ -1,287 +1,61 @@
 defmodule MedExHandheld.SessionCleanupTest do
   use ExUnit.Case, async: true
+  alias MedExHandheld.{Session, Transport}
 
-  setup context do
-    if dir = context[:tmp_dir], do: on_exit(fn -> File.rm_rf!(dir) end)
-    :ok
-  end
-
-  alias MedExHandheld.{Session, Spool}
-
-  @tag :tmp_dir
-  test "failed initial admission releases all local owners while the caller survives", %{
-    tmp_dir: dir
-  } do
-    config = %{
-      "device" => "fixture",
-      "encounter" => "exam",
-      "acquisition" => "fresh",
-      "spool_root" => dir,
-      "server" => "wss://localhost:443",
-      "ca_file" => Path.join(dir, "unused-ca.pem"),
-      "credential_file" => Path.join(dir, "missing-device-credential")
-    }
-
-    links = caller_links()
-    assert_raise File.Error, fn -> Session.run(config, "plx_spot_check") end
-    assert caller_links() == links
-    pid = start_supervised!({Spool, [root: Path.join(dir, "fresh"), limit: 1000]})
-    assert Spool.stats(pid).bytes == 0
+  test "session dimensions reject clean completion before drain and invalidate authority on disconnect" do
+    initial = %{phase: :disconnected, binding: nil, authority_deadline: nil, stopped: false}
+    assert {:ok, resuming} = Session.transition(initial, :resume, 0)
+    assert {:error, _} = Session.transition(resuming, {:admitted, %{}, 0}, 1)
+    assert {:ok, active} = Session.transition(resuming, {:admitted, %{"connection" => "current"}, 100}, 1)
+    assert {:error, _} = Session.transition(active, {:sealed, String.duplicate("a", 64)}, 2)
+    assert {:ok, lost} = Session.transition(active, :transport_lost, 2)
+    assert lost.phase == :disconnected and lost.binding == nil and lost.authority_deadline == nil
+    assert {:ok, draining} = Session.transition(active, :source_stopped, 2)
+    assert {:ok, finalizing} = Session.transition(draining, :durably_drained, 3)
+    assert {:ok, complete} = Session.transition(finalizing, {:sealed, String.duplicate("a", 64)}, 4)
+    assert complete.phase == :complete
   end
 
   @tag :tmp_dir
-  test "a mismatched durable identity survives rejection and its spool lock is released", %{
-    tmp_dir: dir
-  } do
-    root = Path.join(dir, "exam")
-    persisted = Path.join(root, "identity.json")
-    identity = Map.put(identity(), "device", "other-device")
-    bytes = JSON.encode!(identity)
-    Spool.write!(persisted, bytes)
-
-    links = caller_links()
-
-    assert_raise RuntimeError, "spool identity mismatch", fn ->
-      Session.run(Map.put(identity(), "spool_root", dir), "plx_spot_check")
-    end
-
-    assert caller_links() == links
-    assert File.read!(persisted) == bytes
-    pid = start_supervised!({Spool, root: root, limit: 1000})
-    assert Spool.stats(pid).bytes == 0
+  test "invalid credential configuration creates no owners or spool evidence", %{tmp_dir: root} do
+    config = %{"device" => "device", "encounter" => "exam", "acquisition" => "acq", "spool_root" => root,
+      "server" => "wss://localhost:443", "credential_file" => Path.join(root, "absent")}
+    before = links()
+    assert_raise ArgumentError, "invalid Handheld configuration", fn -> Session.run(config, "plx_spot_check") end
+    assert links() == before
+    refute File.exists?(Path.join(root, "acq"))
+    assert {:error, :invalid_transport_configuration} = Transport.validate_config(%{config | "server" => "ws://localhost"})
   end
 
   @tag :tmp_dir
-  test "monitor initialization reports its error and leaves its durable state intact", %{
-    tmp_dir: dir
-  } do
-    root = Path.join(dir, "exam")
-    paired = %{identity() | "profile" => "paired_exam"}
-    Spool.write!(Path.join(root, "identity.json"), JSON.encode!(paired))
-    monitor_file = Path.join(root, "monitor.json")
-    bytes = JSON.encode!(%{"boot" => "other-boot"})
-    Spool.write!(monitor_file, bytes)
-
-    links = caller_links()
-
-    # Even an unreadable monitor state allows the session to reach admission.
-    config =
-      Map.merge(paired, %{
-        "spool_root" => dir,
-        "seed" => 1,
-        "server" => "wss://localhost:443",
-        "credential_file" => Path.join(dir, "missing-device-credential")
-      })
-
-    assert_raise File.Error, fn -> Session.run(config, "paired_exam") end
-    assert caller_links() == links
-    assert File.read!(monitor_file) == bytes
-    pid = start_supervised!({Spool, root: root, limit: 1000})
-    assert Spool.stats(pid).bytes == 0
+  test "namespace incompatibility is refused without network or mutation", %{tmp_dir: root} do
+    credential = Path.join(root, "credential")
+    File.write!(credential, String.duplicate("x", 32))
+    spool = Path.join(root, "acq")
+    File.mkdir_p!(spool)
+    bytes = "{\"revision\":1}"
+    File.write!(Path.join(spool, "identity.json"), bytes)
+    config = %{"device" => "device", "encounter" => "exam", "acquisition" => "acq", "spool_root" => root,
+      "server" => "wss://localhost:443", "credential_file" => credential}
+    assert_raise ArgumentError, "incompatible spool namespace", fn -> Session.run(config, "plx_spot_check") end
+    assert File.read!(Path.join(spool, "identity.json")) == bytes
   end
 
-  @tag :tmp_dir
-  test "PLX ignores paired monitor state and cleans up a peer-verified WSS refusal", %{
-    tmp_dir: dir
-  } do
-    cert = Path.join(dir, "cert.pem")
-    key = Path.join(dir, "key.pem")
-    credential = Path.join(dir, "credential")
-    Spool.write!(credential, "wrong-fixture-token")
-    monitor = Path.join([dir, "exam", "monitor.json"])
-    monitor_bytes = JSON.encode!(%{"boot" => "other-boot"})
-    Spool.write!(monitor, monitor_bytes)
-
-    ca = Path.join(dir, "ca.pem")
-    ca_key = Path.join(dir, "ca.key")
-
-    certificate!([
-      "-subj",
-      "/CN=Session cleanup test CA",
-      "-addext",
-      "basicConstraints=critical,CA:TRUE",
-      "-addext",
-      "keyUsage=critical,keyCertSign,cRLSign",
-      "-keyout",
-      ca_key,
-      "-out",
-      ca
-    ])
-
-    certificate!([
-      "-CA",
-      ca,
-      "-CAkey",
-      ca_key,
-      "-subj",
-      "/CN=localhost",
-      "-addext",
-      "subjectAltName=DNS:localhost",
-      "-addext",
-      "basicConstraints=critical,CA:FALSE",
-      "-addext",
-      "extendedKeyUsage=serverAuth",
-      "-keyout",
-      key,
-      "-out",
-      cert
-    ])
-
-    File.rm!(ca_key)
-
-    {:ok, listener} =
-      :ssl.listen(0,
-        ip: {127, 0, 0, 1},
-        active: false,
-        packet: :http_bin,
-        certfile: String.to_charlist(cert),
-        keyfile: String.to_charlist(key)
-      )
-
-    on_exit(fn -> :ssl.close(listener) end)
-    {:ok, {{127, 0, 0, 1}, port}} = :ssl.sockname(listener)
-
-    links = caller_links()
-
-    peer =
-      Task.async(fn ->
-        {:ok, socket} = :ssl.transport_accept(listener, 5000)
-        {:ok, socket} = :ssl.handshake(socket, 5000)
-
-        try do
-          {:ok, {:http_request, :GET, {:abs_path, "/api/device/v1/control"}, {1, 1}}} =
-            :ssl.recv(socket, 0, 5000)
-
-          receive_refusal_request(socket, nil)
-        after
-          :ssl.close(socket)
-        end
-      end)
-
-    peer_pid = peer.pid
-    peer_exit = Process.monitor(peer_pid)
-
-    config =
-      Map.merge(identity(), %{
-        "spool_root" => dir,
-        "server" => "wss://localhost:#{port}",
-        "ca_file" => ca,
-        "credential_file" => credential
-      })
-
-    assert_raise RuntimeError, ~r/:upgrade_failed/, fn ->
-      Session.run(config, "plx_spot_check")
-    end
-
-    # Only the test-owned peer may still be linked at this point.
-    assert MapSet.delete(caller_links(), peer_pid) == links
-    assert Task.await(peer) == "Bearer wrong-fixture-token"
-    assert_receive {:DOWN, ^peer_exit, :process, ^peer_pid, :normal}, 5_000
-    refute Process.alive?(peer_pid)
-    assert caller_links() == links
-
-    root = Path.join(dir, "exam")
-    assert File.read!(monitor) == monitor_bytes
-    refute File.exists?(Path.join(root, "source_started.json"))
-    pid = start_supervised!({Spool, root: root, limit: 1000})
-    assert Spool.stats(pid).bytes == 0
-  end
-
-  @tag :tmp_dir
-  test "local PLX ingestion failure releases the recovered spool and preserves its outcome", %{
-    tmp_dir: dir
-  } do
-    root = Path.join(dir, "resuming")
-    File.mkdir_p!(root)
-
-    identity = %{
-      "device" => "fixture",
-      "encounter" => "exam",
-      "acquisition" => "resuming",
-      "boot" => "boot",
-      "profile" => "plx_spot_check",
-      "origin_us" => 0
-    }
-
-    Spool.write!(Path.join(root, "identity.json"), JSON.encode!(identity))
-
-    Spool.write!(
-      Path.join(root, "source_started.json"),
-      JSON.encode!(Map.take(identity, ["boot", "acquisition"]))
-    )
-
-    config = Map.merge(identity, %{"spool_root" => dir, "spool_limit" => 1})
-    links = caller_links()
-    error = assert_raise MatchError, fn -> Session.run(config, "plx_spot_check") end
-    assert error.term == {:error, :spool_full}
-    assert caller_links() == links
-    pid = start_supervised!({Spool, [root: root, limit: 1000]})
-    assert Spool.stats(pid).bytes == 0
-    refute File.exists?(Path.join(root, "inventory.json"))
-  end
-
-  test "teardown of a partially started paired capture preserves the caller's failure" do
+  test "teardown of partially started sources leaves no linked worker" do
     parent = self()
     {:ok, resources} = Supervisor.start_link([], strategy: :one_for_one)
     {:ok, pool} = Supervisor.start_child(resources, {Task.Supervisor, []})
-
-    producer =
-      Task.Supervisor.async(pool, fn ->
-        send(parent, {:collecting, self()})
-
-        receive do
-          :finish -> :ok
-        end
-      end)
-
-    pid = producer.pid
-    assert_receive {:collecting, ^pid}
-    assert MapSet.member?(caller_links(), pid)
-
-    assert_raise RuntimeError, "second source failed to start", fn ->
-      try do
-        raise "second source failed to start"
-      after
-        Session.stop_resources(resources)
-      end
-    end
-
+    producer = Task.Supervisor.async(pool, fn ->
+      send(parent, {:started, self()})
+      receive do :finish -> :ok end
+    end)
+    assert_receive {:started, pid}
+    assert pid == producer.pid
+    assert :ok = Session.stop_resources(resources)
     refute Process.alive?(pid)
     refute Process.alive?(resources)
   end
-
-  defp identity do
-    %{
-      "device" => "fixture",
-      "encounter" => "one",
-      "acquisition" => "exam",
-      "boot" => "boot",
-      "profile" => "plx_spot_check",
-      "origin_us" => 0
-    }
-  end
-
-  defp certificate!(extensions) do
-    args = ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1"]
-    assert {_, 0} = System.cmd("openssl", args ++ extensions, stderr_to_stdout: true)
-  end
-
-  defp receive_refusal_request(socket, authorization) do
-    case :ssl.recv(socket, 0, 5000) do
-      {:ok, {:http_header, _, :Authorization, _, value}} ->
-        receive_refusal_request(socket, value)
-
-      {:ok, {:http_header, _, _, _, _}} ->
-        receive_refusal_request(socket, authorization)
-
-      {:ok, :http_eoh} ->
-        :ok = :ssl.send(socket, "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n")
-        assert {:error, :closed} = :ssl.recv(socket, 0, 5000)
-        authorization
-    end
-  end
-
-  defp caller_links do
+  defp links do
     {:links, links} = Process.info(self(), :links)
     MapSet.new(links)
   end

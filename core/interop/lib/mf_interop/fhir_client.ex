@@ -1,208 +1,138 @@
 defmodule MedFabric.Interop.FhirClient do
-  @moduledoc """
-  Maps accepted clinical observations (reviewed audio, manual pulse and typed
-  device spot-check metrics) to HL7 FHIR R4 `Observation` resources and
-  delivers them idempotently via conditional create (`If-None-Exist`) with
-  strict typed read-back confirmation.
-  """
+  @moduledoc "Checked FHIR R4 mapping after native acceptance and bounded exact-identifier transport. Remote matching is separate from the outbox safety predicate."
+  alias MedFabric.Interop.{JSON,Observation}
+  @headers [{"content-type","application/fhir+json"},{"accept","application/fhir+json"}]
+  @max_body 1_048_576
 
-  alias MedFabric.Interop.DeviceObservation
-  alias MedFabric.Interop.JSON, as: FHIRJSON
-  alias MedFabric.Interop.Observation
-
-  @identifier_system "urn:med-fabric:observation"
-  @default_base_url "http://127.0.0.1:18080/fhir"
-  @headers [{"content-type", "application/fhir+json"}, {"accept", "application/fhir+json"}]
-
-  def resource(%{"kind" => kind} = evidence, external, actor, refs)
-      when kind in ["device_spo2_v1", "device_pulse_rate_v1"] do
-    case DeviceObservation.resource(evidence, external, actor, refs) do
-      {:ok, resource} -> resource
-      {:error, reason} -> raise ArgumentError, "device export refused: #{reason}"
-    end
-  end
-
-  def resource(evidence, external, actor, refs) do
-    base = %{
-      "resourceType" => "Observation",
-      "identifier" => identifier(@identifier_system, external),
-      "status" => "final",
-      "subject" => %{"reference" => refs["patient_ref"]},
-      "encounter" => %{"reference" => refs["encounter_ref"]},
-      "effectiveDateTime" => evidence["effective_at"],
-      "performer" => [%{"display" => actor}]
-    }
-
-    Map.merge(base, observation_value(evidence))
-  end
-
-  @doc "Validate device export eligibility before writing an outbox intent."
-  def resource_checked(%{"kind" => kind} = evidence, external, actor, refs)
-      when kind in ["device_spo2_v1", "device_pulse_rate_v1"],
-      do: DeviceObservation.resource(evidence, external, actor, refs)
-
-  def resource_checked(evidence, external, actor, refs) do
-    {:ok, resource(evidence, external, actor, refs)}
+  def resource_checked(native,%{"system"=>system,"value"=>external},refs)
+      when is_map(native) and is_map(refs) do
+    with true <- is_binary(system) and Regex.match?(~r/\Aurn:uuid:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/,system),
+         true <- text?(external) and text?(native["actor"]) and is_binary(native["source_digest"]) and Regex.match?(~r/\A[0-9a-f]{64}\z/,native["source_digest"]),
+         true <- reference?(refs["patient_ref"],"Patient") and reference?(refs["encounter_ref"],"Encounter"),
+         {:ok,kind,unit,label} <- mapping(native["kind"]),
+         true <- native["unit"] == unit,
+         {:ok,value} <- represent_decimal(native["value"]),
+         {:ok,at,_} <- DateTime.from_iso8601(native["effective_at"]),
+         {:ok,issued,_} <- DateTime.from_iso8601(native["issued"]),
+         true <- DateTime.compare(at,issued) != :gt do
+      resource=%{"resourceType"=>"Observation","identifier"=>[%{"system"=>system,"value"=>external}],"status"=>"final",
+        "category"=>[%{"coding"=>[%{"system"=>"http://terminology.hl7.org/CodeSystem/observation-category","code"=>"vital-signs"}]}],
+        "meta"=>%{"profile"=>["http://hl7.org/fhir/StructureDefinition/vitalsigns"]},
+        "code"=>%{"coding"=>[%{"system"=>"http://loinc.org","code"=>kind}]},
+        "subject"=>%{"reference"=>refs["patient_ref"]},"encounter"=>%{"reference"=>refs["encounter_ref"]},
+        "effectiveDateTime"=>DateTime.to_iso8601(at),"issued"=>DateTime.to_iso8601(issued),
+        "performer"=>[%{"display"=>native["actor"]}],
+        "valueQuantity"=>%{"value"=>value,"unit"=>label,"system"=>"http://unitsofmeasure.org","code"=>unit},
+        "derivedFrom"=>[%{"identifier"=>%{"system"=>"urn:medfabric:native-evidence:sha256","value"=>native["source_digest"]}}]}
+      resource=case native["provenance"] do
+        %{"kind"=>"manual"} -> Map.put(resource,"method",%{"text"=>"Manually entered measurement"})
+        %{"kind"=>"simulated_plxs","simulated"=>true,"time_basis"=>"qualified_fixture_utc"} ->
+          Map.merge(resource,%{"method"=>%{"text"=>"Synthetic PLXS fixture"},"note"=>[%{"text"=>"Simulated source; not a physical device measurement."}],
+            "meta"=>Map.put(resource["meta"],"tag",[%{"system"=>"urn:medfabric:source","code"=>"simulated"}])})
+          |> device_lineage(native)
+        _ -> nil
+      end
+      if resource,do: {:ok,resource},else: {:error,:unqualified_native_provenance}
+    else _ -> {:error,:representation_unavailable} end
   rescue
-    _ in [ArgumentError, FunctionClauseError] -> {:error, :unsupported_evidence}
+    _ in [ArgumentError,FunctionClauseError] -> {:error,:representation_unavailable}
+  end
+  def resource_checked(_,_,_),do: {:error,:representation_unavailable}
+
+  def mapping_version,do: "medfabric.fhir-r4.v2"
+  def canonical_bytes(resource),do: JSON.encode_to_iodata!(resource) |> IO.iodata_to_binary()
+
+  def deliver(resource,opts) do
+    with %{"resourceType"=>"Observation","identifier"=>[%{"system"=>system,"value"=>value}=identifier]} <- resource,
+         bytes=Keyword.get(opts,:pinned_bytes,canonical_bytes(resource)),
+         true <- is_binary(bytes) and valid_pinned?(JSON.decode(bytes),resource) do
+      condition=URI.encode_query(identifier: system<>"|"<>value)
+      case request(opts,method: :post,url: "/Observation",headers: [{"if-none-exist",condition},{"prefer","return=representation"}|@headers],body: bytes) do
+        {:ok,%{status: status,body: remote}} when status in [200,201] ->
+          case verify(resource,remote,identifier) do
+            {:matched,_}=matched -> matched
+            {:conflict,_}=conflict -> conflict
+            _ -> reconcile(resource,opts)
+          end
+        {:ok,%{status: status}} when status in [409,412] -> {:conflict,:conditional_conflict}
+        {:error,:destination_invalid} -> {:noncommitted,:before_http}
+        _ -> {:unknown,:possible_remote_effect}
+      end
+    else _ -> {:permanent_noncommit,:before_http} end
   end
 
-  defp observation_value(%{"kind" => "pulse_rate", "value" => value}) do
-    %{
-      "code" => %{"coding" => [%{"system" => "http://loinc.org", "code" => "8867-4"}]},
-      "valueQuantity" => %{
-        "value" => value,
-        "unit" => "beats/minute",
-        "system" => "http://unitsofmeasure.org",
-        "code" => "/min"
-      },
-      "method" => %{"text" => "Manually entered measurement"}
-    }
-  end
+  defp valid_pinned?({:ok,decoded},resource),do: Observation.matches?(resource,decoded) and decoded["identifier"] == resource["identifier"]
+  defp valid_pinned?(_, _),do: false
 
-  defp observation_value(%{"kind" => "audio_pcm16_wav"} = evidence) do
-    %{
-      "code" => %{
-        "coding" => [
-          %{
-            "system" => "https://med-fabric.local/fhir/CodeSystem/exam-observation",
-            "code" => "reviewed-auscultation-recording"
-          }
-        ]
-      },
-      "valueString" => evidence["file_sha256"],
-      "method" => %{"text" => "Reviewed diagnostic audio recording"}
-    }
-  end
-
-  @spec deliver(map(), keyword()) :: {:ok, map()} | {:error, term()}
-  def deliver(%{"resourceType" => "Observation"} = resource, opts \\ []) do
-    conditional_create(resource, opts)
-  end
-
-  @spec fetch_by_identifier(String.t(), keyword()) :: {:ok, [map()]} | {:error, term()}
-  def fetch_by_identifier(external_id, opts \\ []) do
-    search("Observation", @identifier_system, external_id, opts)
-  end
-
-  def conditional_create(%{"resourceType" => type, "identifier" => [first | _]} = resource, opts) do
-    %{"system" => system, "value" => value} = first
-    condition = URI.encode_query(identifier: "#{system}|#{value}")
-
-    case request(opts,
-           method: :post,
-           url: "/#{type}",
-           headers: [{"if-none-exist", condition}, {"prefer", "return=representation"} | @headers],
-           body: FHIRJSON.encode_to_iodata!(resource)
-         ) do
-      {:ok, %{status: status, body: %{"id" => _} = remote}} when status in [200, 201] ->
-        confirmed(resource, remote, first, status == 201)
-
-      {:ok, %{status: status}} when status in [200, 201] ->
-        case search(type, system, value, opts) do
-          {:ok, [remote]} -> confirmed(resource, remote, first, status == 201)
-          {:ok, _} -> {:error, :unconfirmed_remote_record}
-          {:error, _} = error -> error
+  def reconcile(%{"identifier"=>[%{"system"=>system,"value"=>value}=identifier]}=resource,opts) do
+    case request(opts,method: :get,url: "/Observation",headers: @headers,params: [identifier: system<>"|"<>value,"_count": 2]) do
+      {:ok,%{status: 200,body: %{"resourceType"=>"Bundle"}=bundle}} ->
+        links=Map.get(bundle,"link",[])
+        entries=Map.get(bundle,"entry",[])
+        cond do
+          not is_list(links) or not is_list(entries) -> {:unknown,:unconfirmed_remote_record}
+          Enum.any?(links,&(is_map(&1) and &1["relation"] == "next")) or length(entries)>1 -> {:conflict,:ambiguous_search}
+          entries == [] -> {:unknown,:empty_search}
+          true -> case hd(entries) do %{"resource"=>remote} -> verify(resource,remote,identifier); _ -> {:unknown,:unconfirmed_remote_record} end
         end
-
-      result ->
-        response_error(result)
+      _ -> {:unknown,:reconciliation_unavailable}
     end
   end
 
-  defp confirmed(expected, %{"id" => id} = actual, identifier, created?)
-       when is_binary(id) and byte_size(id) > 0 do
-    fields = Map.drop(expected, ["identifier"])
-    remote_identifiers = List.wrap(actual["identifier"])
+  def verify(expected,%{"resourceType"=>"Observation","id"=>id,"identifier"=>identifiers}=remote,identifier)
+      when is_binary(id) and is_list(identifiers) do
+    if Regex.match?(~r/\A[A-Za-z0-9.-]{1,64}\z/,id) and identifier in identifiers and Observation.matches?(expected,remote),
+      do: {:matched,"Observation/"<>id},else: {:conflict,:conflicting_remote_record}
+  end
+  def verify(_,_,_),do: {:unknown,:unconfirmed_remote_record}
 
-    if Regex.match?(~r/\A[A-Za-z0-9.-]{1,64}\z/, id) and clinical_fields_match?(fields, actual) and
-         Enum.any?(remote_identifiers, &matches?(identifier, &1)) do
-      {:ok,
-       %{remote_ref: "#{actual["resourceType"]}/#{id}", resource: actual, created?: created?}}
-    else
-      {:error, :conflicting_remote_record}
+  defp request(opts,request_opts) do
+    with {:ok,uri} <- URI.new(Keyword.fetch!(opts,:base_url)),
+         true <- uri.scheme in ["http","https"] and is_binary(uri.host) and is_nil(uri.userinfo) do
+      Req.new(base_url: URI.to_string(uri),retry: false,redirect: false,receive_timeout: 5_000,
+        decode_body: false,into: &bounded_body/2)
+      |> Req.merge(Keyword.take(opts,[:adapter,:receive_timeout]))
+      |> Req.request(request_opts)
+      |> decode_response()
+    else _ -> {:error,:destination_invalid} end
+  rescue
+    _ in [ArgumentError,KeyError] -> {:error,:destination_invalid}
+  end
+  defp bounded_body({:data,data},{request,response}) do
+    body=response.body || ""
+    if byte_size(body)+byte_size(data)<=@max_body,
+      do: {:cont,{request,%{response|body: body<>data}}},else: {:halt,{request,%{response|status: 502,body: ""}}}
+  end
+  defp bounded_body(_,pair),do: {:cont,pair}
+  defp decode_response({:ok,%{body: bytes}=response}) when is_binary(bytes) and byte_size(bytes)<=@max_body do
+    case JSON.decode(bytes) do {:ok,body}->{:ok,%{response|body: body}}; _ -> {:error,:malformed_response} end
+  end
+  defp decode_response(_),do: {:error,:transport_unknown}
+  defp device_lineage(resource,native) do
+    if Enum.all?(~w(source_device source_event_id parent_acquisition_id),&text?(native[&1])) and text?(native["provenance"]["gateway"]) do
+      lineage=resource["derivedFrom"]++[
+        %{"identifier"=>%{"system"=>"urn:medfabric:acquisition","value"=>native["parent_acquisition_id"]}},
+        %{"identifier"=>%{"system"=>"urn:medfabric:source-event","value"=>native["parent_acquisition_id"]<>":"<>native["source_event_id"]}}]
+      Map.merge(resource,%{"derivedFrom"=>lineage,
+        "device"=>%{"identifier"=>%{"system"=>"urn:medfabric:source-device","value"=>native["source_device"]}},
+        "extension"=>[%{"url"=>"urn:medfabric:provenance:time-basis","valueCode"=>native["provenance"]["time_basis"]},
+          %{"url"=>"urn:medfabric:provenance:gateway","valueIdentifier"=>%{"system"=>"urn:medfabric:gateway","value"=>native["provenance"]["gateway"]}}]})
     end
   end
-
-  defp confirmed(_expected, _actual, _identifier, _created?),
-    do: {:error, :unconfirmed_remote_record}
-
-  defp clinical_fields_match?(%{"resourceType" => "Observation"} = expected, actual),
-    do: Observation.matches?(expected, actual)
-
-  defp clinical_fields_match?(expected, actual), do: matches?(expected, actual)
-
-  # HAPI can enrich reference objects and reorder repeated elements.
-  defp matches?(expected, actual) when is_map(expected) and is_map(actual),
-    do: Enum.all?(expected, fn {k, v} -> matches?(v, Map.get(actual, k)) end)
-
-  defp matches?(expected, actual) when is_list(expected) and is_list(actual),
-    do: Enum.sort(expected) == Enum.sort(actual)
-
-  defp matches?(expected, actual), do: expected == actual
-
-  defp search(type, system, value, opts) do
-    case request(opts,
-           method: :get,
-           url: "/#{type}",
-           params: [identifier: "#{system}|#{value}"],
-           headers: @headers
-         ) do
-      {:ok, %{status: 200, body: %{"resourceType" => "Bundle"} = bundle}} ->
-        search_results(bundle)
-
-      result ->
-        response_error(result)
+  defp mapping(kind) when kind in ["pulse_rate","device_pulse_rate_v1"],do: {:ok,"8867-4","/min","beats/minute"}
+  defp mapping("device_spo2_v1"),do: {:ok,"2708-6","%","%"}
+  defp mapping(_),do: {:error,:unsupported_representation}
+  defp represent_decimal(%{"mantissa"=>m,"exponent"=>e}) when is_binary(m) and is_binary(e) and byte_size(m)<=21 and byte_size(e)<=3 do
+    # This mapper supports up to 18 significant decimal digits. Native values
+    # have a larger exact domain; unsupported representation is an outbox block.
+    valid=Regex.match?(~r/\A(?:0|[1-9][0-9]*|-[1-9][0-9]*)\z/,m) and Regex.match?(~r/\A(?:0|[1-9][0-9]*|-[1-9][0-9]*)\z/,e) and
+      String.length(String.trim_leading(m,"-"))<=18 and String.to_integer(e) in -18..18
+    case if(valid,do: Decimal.parse(m<>"e"<>e),else: :unsupported) do
+      {value,""} -> if Decimal.nan?(value) or Decimal.inf?(value),do: {:error,:nonfinite},else: {:ok,value}
+      _ -> {:error,:invalid_decimal}
     end
   end
-
-  defp search_results(bundle) do
-    links = Map.get(bundle, "link", [])
-    entries = Map.get(bundle, "entry", [])
-
-    cond do
-      not is_list(links) or not Enum.all?(links, &is_map/1) or
-        not is_list(entries) or not Enum.all?(entries, &valid_search_entry?/1) ->
-        {:error, :invalid_search_response}
-
-      Enum.any?(links, &(&1["relation"] == "next")) ->
-        {:error, :ambiguous_search}
-
-      true ->
-        {:ok,
-         for(
-           %{"resource" => resource} = entry <- entries,
-           get_in(entry, ["search", "mode"]) in [nil, "match"],
-           do: resource
-         )}
-    end
-  end
-
-  defp valid_search_entry?(%{"resource" => resource} = entry) when is_map(resource),
-    do: is_nil(entry["search"]) or is_map(entry["search"])
-
-  defp valid_search_entry?(_), do: false
-
-  defp request(opts, request_opts) do
-    defaults = [
-      base_url: Keyword.get(opts, :base_url, @default_base_url),
-      retry: false,
-      redirect: false,
-      receive_timeout: 5_000,
-      decoders: [json: FHIRJSON, json_api: FHIRJSON]
-    ]
-
-    defaults = Keyword.merge(defaults, Keyword.take(opts, [:adapter, :receive_timeout]))
-
-    defaults
-    |> Req.new()
-    |> Req.request(request_opts)
-  end
-
-  defp response_error({:ok, %{status: status, body: body}}),
-    do: {:error, {:http_error, status, body}}
-
-  defp response_error({:error, _} = error), do: error
-
-  defp identifier(system, value), do: [%{"system" => system, "value" => value}]
+  defp represent_decimal(_),do: {:error,:invalid_decimal}
+  defp reference?(s,type),do: is_binary(s) and Regex.match?(~r/\A#{type}\/[A-Za-z0-9.-]{1,64}\z/,s)
+  defp text?(s),do: is_binary(s) and byte_size(s) in 1..256 and String.valid?(s)
 end

@@ -56,7 +56,7 @@ defmodule MedFabric.Acceptance.Soak do
 
   defp stream(dir, hz, seconds, capture_ms, previous, interval) do
     source = read_json(Path.join(dir, "source.json"))
-    receipt = read_json(Path.join(dir, "receipt.json"))
+    receipt = read_json(Path.join(dir, "ack.json"))["receipt"] || %{}
     durable = String.to_integer(receipt["durable_sample"] || "0")
     produced = max(source["sample"] || 0, durable)
     target = seconds * hz
@@ -158,7 +158,8 @@ defmodule MedFabric.Acceptance.Soak do
       |> File.stream!()
       |> Stream.flat_map(fn line ->
         case JSON.decode(line) do
-          {:ok, %{"stream" => stream, "stage" => stage, "duration_us" => duration}} ->
+          {:ok, %{"stream" => stream, "stage" => stage, "duration_us" => duration}}
+          when is_integer(duration) ->
             [{stream, stage, duration}]
 
           _ ->
@@ -175,6 +176,7 @@ defmodule MedFabric.Acceptance.Soak do
           count: length(sorted),
           p50_us: percentile(sorted, 50),
           p95_us: percentile(sorted, 95),
+          p99_us: percentile(sorted, 99),
           max_us: List.last(sorted),
           last_10_p50_us: values |> Enum.take(-10) |> Enum.sort() |> percentile(50)
         }
