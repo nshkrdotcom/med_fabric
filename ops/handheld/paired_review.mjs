@@ -30,15 +30,15 @@ try {
   assert.match(await svg.text(), /Verified synthetic source segment/);
 
   if (review === "partial") {
-    await row.getByText("Source gap · samples 1920–2020").waitFor();
+    await row.getByText("source_gap: samples 1920–2020").waitFor();
     await row.getByLabel("Audio sample").fill("1930");
     await row.getByRole("button", { name: "Find corresponding ECG ranges" }).click();
-    await row.getByText("Possible ECG ranges :unavailable").waitFor();
+    await row.getByText("Clock alignment unavailable; no correspondence inferred").waitFor();
   } else {
-    await row.getByText("Alignment bounded", { exact: true }).first().waitFor();
+    await row.getByText("Clock mapping: bounded. Source uncertainty remains part of the evidence.", { exact: true }).first().waitFor();
     await row.getByLabel("Audio sample").fill("48");
     await row.getByRole("button", { name: "Find corresponding ECG ranges" }).click();
-    await row.getByText(/Possible ECG ranges \[\{\d+, \d+\}/).waitFor();
+    await row.getByText(/^Possible ECG ranges: \d+–\d+(?:, \d+–\d+)*$/).waitFor();
   }
 } finally {
   await browser.close();
