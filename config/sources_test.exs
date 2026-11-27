@@ -375,6 +375,28 @@ defmodule MedFabric.BuildSourcesTest do
     end
   end
 
+  test "a Weld-style project can prove identity from its generated mix.exs alone", c do
+    sdk = make_project(c.root, "projection")
+    File.rm!(Path.join(sdk, "VERSION"))
+    select(c, %{"med_ex" => %{"path" => "projection"}})
+    assert {deps, [_ | _]} = Sources.resolve(@defaults, c.project, c.root)
+    assert {:med_ex, "~> 0.4.0", [runtime: true, path: ^sdk]} = List.keyfind(deps, :med_ex, 0)
+
+    mix = Path.join(sdk, "mix.exs")
+    original = File.read!(mix)
+    File.write!(mix, String.replace(original, "0.4.0", "0.3.0"))
+
+    assert_raise Mix.Error, ~r/does not satisfy med_ex/, fn ->
+      Sources.resolve(@defaults, c.project, c.root)
+    end
+
+    File.write!(mix, String.replace(original, ~s(version: "0.4.0"), "version: @version"))
+
+    assert_raise Mix.Error, ~r/without VERSION must declare one literal app and version/, fn ->
+      Sources.resolve(@defaults, c.project, c.root)
+    end
+  end
+
   test "explicit source contexts cannot share mutable Mix paths", c do
     make_project(c.root, "sdk")
     select(c, %{"med_ex" => %{"path" => "sdk"}})

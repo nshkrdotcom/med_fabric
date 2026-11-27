@@ -287,15 +287,42 @@ defmodule MedFabric.BuildSources do
           {node, acc}
       end)
 
-    version_file = Path.join(path, "VERSION")
-
-    unless File.regular?(version_file) and
-             Version.match?(String.trim(File.read!(version_file)), requirement),
-           do: Mix.raise("Selected project VERSION does not satisfy #{app} #{requirement}")
-
+    metadata = Enum.map(declarations, &literal_project_metadata/1)
+    check_version_file!(Path.join(path, "VERSION"), metadata, app, requirement)
     check_contract!(app, path)
-    Enum.each(declarations, &check_declaration!(&1, app, requirement))
+    Enum.each(metadata, &check_declaration!(&1, app, requirement))
   end
+
+  defp check_version_file!(path, metadata, app, requirement) do
+    case File.stat(path) do
+      {:ok, %{type: :regular}} ->
+        check_version!(app, String.trim(File.read!(path)), requirement)
+
+      {:error, :enoent} ->
+        # Weld projections encode the package identity in generated mix.exs.
+        check_literal_identity!(metadata, app, requirement)
+
+      _ ->
+        Mix.raise("Selected project VERSION is unreadable for #{app}")
+    end
+  end
+
+  defp check_literal_identity!([metadata], app, requirement) do
+    with [^app] <- Keyword.get_values(metadata, :app),
+         [version] <- Keyword.get_values(metadata, :version) do
+      check_version!(app, version, requirement)
+    else
+      _ -> missing_identity!(app)
+    end
+  end
+
+  defp check_literal_identity!(_, app, _), do: missing_identity!(app)
+
+  defp missing_identity!(app),
+    do:
+      Mix.raise(
+        "Selected project without VERSION must declare one literal app and version for #{app}"
+      )
 
   defp check_contract!(:med_ex, path) do
     contracts =
@@ -312,8 +339,7 @@ defmodule MedFabric.BuildSources do
 
   defp check_contract!(_, _), do: :ok
 
-  defp check_declaration!(body, app, requirement) do
-    metadata = literal_project_metadata(body)
+  defp check_declaration!(metadata, app, requirement) do
     apps = Keyword.get_values(metadata, :app) |> Enum.uniq()
     if apps != [] and apps != [app], do: Mix.raise("Selected project does not declare #{app}")
 
