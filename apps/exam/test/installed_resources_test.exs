@@ -1,8 +1,13 @@
 defmodule MedFabric.Exam.InstalledResourcesTest do
   use ExUnit.Case, async: true
-  @tag :tmp_dir
-  test "installed resource bytes are bound to this compiled package revision before listener startup",
-       %{tmp_dir: dir} do
+
+  test "installed resource bytes are bound to this compiled package revision before listener startup" do
+    suffix = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+    dir = Path.join(System.tmp_dir!(), "mf-exam-assets-" <> suffix)
+    File.mkdir!(dir)
+    File.chmod!(dir, 0o700)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
     source = Application.app_dir(:mf_exam, "priv/static")
 
     for name <- ~w(exam.js acquisition.js acquisition_worklet.js),
