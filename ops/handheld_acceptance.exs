@@ -403,7 +403,7 @@ defmodule MedFabric.HandheldAcceptance do
       installed_artifacts: installed,
       artifact_manifest_sha256: verified["manifest_sha256"],
       registry: verified["registry"],
-      registry_origin: registry["url"]
+      registry_origin: %{kind: registry["kind"], url: registry["url"]}
     })
   end
 

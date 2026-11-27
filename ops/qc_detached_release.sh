@@ -378,6 +378,6 @@ jq -n --arg sha "$manifest_digest" --slurpfile artifacts "$lab/consumers/artifac
     --argjson ecg "$(jq '.streams.ecg.index.segments | length' "$manifest")" \
     '{schema:"medfabric.detached_release.v2",manifest_sha256:$sha,verified_segments:{audio:$audio,ecg:$ecg},
       preview_isolated:true,artifact_manifest_sha256:$artifacts[0].manifest_sha256,
-      registry:$artifacts[0].registry,registry_origin:$registry[0].url,
+      registry:$artifacts[0].registry,registry_origin:{kind:$registry[0].kind,url:$registry[0].url},
       installed:[$exam[0],$handheld[0],$preview[0]],
       combined:$combined[0]}' > "$report"
