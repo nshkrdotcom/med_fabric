@@ -3,7 +3,12 @@ defmodule MedExHandheld.SessionCleanupTest do
   alias MedExHandheld.{Session, Transport}
 
   setup do
-    root = Path.join(System.tmp_dir!(), "mf-session-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false))
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "mf-session-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+      )
+
     File.mkdir!(root)
     File.chmod!(root, 0o700)
     on_exit(fn -> File.rm_rf!(root) end)

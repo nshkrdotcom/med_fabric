@@ -29,4 +29,4 @@ later in Interop does not retroactively invalidate native acceptance.
 Run `mix test`, `mix credo --strict`, Dialyzer and ExDoc in this component. The
 private `examples/clinical_core` consumer exercises Domain/Store/Interop with two
 explicit databases and real FHIR without importing Exam. See the repository
-[clinical-core guide](../../guides/clinical_core.md).
+[clinical-core guide](https://github.com/nshkrdotcom/med_fabric/blob/mf_exam-v0.3.0/guides/clinical_core.md).

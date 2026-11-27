@@ -60,7 +60,8 @@ defmodule MedExHandheld.Monitor do
     end
   end
 
-  defp initialize({%{"spool" => root} = config, boot, table}) when is_binary(root) and is_binary(boot) do
+  defp initialize({%{"spool" => root} = config, boot, table})
+       when is_binary(root) and is_binary(boot) do
     file = Path.join(root, "monitor.json")
 
     case load_ledger(file, boot) do

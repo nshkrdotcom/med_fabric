@@ -117,7 +117,7 @@ defmodule MedExHandheld.Spool do
   end
 
   defp handle_owned_call({:register, %StreamSpec{stream_id: name} = spec}, _, state)
-      when name in ["audio", "ecg"] do
+       when name in ["audio", "ecg"] do
     case register_stream(state, spec) do
       {:ok, stream} -> {:reply, :ok, %{state | streams: Map.put(state.streams, name, stream)}}
       error -> {:reply, error, state}
@@ -127,7 +127,7 @@ defmodule MedExHandheld.Spool do
   defp handle_owned_call({:register, _}, _, state), do: {:reply, {:error, :invalid_stream}, state}
 
   defp handle_owned_call({:batch, root, name, items}, _, state)
-      when is_list(items) and length(items) <= 5 do
+       when is_list(items) and length(items) <= 5 do
     with true <- Path.expand(root) == state.root,
          {:ok, stream} <- Map.fetch(state.streams, name),
          true <- not stream.done do
@@ -146,7 +146,8 @@ defmodule MedExHandheld.Spool do
   defp handle_owned_call({:batch, _, _, _}, _, state),
     do: {:reply, {:error, :invalid_source_batch}, state}
 
-  defp handle_owned_call({:watermark, name}, _, state), do: {:reply, mark(state.streams[name]), state}
+  defp handle_owned_call({:watermark, name}, _, state),
+    do: {:reply, mark(state.streams[name]), state}
 
   defp handle_owned_call({:persist_watermark, name}, _, state) do
     case state.streams[name] do
@@ -243,8 +244,8 @@ defmodule MedExHandheld.Spool do
   end
 
   defp handle_owned_call({:event, sequence, bytes}, _, state)
-      when is_integer(sequence) and sequence >= 0 and is_binary(bytes) and
-             byte_size(bytes) <= 16_384 do
+       when is_integer(sequence) and sequence >= 0 and is_binary(bytes) and
+              byte_size(bytes) <= 16_384 do
     key = {"events", sequence}
 
     cond do

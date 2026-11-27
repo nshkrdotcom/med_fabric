@@ -2,6 +2,7 @@ Code.require_file("build_support/workspace.exs", __DIR__)
 
 defmodule MedFabric.Workspace.MixProject do
   use Mix.Project
+  alias MedFabric.Build.Workspace
 
   def project do
     [
@@ -15,11 +16,21 @@ defmodule MedFabric.Workspace.MixProject do
         {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
         {:ex_doc, "~> 0.40", only: :dev, runtime: false}
       ],
-      aliases: MedFabric.Build.Workspace.aliases()
+      aliases: Workspace.aliases()
     ]
   end
 
-  def cli, do: [preferred_envs: [setup: :dev, test: :dev, credo: :dev, dialyzer: :dev, quality: :dev, docs: :dev]]
+  def cli,
+    do: [
+      preferred_envs: [
+        setup: :dev,
+        test: :dev,
+        credo: :dev,
+        dialyzer: :dev,
+        quality: :dev,
+        docs: :dev
+      ]
+    ]
 
   defp docs do
     guides =

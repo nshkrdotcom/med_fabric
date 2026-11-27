@@ -19,9 +19,8 @@ session = Task.async(fn -> MedExHandheld.CLI.main(args) end)
 receipt = Path.join([cfg["spool_root"], cfg["acquisition"], "audio", "ack.json"])
 
 durable = fn ->
-  with {:ok, data} <- File.read(receipt) do
-    JSON.decode!(data)["receipt"]["durable_sample"] |> String.to_integer()
-  else
+  case File.read(receipt) do
+    {:ok, data} -> JSON.decode!(data)["receipt"]["durable_sample"] |> String.to_integer()
     _ -> 0
   end
 end

@@ -3,9 +3,10 @@ Code.require_file("support/fixtures.exs", __DIR__)
 defmodule MedFabric.Exam.PreviewIsolationTest do
   use ExUnit.Case, async: false
 
-  setup context, do: MedFabric.Exam.IntegrationFixtures.trusted_tmp(context)
-  alias MedFabric.Exam.{IntegrationFixtures, PreviewGateway, AcquisitionIngress}
-  alias MedFabric.Store.{Encounters, AcquisitionSessions}
+  alias MedFabric.Exam.{AcquisitionIngress, IntegrationFixtures, PreviewGateway}
+  alias MedFabric.Store.{AcquisitionSessions, Encounters}
+
+  setup context, do: IntegrationFixtures.trusted_tmp(context)
 
   test "absent and restarted disposable preview cannot stop the common authoritative writer", %{
     tmp_dir: root

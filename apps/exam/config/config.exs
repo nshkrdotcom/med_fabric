@@ -10,8 +10,24 @@ config :mf_exam, MedFabric.ExamWeb.Endpoint,
   live_view: [signing_salt: "med_fabric_exam_lv_salt"]
 
 config :phoenix, :json_library, Jason
-config :phoenix, :filter_parameters,
-  ["authorization", "password", "secret", "session", "key", "token", "stream_token", "creation", "lease", "sdp", "candidate", "event", "body", "resource", "value"]
+
+config :phoenix, :filter_parameters, [
+  "authorization",
+  "password",
+  "secret",
+  "session",
+  "key",
+  "token",
+  "stream_token",
+  "creation",
+  "lease",
+  "sdp",
+  "candidate",
+  "event",
+  "body",
+  "resource",
+  "value"
+]
 
 if File.exists?(Path.expand("#{config_env()}.exs", __DIR__)) do
   import_config "#{config_env()}.exs"

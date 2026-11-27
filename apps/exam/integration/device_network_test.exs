@@ -2,8 +2,9 @@ Code.require_file("support/fixtures.exs", __DIR__)
 
 defmodule MedFabric.DeviceNetworkTest do
   use ExUnit.Case, async: false
+  alias MedFabric.Exam.IntegrationFixtures
 
-  setup context, do: MedFabric.Exam.IntegrationFixtures.trusted_tmp(context)
+  setup context, do: IntegrationFixtures.trusted_tmp(context)
   @moduletag timeout: 1_550_000
 
   test "external paired and spot-check producers verify real durable artifacts and reviewed outcomes",

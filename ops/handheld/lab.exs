@@ -266,21 +266,19 @@ defmodule MedFabric.HandheldDemo do
   end
 
   defp relay_client(client, upstream, outage) do
-    try do
-      with false <- File.exists?(outage),
-           {:ok, server} <- :gen_tcp.connect(@loopback, upstream, @socket_options, 1_000) do
-        try do
-          :ok = :inet.setopts(client, active: :once)
-          :ok = :inet.setopts(server, active: :once)
-          Process.send_after(self(), :outage_check, 25)
-          relay_packets(client, server, outage)
-        after
-          :gen_tcp.close(server)
-        end
+    with false <- File.exists?(outage),
+         {:ok, server} <- :gen_tcp.connect(@loopback, upstream, @socket_options, 1_000) do
+      try do
+        :ok = :inet.setopts(client, active: :once)
+        :ok = :inet.setopts(server, active: :once)
+        Process.send_after(self(), :outage_check, 25)
+        relay_packets(client, server, outage)
+      after
+        :gen_tcp.close(server)
       end
-    after
-      :gen_tcp.close(client)
     end
+  after
+    :gen_tcp.close(client)
   end
 
   defp relay_packets(client, server, outage) do

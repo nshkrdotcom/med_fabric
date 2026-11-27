@@ -10,6 +10,7 @@ defmodule MedFabric.Store.AcquisitionSessions do
   @doc false
   def rows(tx, sql, args), do: Postgrex.query!(tx, sql, args).rows
   @doc false
+  @spec abort(DBConnection.t(), term()) :: no_return()
   def abort(tx, reason), do: Postgrex.rollback(tx, reason)
 
   def authorize_encounter!(tx, id, actor, role, access, mode \\ :update) do

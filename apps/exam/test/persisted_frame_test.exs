@@ -23,7 +23,11 @@ defmodule MedFabric.Exam.PersistedFrameTest do
           {0, 0, 1.0, false},
           {9_007_199_254_740_993, 9_007_199_254_740_993, 2, true}
         ] do
-      assert PersistedFrame.valid?(%{sequence: sequence, first_sample: first, sample_count: count}) ==
+      assert PersistedFrame.valid?(%{
+               sequence: sequence,
+               first_sample: first,
+               sample_count: count
+             }) ==
                accepted
     end
 
@@ -47,6 +51,7 @@ defmodule MedFabric.Exam.PersistedFrameTest do
       assert {:ok, ^frame} = FrameV1.decode(raw)
       # No database/root owner or credit state: any effect would fail this test.
       state = %{writer: self(), flush: nil, ledger: :untouched}
+
       assert {:stop, :normal, 1008, {:text, "acquisition_request_denied"}, ^state} =
                AcquisitionSocket.handle_in({raw, [opcode: :binary]}, state)
     end

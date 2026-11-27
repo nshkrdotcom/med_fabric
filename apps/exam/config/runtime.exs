@@ -30,8 +30,8 @@ parse_port = fn value, message ->
     end
 
   case parsed do
-    number when is_integer(number) and number in 1..65535 -> number
-    {number, ""} when number in 1..65535 -> number
+    number when is_integer(number) and number in 1..65_535 -> number
+    {number, ""} when number in 1..65_535 -> number
     _ -> raise message
   end
 end
@@ -170,7 +170,10 @@ if settings != nil or System.get_env("MF_LAB") == "1" do
       end
 
     tls_port =
-      parse_port.(get.("device_tls_port", "MF_DEVICE_TLS_PORT", "4443"), "Invalid Exam device TLS port")
+      parse_port.(
+        get.("device_tls_port", "MF_DEVICE_TLS_PORT", "4443"),
+        "Invalid Exam device TLS port"
+      )
 
     config :mf_exam, MedFabric.ExamWeb.Endpoint,
       https: [
@@ -197,7 +200,13 @@ if settings != nil or System.get_env("MF_LAB") == "1" do
   end
 
   deployment_uuid = required.("deployment_uuid", "MF_DEPLOYMENT_UUID")
-  unless is_binary(deployment_uuid) and Regex.match?(~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/, deployment_uuid), do: raise("A valid immutable deployment UUID is required")
+
+  unless is_binary(deployment_uuid) and
+           Regex.match?(
+             ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/,
+             deployment_uuid
+           ),
+         do: raise("A valid immutable deployment UUID is required")
 
   config :mf_exam, :lab, %{
     deployment_uuid: deployment_uuid,

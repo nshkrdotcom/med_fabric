@@ -2,9 +2,11 @@ defmodule MedFabric.Preview.Application do
   @moduledoc "Supervises bounded disposable media peers behind an authenticated loopback listener."
   use Application
   alias MedEx.RTC.Provider
+  alias MedFabric.Preview.LogPrivacy
 
   def start(_, _) do
-    :ok = MedFabric.Preview.LogPrivacy.install()
+    :ok = LogPrivacy.install()
+
     with {:ok, config} <- validate_config(Application.get_env(:mf_preview, :listen)) do
       Supervisor.start_link(
         [

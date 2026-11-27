@@ -95,7 +95,7 @@ defmodule MedFabric.ExamWeb.ExamLive do
        |> refresh()
        |> assign(
          :error,
-         if(match?({:ok, _}, result) or result == :ok, do: nil, else: "Action refused")
+         if(match?({:ok, _}, result), do: nil, else: "Action refused")
        )}
 
   defp refresh(%{assigns: %{role: :clinician} = a} = socket) do

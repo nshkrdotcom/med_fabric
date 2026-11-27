@@ -1,6 +1,7 @@
 # Actual TLS/WS denial lane in the disposable second encounter.
-alias MedExHandheld.{Transport, Paired}
-alias MedEx.{Serialization, Wire.FrameV1}
+alias MedEx.Serialization
+alias MedEx.Wire.FrameV1
+alias MedExHandheld.{Paired, Transport}
 [cfgpath] = Enum.reject(System.argv(), &(&1 == "--"))
 config = cfgpath |> File.read!() |> JSON.decode!()
 epoch = 2

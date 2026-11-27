@@ -62,19 +62,22 @@ defmodule MedFabric.BuildSources do
         dep
 
       {:ok, source} ->
-        if path = source[:path], do: check_identity!(app, path, requirement)
-
-        if source[:hex] && source[:hex] != Atom.to_string(app) do
-          Mix.raise("Selected Hex package must match #{app}")
-        end
-
-        if source[:hex] && !match?({:ok, _}, Version.parse_requirement(requirement || "")) do
-          Mix.raise("Hex selection requires a committed version requirement for #{app}")
-        end
-
+        validate_choice!(source, app, requirement)
         options = Keyword.drop(policy, @scm) ++ source
         if requirement, do: {app, requirement, options}, else: {app, options}
     end
+  end
+
+  defp validate_choice!(source, app, requirement) do
+    if path = source[:path], do: check_identity!(app, path, requirement)
+    if package = source[:hex], do: validate_hex_choice!(package, app, requirement)
+  end
+
+  defp validate_hex_choice!(package, app, requirement) do
+    if package != Atom.to_string(app), do: Mix.raise("Selected Hex package must match #{app}")
+
+    unless match?({:ok, _}, Version.parse_requirement(requirement || "")),
+      do: Mix.raise("Hex selection requires a committed version requirement for #{app}")
   end
 
   defp context_paths!(deps, active, project) do
@@ -240,12 +243,7 @@ defmodule MedFabric.BuildSources do
         [{"public_key", digest(:erlang.term_to_binary(public_key))}]
 
       {key, nested} when is_map(nested) or is_list(nested) ->
-        if is_atom(key) or is_binary(key) do
-          coordinates = registry_coordinates(nested)
-          if coordinates == [], do: [], else: [{to_string(key), coordinates}]
-        else
-          []
-        end
+        nested_coordinates(key, nested)
 
       nested when is_map(nested) or is_list(nested) ->
         registry_coordinates(nested)
@@ -257,6 +255,15 @@ defmodule MedFabric.BuildSources do
   end
 
   defp registry_coordinates(_), do: []
+
+  defp nested_coordinates(key, nested) when is_atom(key) or is_binary(key) do
+    case registry_coordinates(nested) do
+      [] -> []
+      coordinates -> [{to_string(key), coordinates}]
+    end
+  end
+
+  defp nested_coordinates(_, _), do: []
 
   # Static checks consider the project declaration, not unrelated keyword
   # entries in application/dependency functions. Dynamic metadata is resolved
@@ -286,37 +293,46 @@ defmodule MedFabric.BuildSources do
              Version.match?(String.trim(File.read!(version_file)), requirement),
            do: Mix.raise("Selected project VERSION does not satisfy #{app} #{requirement}")
 
-    if app == :med_ex do
-      contracts =
-        Enum.flat_map(["lib", "core/*/lib", "components/core/*/lib"], fn lib ->
-          Path.wildcard(Path.join([path, lib, "med_ex/contract.ex"]))
-        end)
+    check_contract!(app, path)
+    Enum.each(declarations, &check_declaration!(&1, app, requirement))
+  end
 
-      unless Enum.any?(
-               contracts,
-               &(File.read!(&1) =~ ~r/def\s+api_revision(?:\(\))?,\s*do:\s*2\b/)
-             ),
-             do: Mix.raise("Selected med_ex project must declare API revision 2")
-    end
+  defp check_contract!(:med_ex, path) do
+    contracts =
+      Enum.flat_map(["lib", "core/*/lib", "components/core/*/lib"], fn lib ->
+        Path.wildcard(Path.join([path, lib, "med_ex/contract.ex"]))
+      end)
 
-    for body <- declarations do
-      metadata = literal_project_metadata(body)
-      apps = Keyword.get_values(metadata, :app) |> Enum.uniq()
-      if apps != [] and apps != [app], do: Mix.raise("Selected project does not declare #{app}")
+    unless Enum.any?(
+             contracts,
+             &(File.read!(&1) =~ ~r/def\s+api_revision(?:\(\))?,\s*do:\s*2\b/)
+           ),
+           do: Mix.raise("Selected med_ex project must declare API revision 2")
+  end
 
-      for version <- Keyword.get_values(metadata, :version), is_binary(requirement) do
-        case Version.parse(version) do
-          {:ok, parsed} ->
-            unless Version.match?(parsed, requirement),
-              do:
-                Mix.raise(
-                  "Selected project version #{version} does not satisfy #{app} #{requirement}"
-                )
+  defp check_contract!(_, _), do: :ok
 
-          :error ->
-            Mix.raise("Invalid selected project version for #{app}")
-        end
-      end
+  defp check_declaration!(body, app, requirement) do
+    metadata = literal_project_metadata(body)
+    apps = Keyword.get_values(metadata, :app) |> Enum.uniq()
+    if apps != [] and apps != [app], do: Mix.raise("Selected project does not declare #{app}")
+
+    for version <- Keyword.get_values(metadata, :version),
+        is_binary(requirement),
+        do: check_version!(app, version, requirement)
+  end
+
+  defp check_version!(app, version, requirement) do
+    case Version.parse(version) do
+      {:ok, parsed} ->
+        unless Version.match?(parsed, requirement),
+          do:
+            Mix.raise(
+              "Selected project version #{version} does not satisfy #{app} #{requirement}"
+            )
+
+      :error ->
+        Mix.raise("Invalid selected project version for #{app}")
     end
   end
 
@@ -373,16 +389,8 @@ defmodule MedFabric.BuildSources do
 
     data = Map.put(data, "ref", String.downcase(ref))
 
-    if github = data["github"] do
-      unless Regex.match?(~r/\A[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\z/, github),
-        do: Mix.raise("GitHub selection requires owner/repository")
-    end
-
-    if subdir = data["subdir"] do
-      if Path.type(subdir) != :relative or String.contains?(subdir, "\\") or
-           Enum.any?(String.split(subdir, "/"), &(&1 in ["", ".", ".."])),
-         do: Mix.raise("Git subdir must stay inside the checkout")
-    end
+    validate_github!(data["github"])
+    validate_subdir!(data["subdir"])
 
     for key <- @git_keys, Map.has_key?(data, Atom.to_string(key)) do
       value = Map.fetch!(data, Atom.to_string(key))
@@ -391,6 +399,21 @@ defmodule MedFabric.BuildSources do
   end
 
   defp source!(_, _), do: Mix.raise("A source selection must be an object")
+
+  defp validate_github!(nil), do: :ok
+
+  defp validate_github!(github) do
+    unless Regex.match?(~r/\A[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+\z/, github),
+      do: Mix.raise("GitHub selection requires owner/repository")
+  end
+
+  defp validate_subdir!(nil), do: :ok
+
+  defp validate_subdir!(subdir) do
+    if Path.type(subdir) != :relative or String.contains?(subdir, "\\") or
+         Enum.any?(String.split(subdir, "/"), &(&1 in ["", ".", ".."])),
+       do: Mix.raise("Git subdir must stay inside the checkout")
+  end
 
   defp coordinate?(value) do
     is_binary(value) and value != "" and String.trim(value) == value and

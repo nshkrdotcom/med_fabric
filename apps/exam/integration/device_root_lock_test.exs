@@ -3,8 +3,6 @@ Code.require_file("support/fixtures.exs", __DIR__)
 defmodule MedFabric.Exam.DeviceRootLockTest do
   use ExUnit.Case, async: false
 
-  setup context, do: MedFabric.Exam.IntegrationFixtures.trusted_tmp(context)
-
   setup context do
     if dir = context[:tmp_dir], do: on_exit(fn -> File.rm_rf!(dir) end)
     :ok
@@ -12,6 +10,9 @@ defmodule MedFabric.Exam.DeviceRootLockTest do
 
   alias MedEx.StreamWriter
   alias MedFabric.Exam.DeviceRootLock
+  alias MedFabric.Exam.IntegrationFixtures
+
+  setup context, do: IntegrationFixtures.trusted_tmp(context)
 
   @fixture Path.expand("support/device_root_owner.exs", __DIR__)
   @timeout 10_000

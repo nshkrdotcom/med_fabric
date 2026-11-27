@@ -1,6 +1,11 @@
 defmodule MedFabric.Exam.IntegrationFixtures do
   import ExUnit.Callbacks
-  alias MedFabric.Store.{Postgres, Encounters, DeviceSessions, AcquisitionSessions}
+  alias MedEx.Wire.FrameV1
+  alias MedFabric.Exam.ClockObservations
+  alias MedFabric.Store.AcquisitionSessions
+  alias MedFabric.Store.DeviceSessions
+  alias MedFabric.Store.Encounters
+  alias MedFabric.Store.Postgres
   @uuid "00000000-0000-4000-8000-000000000002"
   def trusted_tmp(_context) do
     suffix = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
@@ -42,7 +47,7 @@ defmodule MedFabric.Exam.IntegrationFixtures do
     start_supervised!({Registry, keys: :unique, name: __MODULE__.Registry})
     start_supervised!({DynamicSupervisor, strategy: :one_for_one, name: __MODULE__.Writers})
     start_supervised!({Phoenix.PubSub, name: __MODULE__.PubSub})
-    MedFabric.Exam.ClockObservations.initialize_host_generation()
+    ClockObservations.initialize_host_generation()
 
     context = %MedFabric.Exam.Context{
       db: db,
@@ -159,7 +164,7 @@ defmodule MedFabric.Exam.IntegrationFixtures do
 
   def frame(sequence \\ 0, first \\ 0) do
     {:ok, raw} =
-      MedEx.Wire.FrameV1.encode(%MedEx.Wire.FrameV1{
+      FrameV1.encode(%FrameV1{
         stream_number: 1,
         source_epoch: 0,
         config_epoch: :unknown,

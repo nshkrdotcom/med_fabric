@@ -3,18 +3,17 @@ Code.require_file("support/fixtures.exs", __DIR__)
 defmodule MedFabric.Exam.AcquisitionRuntimeTest do
   use ExUnit.Case, async: false
 
-  setup context, do: MedFabric.Exam.IntegrationFixtures.trusted_tmp(context)
-
-  alias MedFabric.Exam.{
-    IntegrationFixtures,
-    AcquisitionIngress,
-    AcquisitionManifest,
-    AcquisitionWorkflow,
-    AcquisitionExpiry
-  }
-
-  alias MedFabric.Store.{AcquisitionSessions, Encounters}
   alias MedEx.Receipt
+  alias MedFabric.Exam.AcquisitionExpiry
+  alias MedFabric.Exam.AcquisitionIngress
+  alias MedFabric.Exam.AcquisitionManifest
+  alias MedFabric.Exam.AcquisitionWorkflow
+  alias MedFabric.Exam.DeviceRootLock
+  alias MedFabric.Exam.IntegrationFixtures
+  alias MedFabric.Store.AcquisitionSessions
+  alias MedFabric.Store.Encounters
+
+  setup context, do: IntegrationFixtures.trusted_tmp(context)
 
   test "browser common stream drains durable source, seals exact manifest and verifies individual playback",
        %{tmp_dir: root} do
@@ -288,7 +287,7 @@ defmodule MedFabric.Exam.AcquisitionRuntimeTest do
     assert Process.alive?(old_owner)
 
     assert {:error, :effect_in_flight} =
-             MedFabric.Exam.DeviceRootLock.gate(c.root_owner, {bind.id, "audio"})
+             DeviceRootLock.gate(c.root_owner, {bind.id, "audio"})
 
     successor =
       Task.async(fn -> AcquisitionIngress.open(c, fresh, "audio", spec.descriptor_ref) end)

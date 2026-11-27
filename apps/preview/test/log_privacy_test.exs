@@ -13,13 +13,21 @@ defmodule MedFabric.Preview.LogPrivacyTest do
   test "host filter is idempotent and keeps safe warnings while redacting dependency metadata" do
     assert :ok = LogPrivacy.install()
     assert :ok = LogPrivacy.install()
-    assert Enum.count(:logger.get_primary_config().filters, &(elem(&1, 0) == :mf_preview_privacy)) == 1
+
+    assert Enum.count(:logger.get_primary_config().filters, &(elem(&1, 0) == :mf_preview_privacy)) ==
+             1
+
     secret = "synthetic-clinical-token-2a398fa1"
 
-    log = capture_log(fn ->
-      :logger.warning(secret, %{mfa: {ExWebRTC.PeerConnection, :query, 3}, clinical_body: secret})
-      Logger.warning("safe_preview_diagnostic")
-    end)
+    log =
+      capture_log(fn ->
+        :logger.warning(secret, %{
+          mfa: {ExWebRTC.PeerConnection, :query, 3},
+          clinical_body: secret
+        })
+
+        Logger.warning("safe_preview_diagnostic")
+      end)
 
     assert log =~ "mf_preview_dependency_event"
     assert log =~ "safe_preview_diagnostic"
@@ -29,24 +37,40 @@ defmodule MedFabric.Preview.LogPrivacyTest do
   test "real OTP crash reports cannot dump host state or mailbox contents" do
     secret = "synthetic-mailbox-secret-f0d5974c"
 
-    log = capture_log(fn ->
-      {:ok, pid} = GenServer.start(Fault, secret)
-      ref = Process.monitor(pid)
-      GenServer.cast(pid, :fail)
-      send(pid, {:clinical, secret})
-      assert_receive {:DOWN, ^ref, :process, ^pid, {:synthetic_failure, ^secret}}
-      Logger.flush()
-    end)
+    log =
+      capture_log(fn ->
+        {:ok, pid} = GenServer.start(Fault, secret)
+        ref = Process.monitor(pid)
+        GenServer.cast(pid, :fail)
+        send(pid, {:clinical, secret})
+        assert_receive {:DOWN, ^ref, :process, ^pid, {:synthetic_failure, ^secret}}
+        Logger.flush()
+      end)
 
     assert log =~ "mf_preview_otp_report"
     refute log =~ secret
   end
 
   test "unrelated OTP reports are left intact and sanitized severity is unchanged" do
-    unrelated = %{level: :warning, msg: {:report, %{label: {:unrelated, :event}, value: :safe}}, meta: %{domain: [:otp]}}
+    unrelated = %{
+      level: :warning,
+      msg: {:report, %{label: {:unrelated, :event}, value: :safe}},
+      meta: %{domain: [:otp]}
+    }
+
     assert :ignore = LogPrivacy.filter(unrelated, [])
-    sensitive = %{unrelated | msg: {:string, "secret"}, meta: %{mfa: {ExWebRTC.PeerConnection, :query, 3}, token: "secret"}}
-    assert %{level: :warning, msg: {:string, "mf_preview_dependency_event"}, meta: %{mfa: {ExWebRTC.PeerConnection, :query, 3}}} =
+
+    sensitive = %{
+      unrelated
+      | msg: {:string, "secret"},
+        meta: %{mfa: {ExWebRTC.PeerConnection, :query, 3}, token: "secret"}
+    }
+
+    assert %{
+             level: :warning,
+             msg: {:string, "mf_preview_dependency_event"},
+             meta: %{mfa: {ExWebRTC.PeerConnection, :query, 3}}
+           } =
              LogPrivacy.filter(sensitive, [])
   end
 
@@ -62,6 +86,7 @@ defmodule MedFabric.Preview.LogPrivacyTest do
       report = %{label: {:proc_lib, :crash}, report: reports}
       meta = %{domain: [:otp, :sasl], pid: pid}
       event = %{level: :error, msg: {:report, report}, meta: meta}
+
       assert %{level: :error, msg: {:string, "mf_preview_otp_report"}} =
                LogPrivacy.filter(event, [])
 
@@ -75,9 +100,12 @@ defmodule MedFabric.Preview.LogPrivacyTest do
     for app <- [:mf_exam, :mf_preview, :mf_handheld] do
       report = %{label: {:application_controller, :exit}, application: app, exited: "secret"}
       event = %{level: :notice, msg: {:report, report}, meta: %{domain: [:otp]}}
+
       assert %{level: :notice, msg: {:string, "mf_preview_otp_report"}} =
                LogPrivacy.filter(event, [])
-      assert :ignore = LogPrivacy.filter(%{event | msg: {:report, %{report | application: :other}}}, [])
+
+      assert :ignore =
+               LogPrivacy.filter(%{event | msg: {:report, %{report | application: :other}}}, [])
     end
   end
 end

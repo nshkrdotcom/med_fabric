@@ -156,16 +156,7 @@ defmodule MedFabric.Acceptance.Soak do
     if File.regular?(path) do
       path
       |> File.stream!()
-      |> Stream.flat_map(fn line ->
-        case JSON.decode(line) do
-          {:ok, %{"stream" => stream, "stage" => stage, "duration_us" => duration}}
-          when is_integer(duration) ->
-            [{stream, stage, duration}]
-
-          _ ->
-            []
-        end
-      end)
+      |> Stream.flat_map(&timing_entry/1)
       |> Enum.group_by(fn {stream, stage, _} -> {stream, stage} end, &elem(&1, 2))
       |> Enum.map(fn {{stream, stage}, values} ->
         sorted = Enum.sort(values)
@@ -238,32 +229,45 @@ defmodule MedFabric.Acceptance.Soak do
     end
   end
 
+  defp timing_entry(line) do
+    case JSON.decode(line) do
+      {:ok, %{"stream" => stream, "stage" => stage, "duration_us" => duration}}
+      when is_integer(duration) ->
+        [{stream, stage, duration}]
+
+      _ ->
+        []
+    end
+  end
+
   defp process(pid) do
     dir = "/proc/#{pid}"
 
-    with {:ok, stat} <- File.read(dir <> "/stat") do
-      [head, fields] =
-        String.split(String.trim(stat), ") ")
-        |> Enum.split(-1)
-        |> then(fn {head, [last]} -> [Enum.join(head, ") "), String.split(last)] end)
+    case File.read(dir <> "/stat") do
+      {:ok, stat} ->
+        [head, fields] =
+          String.split(String.trim(stat), ") ")
+          |> Enum.split(-1)
+          |> then(fn {head, [last]} -> [Enum.join(head, ") "), String.split(last)] end)
 
-      [_, user_ticks, system_ticks] = Enum.slice(fields, 10, 3)
+        [_, user_ticks, system_ticks] = Enum.slice(fields, 10, 3)
 
-      %{
-        pid: pid,
-        name: head |> String.split(" (", parts: 2) |> List.last(),
-        start_ticks: String.to_integer(Enum.at(fields, 19)),
-        cpu_ticks: String.to_integer(user_ticks) + String.to_integer(system_ticks),
-        status: counters(dir <> "/status", ~w(VmRSS RssAnon Threads)),
-        io: counters(dir <> "/io", ~w(read_bytes write_bytes)),
-        open_fds:
-          case File.ls(dir <> "/fd") do
-            {:ok, entries} -> length(entries)
-            _ -> nil
-          end
-      }
-    else
-      _ -> nil
+        %{
+          pid: pid,
+          name: head |> String.split(" (", parts: 2) |> List.last(),
+          start_ticks: String.to_integer(Enum.at(fields, 19)),
+          cpu_ticks: String.to_integer(user_ticks) + String.to_integer(system_ticks),
+          status: counters(dir <> "/status", ~w(VmRSS RssAnon Threads)),
+          io: counters(dir <> "/io", ~w(read_bytes write_bytes)),
+          open_fds:
+            case File.ls(dir <> "/fd") do
+              {:ok, entries} -> length(entries)
+              _ -> nil
+            end
+        }
+
+      _ ->
+        nil
     end
   end
 

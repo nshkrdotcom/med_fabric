@@ -69,8 +69,16 @@ defmodule MedFabric.Exam.DeviceRootLock do
           if EffectiveUID.resolve() == {:ok, uid} and
                root_identity(root) == {:ok, root_identity} and trusted_path(root, uid) == :ok do
             {:ok,
-             %{root: root, uuid: uuid, uid: uid, root_identity: root_identity,
-               port: port, token: make_ref(), gates: %{}, connections: %{}}}
+             %{
+               root: root,
+               uuid: uuid,
+               uid: uid,
+               root_identity: root_identity,
+               port: port,
+               token: make_ref(),
+               gates: %{},
+               connections: %{}
+             }}
           else
             if Port.info(port), do: Port.close(port)
             {:stop, :untrusted_artifact_root}
@@ -94,18 +102,19 @@ defmodule MedFabric.Exam.DeviceRootLock do
 
     if inside and Port.info(s.port) != nil and EffectiveUID.resolve() == {:ok, s.uid} and
          root_identity(s.root) == {:ok, s.root_identity} and trusted_path(s.root, s.uid) == :ok,
-      do: {:reply, {:ok, %{root: s.root, token: s.token}}, s},
-      else: {:reply, {:error, :root_ownership_lost}, s}
+       do: {:reply, {:ok, %{root: s.root, token: s.token}}, s},
+       else: {:reply, {:error, :root_ownership_lost}, s}
   end
 
   def handle_call({:bind_connection, key, connection, socket}, {pid, _}, s) do
     case s.gates[key] do
-      %{owner: ^pid, poisoned: false} ->
+      %{owner: ^pid, ref: gate_ref, poisoned: false} ->
         if s.connections[key], do: Process.demonitor(s.connections[key].ref, [:flush])
 
         {:reply, :ok,
          put_in(s.connections[key], %{
            connection: connection,
+           gate_ref: gate_ref,
            socket: socket,
            ref: Process.monitor(socket)
          })}
@@ -118,8 +127,11 @@ defmodule MedFabric.Exam.DeviceRootLock do
   def handle_call({:current_connection, key, connection}, _, s) do
     active =
       case s.connections[key] do
-        %{connection: ^connection, socket: socket} -> Process.alive?(socket)
-        _ -> false
+        %{connection: ^connection, socket: socket, gate_ref: gate_ref} ->
+          Process.alive?(socket) and connection_gate_alive?(s.gates[key], gate_ref)
+
+        _ ->
+          false
       end
 
     {:reply, active, s}
@@ -139,6 +151,8 @@ defmodule MedFabric.Exam.DeviceRootLock do
   def handle_call({:gate, key}, {pid, _}, s) do
     case s.gates[key] do
       nil ->
+        if connection = s.connections[key], do: Process.demonitor(connection.ref, [:flush])
+        s = %{s | connections: Map.delete(s.connections, key)}
         ref = Process.monitor(pid)
         {:reply, :ok, put_in(s.gates[key], %{owner: pid, ref: ref, poisoned: false})}
 
@@ -198,8 +212,12 @@ defmodule MedFabric.Exam.DeviceRootLock do
 
   def handle_call({:poison, key}, {pid, _}, s) do
     case s.gates[key] do
-      %{owner: ^pid} = gate -> {:reply, :ok, put_in(s.gates[key], %{gate | poisoned: true})}
-      _ -> {:reply, {:error, :gate_owner_required}, s}
+      %{owner: ^pid, ref: ref} = gate ->
+        s = put_in(s.gates[key], %{gate | poisoned: true})
+        {:reply, :ok, %{s | connections: drop_connections(s.connections, ref)}}
+
+      _ ->
+        {:reply, {:error, :gate_owner_required}, s}
     end
   end
 
@@ -219,8 +237,7 @@ defmodule MedFabric.Exam.DeviceRootLock do
       {:noreply,
        %{
          s
-         | connections:
-             Map.reject(s.connections, fn {_, connection} -> connection.ref == ref end),
+         | connections: drop_connections(s.connections, ref),
            gates:
              Map.new(s.gates, fn {k, v} ->
                {k, if(v.ref == ref, do: %{v | poisoned: true}, else: v)}
@@ -234,15 +251,37 @@ defmodule MedFabric.Exam.DeviceRootLock do
 
   def handle_info(_, s), do: {:noreply, s}
 
+  # Explicit release precedes a normal terminal reply. An active gate must
+  # still belong to this binding and have a live, unpoisoned owner.
+  defp connection_gate_alive?(nil, _ref), do: true
+
+  defp connection_gate_alive?(%{owner: owner, ref: ref, poisoned: false}, ref),
+    do: Process.alive?(owner)
+
+  defp connection_gate_alive?(_, _), do: false
+
+  defp drop_connections(connections, ref) do
+    Map.reject(connections, fn
+      {_, %{ref: ^ref}} ->
+        true
+
+      {_, %{gate_ref: ^ref, ref: socket_ref}} ->
+        Process.demonitor(socket_ref, [:flush])
+        true
+
+      _ ->
+        false
+    end)
+  end
+
   def terminate(_, s) do
     if Port.info(s.port), do: Port.close(s.port)
     :ok
   end
 
   def trusted_path(path) do
-    with {:ok, uid} <- EffectiveUID.resolve() do
-      trusted_path(path, uid)
-    else
+    case EffectiveUID.resolve() do
+      {:ok, uid} -> trusted_path(path, uid)
       _ -> {:error, :untrusted_artifact_root}
     end
   end

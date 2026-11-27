@@ -3,10 +3,21 @@ Code.require_file("support/fixtures.exs", __DIR__)
 defmodule MedFabric.Exam.SchemaRecoveryIntegrationTest do
   use ExUnit.Case, async: false
 
-  setup context, do: MedFabric.Exam.IntegrationFixtures.trusted_tmp(context)
+  alias MedFabric.Domain.Evidence
+  alias MedFabric.Domain.Review
+  alias MedFabric.Exam.AcquisitionIngress
+  alias MedFabric.Exam.AcquisitionManifest
+  alias MedFabric.Exam.AcquisitionRecovery
   alias MedFabric.Exam.IntegrationFixtures, as: F
-  alias MedFabric.Store.{Postgres, AcquisitionSessions, Recovery, Records, Encounters}
-  alias MedFabric.Exam.{AcquisitionIngress, AcquisitionManifest, AcquisitionRecovery}
+  alias MedFabric.Interop.FhirClient
+  alias MedFabric.Store.AcquisitionSessions
+  alias MedFabric.Store.Deliveries
+  alias MedFabric.Store.Encounters
+  alias MedFabric.Store.Postgres
+  alias MedFabric.Store.Records
+  alias MedFabric.Store.Recovery
+
+  setup context, do: F.trusted_tmp(context)
   @uuid "00000000-0000-4000-8000-000000000002"
 
   test "fresh schema is idempotent, identity is immutable and drift fails closed", %{
@@ -123,7 +134,7 @@ defmodule MedFabric.Exam.SchemaRecoveryIntegrationTest do
     }
 
     assert {:ok, ^digest} = Recovery.reconcile(c.db, bytes, digest, proof)
-    {:ok, body} = MedFabric.Domain.Evidence.pulse_rate(76, DateTime.utc_now(), "clinician")
+    {:ok, body} = Evidence.pulse_rate(76, DateTime.utc_now(), "clinician")
     assert {:ok, _} = Records.put_manual(c.db, "encounter", "post_cutpoint", "clinician", body)
     assert {:ok, :ok} = Recovery.block(c.db, cut)
 
@@ -159,12 +170,12 @@ defmodule MedFabric.Exam.SchemaRecoveryIntegrationTest do
        %{tmp_dir: root} do
     c = F.context(root)
     [[cut]] = AcquisitionSessions.rows(c.db, "SELECT pg_current_wal_lsn()::text", [])
-    {:ok, body} = MedFabric.Domain.Evidence.pulse_rate(76, DateTime.utc_now(), "clinician")
+    {:ok, body} = Evidence.pulse_rate(76, DateTime.utc_now(), "clinician")
     {:ok, _} = Records.put_manual(c.db, "encounter", "later_evidence", "clinician", body)
     {:ok, source} = Records.manual(c.db, "encounter", "later_evidence", "clinician")
 
     {:ok, plan} =
-      MedFabric.Domain.Review.plan(
+      Review.plan(
         source,
         "clinician",
         "later_decision",
@@ -173,24 +184,24 @@ defmodule MedFabric.Exam.SchemaRecoveryIntegrationTest do
       )
 
     {:ok, %{observations: [id]}} = Records.accept_plan(c.db, plan)
-    {:ok, intent} = MedFabric.Store.Deliveries.get(c.db, id)
-    {:ok, native} = MedFabric.Store.Deliveries.observation(c.db, id)
+    {:ok, intent} = Deliveries.get(c.db, id)
+    {:ok, native} = Deliveries.observation(c.db, id)
     refs = %{"patient_ref" => "Patient/one", "encounter_ref" => "Encounter/one"}
 
     {:ok, resource} =
-      MedFabric.Interop.FhirClient.resource_checked(
+      FhirClient.resource_checked(
         native,
         %{"system" => intent.identifier_system, "value" => id},
         refs
       )
 
-    bytes = MedFabric.Interop.FhirClient.canonical_bytes(resource)
+    bytes = FhirClient.canonical_bytes(resource)
 
     {:ok, :ok} =
-      MedFabric.Store.Deliveries.save_mapping(c.db, id, %{
+      Deliveries.save_mapping(c.db, id, %{
         destination: "http://example.invalid/fhir",
         refs: refs,
-        version: MedFabric.Interop.FhirClient.mapping_version(),
+        version: FhirClient.mapping_version(),
         resource: resource,
         bytes: bytes,
         fingerprint: AcquisitionSessions.hash(bytes),
@@ -198,11 +209,11 @@ defmodule MedFabric.Exam.SchemaRecoveryIntegrationTest do
         qualification_ref: nil
       })
 
-    {:ok, claim} = MedFabric.Store.Deliveries.claim_delivery(c.db, id)
-    {:ok, :ok} = MedFabric.Store.Deliveries.before_dispatch(c.db, claim)
+    {:ok, claim} = Deliveries.claim_delivery(c.db, id)
+    {:ok, :ok} = Deliveries.before_dispatch(c.db, claim)
 
     {:ok, "unresolved"} =
-      MedFabric.Store.Deliveries.record_attempt_outcome(c.db, claim, {:unknown, :response_lost})
+      Deliveries.record_attempt_outcome(c.db, claim, {:unknown, :response_lost})
 
     {:ok, :ok} = Recovery.block(c.db, cut)
     {:ok, later} = AcquisitionRecovery.inventory(c)

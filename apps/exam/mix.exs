@@ -47,7 +47,7 @@ defmodule MedFabric.Exam.MixProject do
     [mod: {MedFabric.Exam.Application, []}]
   end
 
-  defp deps() do
+  defp deps do
     med_ex_dep =
       if Code.ensure_loaded?(MedFabric.BuildSources),
         do: MedFabric.BuildSources.med_ex_dependency(:med_ex),

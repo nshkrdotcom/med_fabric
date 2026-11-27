@@ -2,7 +2,15 @@ defmodule MedFabric.Exam.Application do
   @moduledoc false
   use Application
   alias MedFabric.Exam
-  alias MedFabric.Exam.{AcquisitionExpiry, AcquisitionManifest, ClockObservations, DeliveryWorker}
+
+  alias MedFabric.Exam.{
+    AcquisitionExpiry,
+    AcquisitionManifest,
+    ClockObservations,
+    DeliveryWorker,
+    LogPrivacy
+  }
+
   alias MedFabric.Store.{AcquisitionSessions, Encounters, Postgres}
   @asset_revision "0.3.0"
   @asset_hashes %{
@@ -12,7 +20,7 @@ defmodule MedFabric.Exam.Application do
   }
 
   def start(_type, _args) do
-    :ok = MedFabric.Exam.LogPrivacy.install()
+    :ok = LogPrivacy.install()
     ClockObservations.initialize_host_generation()
 
     case Application.get_env(:mf_exam, :lab) do
@@ -45,6 +53,7 @@ defmodule MedFabric.Exam.Application do
           MedFabric.ExamWeb.Endpoint,
           %{id: :background, type: :supervisor, start: {__MODULE__, :background, []}}
         ]
+
         Supervisor.start_link(children,
           strategy: :rest_for_one,
           name: MedFabric.Exam.Supervisor
@@ -66,10 +75,12 @@ defmodule MedFabric.Exam.Application do
   end
 
   def recover do
-    case AcquisitionManifest.recover(Exam.context()) do
-      :ok -> :ignore
-      {:error, _} -> {:error, :startup_recovery_failed}
-    end
+    :ok = AcquisitionManifest.recover(Exam.context())
+    :ignore
+  rescue
+    _ -> {:error, :startup_recovery_failed}
+  catch
+    :exit, _ -> {:error, :startup_recovery_failed}
   end
 
   def background(context \\ Exam.context(), sidecar \\ Application.get_env(:mf_exam, :sidecar)) do

@@ -8,14 +8,15 @@ defmodule MedFabric.Exam.BackgroundWorkersTest do
     ref = Process.monitor(dead)
     assert_receive {:DOWN, ^ref, :process, ^dead, _}
 
-    log = capture_log(fn ->
-      worker = start_supervised!({DeliveryWorker, %{db: dead}})
-      monitor = Process.monitor(worker)
-      refute_receive {:DOWN, ^monitor, :process, ^worker, _}, 600
-      assert Process.alive?(worker)
-      {:message_queue_len, size} = Process.info(worker, :message_queue_len)
-      assert size <= 1
-    end)
+    log =
+      capture_log(fn ->
+        worker = start_supervised!({DeliveryWorker, %{db: dead}})
+        monitor = Process.monitor(worker)
+        refute_receive {:DOWN, ^monitor, :process, ^worker, _}, 600
+        assert Process.alive?(worker)
+        {:message_queue_len, size} = Process.info(worker, :message_queue_len)
+        assert size <= 1
+      end)
 
     assert log =~ "delivery_poll_failed"
     refute log =~ "crasher"
@@ -26,8 +27,14 @@ defmodule MedFabric.Exam.BackgroundWorkersTest do
     dead = spawn(fn -> :ok end)
     ref = Process.monitor(dead)
     assert_receive {:DOWN, ^ref, :process, ^dead, _}
-    {:ok, supervisor} = MedFabric.Exam.Application.background(%{db: dead}, nil)
-    on_exit(fn -> if Process.alive?(supervisor), do: Supervisor.stop(supervisor) end)
+
+    supervisor =
+      start_supervised!(%{
+        id: :background,
+        start: {MedFabric.Exam.Application, :background, [%{db: dead}, nil]},
+        type: :supervisor
+      })
+
     children = Map.new(Supervisor.which_children(supervisor), fn {id, pid, _, _} -> {id, pid} end)
     expiry = children[AcquisitionExpiry]
     delivery = children[DeliveryWorker]
@@ -44,7 +51,9 @@ defmodule MedFabric.Exam.BackgroundWorkersTest do
 
   defp child(supervisor, id, old, attempts) do
     case List.keyfind(Supervisor.which_children(supervisor), id, 0) do
-      {^id, pid, _, _} when is_pid(pid) and pid != old -> pid
+      {^id, pid, _, _} when is_pid(pid) and pid != old ->
+        pid
+
       _ ->
         Process.sleep(10)
         child(supervisor, id, old, attempts - 1)

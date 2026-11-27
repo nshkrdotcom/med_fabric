@@ -1,5 +1,6 @@
 defmodule MedFabric.Build.Workspace do
   @moduledoc false
+  @compile {:no_warn_undefined, Blitz}
   @tasks ~w(setup test credo dialyzer quality docs)
   @projects ~w(core/domain core/store core/interop apps/exam apps/handheld apps/preview)
   @boundaries ~w(. tools/maintainer)
@@ -21,29 +22,41 @@ defmodule MedFabric.Build.Workspace do
   def run(task, args) do
     {opts, forwarded} = options(args, %{jobs: 2, projects: [], locked: false, release: false})
     selected = select(task, opts.projects, forwarded)
-    if task in ["setup", "quality"] and forwarded != [],
-      do: Mix.raise("#{task} accepts only --jobs, --project, --locked and --release")
-    if opts.locked and task != "setup", do: Mix.raise("--locked is for mix setup")
-    if opts.release and task != "quality", do: Mix.raise("--release is for mix quality")
+
+    validate_options!(task, opts, forwarded)
     check_environment!()
     ensure_tools(task, opts.locked)
-    selected = if task == "setup", do: Enum.reject(selected, &(&1 == ".")), else: selected
-    extra = if opts.locked, do: ["--locked"], else: []
-    extra = if opts.release, do: ["--release" | extra], else: extra
+    selected = command_projects(task, selected)
+    extra = command_options(opts)
 
     commands =
       Enum.map(selected, fn project ->
-        apply(Blitz, :command, [[
+        Blitz.command(
           id: project,
           command: "elixir",
           args: argv(task, extra ++ forwarded),
           cd: Path.join(@root, project),
           env: %{"MIX_ENV" => "dev", "ERL_FLAGS" => System.get_env("ERL_FLAGS", "+S 4:4")}
-        ]])
+        )
       end)
 
-    apply(Blitz, :run!, [commands, [max_concurrency: opts.jobs, timeout: :infinity]])
+    Blitz.run!(commands, max_concurrency: opts.jobs, timeout: :infinity)
   end
+
+  defp validate_options!(task, opts, forwarded) do
+    if task in ["setup", "quality"] and forwarded != [],
+      do: Mix.raise("#{task} accepts only --jobs, --project, --locked and --release")
+
+    if opts.locked and task != "setup", do: Mix.raise("--locked is for mix setup")
+    if opts.release and task != "quality", do: Mix.raise("--release is for mix quality")
+  end
+
+  defp command_projects("setup", selected), do: Enum.reject(selected, &(&1 == "."))
+  defp command_projects(_task, selected), do: selected
+
+  defp command_options(%{locked: true}), do: ["--locked"]
+  defp command_options(%{release: true}), do: ["--release"]
+  defp command_options(_), do: []
 
   def argv(task, args),
     do: [@script, task | args]
@@ -63,7 +76,9 @@ defmodule MedFabric.Build.Workspace do
 
   defp default_selection("test", args, available) do
     if Enum.any?(args, &String.contains?(&1, [".exs", "/"])) do
-      Mix.raise("A Fabric test path requires --project, e.g. --project apps/exam -- test/file_test.exs")
+      Mix.raise(
+        "A Fabric test path requires --project, e.g. --project apps/exam -- test/file_test.exs"
+      )
     else
       available
     end
@@ -91,8 +106,14 @@ defmodule MedFabric.Build.Workspace do
   defp ensure_tools("setup", locked?) do
     args = if locked?, do: ["--check-locked"], else: []
     Mix.Task.run("deps.get", args)
-    {_output, status} = System.cmd("mix", ["deps.get" | args],
-      env: [{"MIX_ENV", "test"}], into: IO.stream(:stdio, :line), stderr_to_stdout: true)
+
+    {_output, status} =
+      System.cmd("mix", ["deps.get" | args],
+        env: [{"MIX_ENV", "test"}],
+        into: IO.stream(:stdio, :line),
+        stderr_to_stdout: true
+      )
+
     unless status == 0, do: Mix.raise("Root test dependency bootstrap failed (#{status})")
     Mix.Task.run("deps.compile")
     Mix.Task.run("loadpaths")

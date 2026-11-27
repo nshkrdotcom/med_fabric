@@ -3,16 +3,23 @@ Code.require_file("support/fixtures.exs", __DIR__)
 defmodule MedFabric.Exam.NativeScopeTest do
   use ExUnit.Case, async: false
 
-  setup context, do: MedFabric.Exam.IntegrationFixtures.trusted_tmp(context)
+  alias MedFabric.Domain.Evidence
+  alias MedFabric.Domain.Review
+  alias MedFabric.Exam.DeliveryWorker
   alias MedFabric.Exam.IntegrationFixtures, as: F
-  alias MedFabric.Store.{Records, Encounters, Deliveries, AcquisitionSessions}
+  alias MedFabric.Store.AcquisitionSessions
+  alias MedFabric.Store.Deliveries
+  alias MedFabric.Store.Encounters
+  alias MedFabric.Store.Records
+
+  setup context, do: F.trusted_tmp(context)
 
   test "native manual acceptance is atomic, replayable after closure, and independent of destination",
        %{tmp_dir: root} do
     c = F.context(root)
 
     {:ok, evidence} =
-      MedFabric.Domain.Evidence.pulse_rate(76, ~U[2026-11-24 12:00:00Z], "clinician")
+      Evidence.pulse_rate(76, ~U[2026-11-24 12:00:00Z], "clinician")
 
     assert {:ok, "manual_one"} =
              Records.put_manual(c.db, "encounter", "manual_one", "clinician", evidence)
@@ -23,7 +30,7 @@ defmodule MedFabric.Exam.NativeScopeTest do
     {:ok, source} = Records.manual(c.db, "encounter", "manual_one", "clinician")
 
     {:ok, plan} =
-      MedFabric.Domain.Review.plan(
+      Review.plan(
         source,
         "clinician",
         "review_one",
@@ -41,12 +48,12 @@ defmodule MedFabric.Exam.NativeScopeTest do
 
     assert [[1]] = AcquisitionSessions.rows(c.db, "SELECT count(*) FROM reviews", [])
     assert [[1]] = AcquisitionSessions.rows(c.db, "SELECT count(*) FROM observations", [])
-    assert {:ok, "blocked"} = MedFabric.Exam.DeliveryWorker.run(c, id) |> normalize_blocked(c, id)
+    assert {:ok, "blocked"} = DeliveryWorker.run(c, id) |> normalize_blocked(c, id)
     assert {:ok, :ok} = Encounters.close(c.db, "encounter", "clinician")
     assert ^first = Records.accept_plan(c.db, plan)
 
     {:ok, other} =
-      MedFabric.Domain.Review.plan(
+      Review.plan(
         source,
         "clinician",
         "new_request",
@@ -75,7 +82,7 @@ defmodule MedFabric.Exam.NativeScopeTest do
         "clinician_actor" => "clinician"
       })
 
-    {:ok, evidence} = MedFabric.Domain.Evidence.pulse_rate(0, DateTime.utc_now(), "clinician")
+    {:ok, evidence} = Evidence.pulse_rate(0, DateTime.utc_now(), "clinician")
     assert {:ok, _} = Records.put_manual(c.db, "encounter", "same_id", "clinician", evidence)
 
     assert {:error, :manual_evidence_conflict} =

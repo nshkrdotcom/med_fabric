@@ -3,11 +3,17 @@ Code.require_file("support/fixtures.exs", __DIR__)
 defmodule MedFabric.Exam.OutboxIntegrationTest do
   use ExUnit.Case, async: false
 
-  setup context, do: MedFabric.Exam.IntegrationFixtures.trusted_tmp(context)
+  alias MedFabric.Domain.Evidence
+  alias MedFabric.Domain.Review
+  alias MedFabric.Exam.DeliveryWorker
   alias MedFabric.Exam.IntegrationFixtures, as: F
-  alias MedFabric.Store.{Records, Deliveries, AcquisitionSessions, Encounters}
-  alias MedFabric.Domain.{Evidence, Review}
   alias MedFabric.Interop.FhirClient
+  alias MedFabric.Store.AcquisitionSessions
+  alias MedFabric.Store.Deliveries
+  alias MedFabric.Store.Encounters
+  alias MedFabric.Store.Records
+
+  setup context, do: F.trusted_tmp(context)
 
   defp intent(c, qualified) do
     {:ok, body} = Evidence.pulse_rate(76, ~U[2026-11-24 12:00:00Z], "clinician")
@@ -105,7 +111,9 @@ defmodule MedFabric.Exam.OutboxIntegrationTest do
              Deliveries.record_attempt_outcome(c.db, claim, {:noncommitted, :before_http})
   end
 
-  test "claim-only expiry appends exact noncommit evidence and fences a late worker", %{tmp_dir: root} do
+  test "claim-only expiry appends exact noncommit evidence and fences a late worker", %{
+    tmp_dir: root
+  } do
     c = F.context(root)
     id = intent(c, false)
     {:ok, pinned} = Deliveries.get(c.db, id)
@@ -165,10 +173,14 @@ defmodule MedFabric.Exam.OutboxIntegrationTest do
     {:ok, claim} = Deliveries.claim_delivery(c.db, id)
 
     for field <- ["attempt_id", "claim_token"] do
-      AcquisitionSessions.rows(c.db, "UPDATE outbox_deliveries SET " <> field <> "=$2 WHERE id=$1", [
-        id,
-        "corruption_fixture"
-      ])
+      AcquisitionSessions.rows(
+        c.db,
+        "UPDATE outbox_deliveries SET " <> field <> "=$2 WHERE id=$1",
+        [
+          id,
+          "corruption_fixture"
+        ]
+      )
 
       expire(c, id)
       assert {:error, :invalid_claim_history} = Deliveries.expire_claim(c.db, id)
@@ -232,34 +244,46 @@ defmodule MedFabric.Exam.OutboxIntegrationTest do
     end
 
     assert [[5, nil]] =
-             AcquisitionSessions.rows(c.db, "SELECT executions,next_due_at FROM outbox_deliveries WHERE id=$1", [id])
+             AcquisitionSessions.rows(
+               c.db,
+               "SELECT executions,next_due_at FROM outbox_deliveries WHERE id=$1",
+               [id]
+             )
+
     assert length(history(c, id)) == 12
   end
 
-  test "expiry winning the row lock prevents a late dispatch from admitting HTTP", %{tmp_dir: root} do
+  test "expiry winning the row lock prevents a late dispatch from admitting HTTP", %{
+    tmp_dir: root
+  } do
     c = F.context(root)
     id = intent(c, false)
     {:ok, claim} = Deliveries.claim_delivery(c.db, id)
     expire(c, id)
     parent = self()
 
-    expiry = Task.async(fn ->
-      Postgrex.transaction(c.db, fn tx ->
-        result = Deliveries.expire_claim(tx, id)
-        send(parent, {:expiry_fenced, result})
-        receive do
-          :commit -> result
-        end
+    expiry =
+      Task.async(fn ->
+        Postgrex.transaction(c.db, fn tx ->
+          result = Deliveries.expire_claim(tx, id)
+          send(parent, {:expiry_fenced, result})
+
+          receive do
+            :commit -> result
+          end
+        end)
       end)
-    end)
 
     assert_receive {:expiry_fenced, {:ok, :retryable}}, 5_000
-    sender = Task.async(fn ->
-      case Deliveries.before_dispatch(c.db, claim) do
-        {:ok, :ok} -> send(parent, :http_admitted)
-        error -> error
-      end
-    end)
+
+    sender =
+      Task.async(fn ->
+        case Deliveries.before_dispatch(c.db, claim) do
+          {:ok, :ok} -> send(parent, :http_admitted)
+          error -> error
+        end
+      end)
+
     send(expiry.pid, :commit)
     assert {:ok, {:ok, :retryable}} = Task.await(expiry)
     assert {:error, :stale_attempt} = Task.await(sender)
@@ -267,22 +291,26 @@ defmodule MedFabric.Exam.OutboxIntegrationTest do
     assert [_, [_, "result", "noncommitted", false, "expired_before_send"]] = history(c, id)
   end
 
-  test "a committed send winning the row lock remains a possible late HTTP effect", %{tmp_dir: root} do
+  test "a committed send winning the row lock remains a possible late HTTP effect", %{
+    tmp_dir: root
+  } do
     c = F.context(root)
     id = intent(c, false)
     {:ok, claim} = Deliveries.claim_delivery(c.db, id)
     parent = self()
 
-    sender = Task.async(fn ->
-      Postgrex.transaction(c.db, fn tx ->
-        assert {:ok, :ok} = Deliveries.before_dispatch(tx, claim)
-        expire(%{c | db: tx}, id)
-        send(parent, :send_recorded)
-        receive do
-          :commit -> :ok
-        end
+    sender =
+      Task.async(fn ->
+        Postgrex.transaction(c.db, fn tx ->
+          assert {:ok, :ok} = Deliveries.before_dispatch(tx, claim)
+          expire(%{c | db: tx}, id)
+          send(parent, :send_recorded)
+
+          receive do
+            :commit -> :ok
+          end
+        end)
       end)
-    end)
 
     assert_receive :send_recorded, 5_000
     expiry = Task.async(fn -> Deliveries.expire_claim(c.db, id) end)
@@ -392,7 +420,7 @@ defmodule MedFabric.Exam.OutboxIntegrationTest do
                "encounter_ref" => "Encounter/one"
              })
 
-    assert {:ok, :ok} = MedFabric.Exam.DeliveryWorker.run(c, id)
+    assert {:ok, :ok} = DeliveryWorker.run(c, id)
     assert {:ok, %{status: "blocked", resource: nil}} = Deliveries.get(c.db, id)
     assert [[1]] = AcquisitionSessions.rows(c.db, "SELECT count(*) FROM reviews", [])
     assert [[1]] = AcquisitionSessions.rows(c.db, "SELECT count(*) FROM observations", [])

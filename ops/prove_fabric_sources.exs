@@ -103,5 +103,5 @@ for {app, requirement, source} <- config[:deps], app in [:med_ex, :med_ex_opus, 
   end
 end
 
-IO.inspect(mutable, label: "isolated mutable paths")
+IO.puts("isolated mutable paths: #{inspect(mutable)}")
 IO.puts("Actual Fabric project passed: #{profile}")

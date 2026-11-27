@@ -15,9 +15,7 @@ defmodule MedFabric.Exam.AcquisitionExpiry do
   def handle_info(:sweep, context) do
     case expiring(context) do
       {:ok, ids} ->
-        Enum.each(ids, fn id ->
-          if sweep_one(context, id) != :ok, do: Logger.warning("acquisition_settlement_pending")
-        end)
+        Enum.each(ids, &log_settlement(context, &1))
 
       {:error, _} ->
         Logger.warning("acquisition_expiry_poll_failed")
@@ -25,6 +23,10 @@ defmodule MedFabric.Exam.AcquisitionExpiry do
 
     Process.send_after(self(), :sweep, 2_000)
     {:noreply, context}
+  end
+
+  defp log_settlement(context, id) do
+    if sweep_one(context, id) != :ok, do: Logger.warning("acquisition_settlement_pending")
   end
 
   defp expiring(context) do

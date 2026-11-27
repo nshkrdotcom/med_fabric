@@ -32,47 +32,14 @@ defmodule MedFabric.Acceptance.Oracle do
     source = if name == "audio", do: 1, else: 2
 
     {spans, raw} =
-      Enum.map_reduce(index["segments"], :crypto.hash_init(:sha256), fn seg, hash ->
-        first = integer(seg["first_sample"])
-        last = integer(seg["end_sample"])
-        # Fixture manifest segment keys are relative filenames; refuse traversal.
-        key = seg["key"]
-
-        check!(
-          is_binary(key) and Path.type(key) == :relative and
-            not String.contains?(key, ["\\", <<0>>]) and
-            Enum.all?(String.split(key, "/"), &(&1 not in ["", ".", ".."])),
-          "Invalid segment key"
-        )
-
-        bytes = File.read!(Path.join([root, name, index["fence"], key]))
-
-        check!(
-          sha(bytes) == seg["sha256"] and byte_size(bytes) == (last - first) * channels * width,
-          "Segment integrity or sample length differs"
-        )
-
-        {{first, last}, :crypto.hash_update(hash, bytes)}
-      end)
+      read_segments!(index["segments"], Path.join([root, name, index["fence"]]), channels * width)
 
     gaps =
       for span <- index["spans"],
           span["code"] == "source_gap",
           do: {integer(span["first_sample"]), integer(span["end_sample"])}
 
-    expected_gaps =
-      case {name, cfg["gap"]} do
-        {"audio", true} ->
-          [{1920, 2020}]
-
-        {"audio", 3} ->
-          assert_gap_sequences!(index)
-          [{1920, 2220}]
-
-        _ ->
-          []
-      end
-
+    expected_gaps = expected_gaps(name, cfg["gap"], index)
     check!(gaps == expected_gaps, "Unexpected source gaps for #{name}")
 
     edge =
@@ -83,17 +50,7 @@ defmodule MedFabric.Acceptance.Oracle do
 
     [num, den] = Enum.map(desc["sample_rate"], &integer/1)
 
-    cond do
-      cfg["restart_cutoffs"] ->
-        check!(edge == cfg["restart_cutoffs"][name], "Restart cutoff differs")
-
-      (cfg["spool_limit"] || 67_108_864) < 67_108_864 || cfg["reset"] ->
-        :ok
-
-      true ->
-        check!(edge == div(cfg["seconds"] * num, den), "Wrong sample count for #{name}")
-    end
-
+    check_sample_count!(cfg, name, edge, num, den)
     raw = hash_hex(raw)
 
     expected =
@@ -130,6 +87,58 @@ defmodule MedFabric.Acceptance.Oracle do
       },
       clock: clock
     }
+  end
+
+  defp read_segments!(segments, root, bytes_per_sample) do
+    Enum.map_reduce(segments, :crypto.hash_init(:sha256), fn seg, hash ->
+      first = integer(seg["first_sample"])
+      last = integer(seg["end_sample"])
+      # Fixture manifest segment keys are relative filenames; refuse traversal.
+      key = seg["key"]
+
+      check!(
+        is_binary(key) and Path.type(key) == :relative and
+          not String.contains?(key, ["\\", <<0>>]) and
+          Enum.all?(String.split(key, "/"), &(&1 not in ["", ".", ".."])),
+        "Invalid segment key"
+      )
+
+      bytes = File.read!(Path.join(root, key))
+
+      check!(
+        sha(bytes) == seg["sha256"] and byte_size(bytes) == (last - first) * bytes_per_sample,
+        "Segment integrity or sample length differs"
+      )
+
+      {{first, last}, :crypto.hash_update(hash, bytes)}
+    end)
+  end
+
+  defp expected_gaps(name, gap, index) do
+    case {name, gap} do
+      {"audio", true} ->
+        [{1920, 2020}]
+
+      {"audio", 3} ->
+        assert_gap_sequences!(index)
+        [{1920, 2220}]
+
+      _ ->
+        []
+    end
+  end
+
+  defp check_sample_count!(cfg, name, edge, num, den) do
+    cond do
+      cfg["restart_cutoffs"] ->
+        check!(edge == cfg["restart_cutoffs"][name], "Restart cutoff differs")
+
+      (cfg["spool_limit"] || 67_108_864) < 67_108_864 || cfg["reset"] ->
+        :ok
+
+      true ->
+        check!(edge == div(cfg["seconds"] * num, den), "Wrong sample count for #{name}")
+    end
   end
 
   defp hash_hex(hash), do: hash |> :crypto.hash_final() |> Base.encode16(case: :lower)
@@ -230,27 +239,17 @@ defmodule MedFabric.Acceptance.Oracle do
       holdover = fraction(fit["holdover_rate"])
       indices = Enum.uniq([0, div(edge, 3), div(edge, 2), edge - 1]) |> Enum.sort()
 
+      drift = if name == "audio", do: 35, else: -40
+
       failed =
         Enum.filter(indices, fn i ->
           device = add({180_000, 1}, ratio(i * 1_000_000 * den, num))
           a = sub(device, {2, 1})
           b = add(device, {2, 1})
           error = mul(high([{0, 1}, sub(observed_first, a), sub(b, observed_last)]), holdover)
-          lo = sub(low(Enum.map(vertices, fn {k, t} -> add(mul(k, a), t) end)), error)
-          hi = add(high(Enum.map(vertices, fn {k, t} -> add(mul(k, b), t) end)), error)
-          drift = if name == "audio", do: 35, else: -40
-
-          ground =
-            integer(identity["origin_us"]) +
-              trunc_r(mul(sub(device, {180_000, 1}), ratio(1_000_000 + drift, 1_000_000)))
-
-          lower =
-            ground + integer(mapping["host_monotonic_us"]) - integer(mapping["wall_after_us"])
-
-          upper =
-            ground + integer(mapping["host_monotonic_us"]) - integer(mapping["wall_before_us"])
-
-          floor_r(lo) > lower or ceil_r(hi) < upper
+          lo = sub(low(project_vertices(vertices, a)), error)
+          hi = add(high(project_vertices(vertices, b)), error)
+          outside_clock_interval?(device, lo, hi, identity, mapping, drift)
         end)
 
       %{
@@ -260,6 +259,24 @@ defmodule MedFabric.Acceptance.Oracle do
         failed_samples: failed
       }
     end
+  end
+
+  defp project_vertices(vertices, point) do
+    Enum.map(vertices, fn {rate, offset} -> add(mul(rate, point), offset) end)
+  end
+
+  defp outside_clock_interval?(device, lo, hi, identity, mapping, drift) do
+    ground =
+      integer(identity["origin_us"]) +
+        trunc_r(mul(sub(device, {180_000, 1}), ratio(1_000_000 + drift, 1_000_000)))
+
+    lower =
+      ground + integer(mapping["host_monotonic_us"]) - integer(mapping["wall_after_us"])
+
+    upper =
+      ground + integer(mapping["host_monotonic_us"]) - integer(mapping["wall_before_us"])
+
+    floor_r(lo) > lower or ceil_r(hi) < upper
   end
 
   def restart_cutoff!(root) do
@@ -301,43 +318,49 @@ defmodule MedFabric.Acceptance.Oracle do
       {:ok, <<digest::binary-size(32), frame::binary>>} ->
         check!(:crypto.hash(:sha256, frame) == digest, "Corrupt independent spool record")
 
-        case frame do
-          <<"MEX1", 1, 0, 48::unsigned-big-16, _handle::32, _epoch::32, _config::32,
-            ^sequence::unsigned-big-64, ^sample::unsigned-big-64, count::unsigned-big-32,
-            size::unsigned-big-32, 0::32, payload::binary>>
-          when size == byte_size(payload) ->
-            check!(count > 0 and size > 0 and size <= 65_536, "Invalid independent frame")
-            cutoff!(root, sequence + 1, sample + count)
-
-          _ ->
-            gap = JSON.decode!(frame)
-
-            check!(
-              Enum.sort(Map.keys(gap)) ==
-                Enum.sort(~w(id first end first_sequence next_sequence irreversible cause)) and
-                is_binary(gap["id"]) and gap["id"] != "" and
-                is_binary(gap["cause"]) and gap["cause"] != "" and
-                gap["irreversible"] == true and
-                Enum.all?(~w(first end first_sequence next_sequence), fn key ->
-                  is_binary(gap[key]) and Regex.match?(~r/\A(?:0|[1-9][0-9]*)\z/, gap[key])
-                end) and integer(gap["first_sequence"]) == sequence and
-                integer(gap["first"]) == sample,
-              "Invalid independent source gap"
-            )
-
-            next_sequence = integer(gap["next_sequence"])
-            next_sample = integer(gap["end"])
-
-            check!(
-              next_sequence >= sequence and next_sample > sample,
-              "Nonprogressing source gap"
-            )
-
-            cutoff!(root, next_sequence, next_sample)
-        end
+        advance_cutoff!(frame, root, sequence, sample)
 
       other ->
         raise "Invalid spool record: #{inspect(elem(other, 0))}"
     end
+  end
+
+  defp advance_cutoff!(
+         <<"MEX1", 1, 0, 48::unsigned-big-16, _handle::32, _epoch::32, _config::32,
+           sequence::unsigned-big-64, sample::unsigned-big-64, count::unsigned-big-32,
+           size::unsigned-big-32, 0::32, payload::binary>>,
+         root,
+         sequence,
+         sample
+       )
+       when size == byte_size(payload) do
+    check!(count > 0 and size > 0 and size <= 65_536, "Invalid independent frame")
+    cutoff!(root, sequence + 1, sample + count)
+  end
+
+  defp advance_cutoff!(frame, root, sequence, sample) do
+    gap = JSON.decode!(frame)
+
+    check!(
+      Enum.sort(Map.keys(gap)) ==
+        Enum.sort(~w(id first end first_sequence next_sequence irreversible cause)) and
+        nonempty?(gap["id"]) and nonempty?(gap["cause"]) and gap["irreversible"] == true and
+        gap_counters?(gap) and integer(gap["first_sequence"]) == sequence and
+        integer(gap["first"]) == sample,
+      "Invalid independent source gap"
+    )
+
+    next_sequence = integer(gap["next_sequence"])
+    next_sample = integer(gap["end"])
+    check!(next_sequence >= sequence and next_sample > sample, "Nonprogressing source gap")
+    cutoff!(root, next_sequence, next_sample)
+  end
+
+  defp nonempty?(value), do: is_binary(value) and value != ""
+
+  defp gap_counters?(gap) do
+    Enum.all?(~w(first end first_sequence next_sequence), fn key ->
+      is_binary(gap[key]) and Regex.match?(~r/\A(?:0|[1-9][0-9]*)\z/, gap[key])
+    end)
   end
 end

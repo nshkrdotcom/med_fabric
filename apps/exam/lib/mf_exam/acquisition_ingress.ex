@@ -680,5 +680,4 @@ defmodule MedFabric.Exam.AcquisitionIngress do
   defp effect_operation({:gap, _}), do: :gap
   defp effect_operation({:finish, _, _, _}), do: :finish
   defp effect_operation(:checkpoint), do: :checkpoint
-  defp effect_operation(_), do: :invalid
 end

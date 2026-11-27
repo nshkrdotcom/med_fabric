@@ -3,6 +3,7 @@ defmodule MedExHandheld.SpoolReceiptTest do
   alias MedEx.Receipt
   alias MedEx.Wire.FrameV1
   alias MedExHandheld.{Paired, Spool}
+  alias MedExHandheld.Spool.Plan
 
   setup do
     suffix = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
@@ -84,11 +85,17 @@ defmodule MedExHandheld.SpoolReceiptTest do
   test "spool gap IDs leave room for the canonical wire operation prefix", c do
     for size <- [92, 93, 96] do
       gap = %{
-        "id" => String.duplicate("a", size), "irreversible" => true, "cause" => "source_loss",
-        "first" => "0", "end" => "4", "first_sequence" => "0", "next_sequence" => "0"
+        "id" => String.duplicate("a", size),
+        "irreversible" => true,
+        "cause" => "source_loss",
+        "first" => "0",
+        "end" => "4",
+        "first_sequence" => "0",
+        "next_sequence" => "0"
       }
+
       raw = MedEx.CanonicalJSON.encode(gap)
-      result = MedExHandheld.Spool.Plan.record(raw, c.spec)
+      result = Plan.record(raw, c.spec)
 
       if size == 92 do
         assert {:ok, metadata} = result
@@ -105,8 +112,14 @@ defmodule MedExHandheld.SpoolReceiptTest do
     put(c, 0, 0)
     valid = reply(receipt(c.spec, 1, 1, 2), 1, "current")
 
-    for fields <- [%{"event_id" => "event"}, %{"fingerprint" => String.duplicate("a", 64)}, %{"event_id" => nil}] do
-      assert {:error, :invalid_activation} = Spool.activate(c.spool, "audio", c.spec, Map.merge(valid, fields))
+    for fields <- [
+          %{"event_id" => "event"},
+          %{"fingerprint" => String.duplicate("a", 64)},
+          %{"event_id" => nil}
+        ] do
+      assert {:error, :invalid_activation} =
+               Spool.activate(c.spool, "audio", c.spec, Map.merge(valid, fields))
+
       assert {:ok, _} = Spool.get(c.spool, "audio", {0, 0})
       refute File.exists?(Path.join([c.root, "audio", "ack.json"]))
     end

@@ -66,18 +66,7 @@ defmodule MedFabric.Acceptance.ProcessLab do
     # A fast command may exit before the next poll, but must have written PID.
     pid =
       wait!(
-        fn ->
-          case File.read(pidfile) do
-            {:ok, value} ->
-              case Integer.parse(String.trim(value)) do
-                {pid, ""} when pid > 1 -> pid
-                _ -> false
-              end
-
-            _ ->
-              false
-          end
-        end,
+        fn -> owned_pid(pidfile) end,
         5_000,
         nil,
         "#{name} session creation"
@@ -208,15 +197,28 @@ defmodule MedFabric.Acceptance.ProcessLab do
     end
   end
 
+  defp owned_pid(path) do
+    with {:ok, value} <- File.read(path),
+         {pid, ""} when pid > 1 <- Integer.parse(String.trim(value)) do
+      pid
+    else
+      _ -> false
+    end
+  end
+
   defp signal!(child, signal) do
     # The session ID comes from our private pidfile; a live Port is required.
     # A normal completed command cannot be signalled using a stale PID.
     if status(child) == nil do
       case System.cmd("kill", ["-#{signal}", "--", "-#{child.pid}"], stderr_to_stdout: true) do
         {_, 0} -> :ok
-        {_, _} -> unless status(child) != nil, do: raise("Could not signal #{child.name}")
+        {_, _} -> verify_signal_race!(child)
       end
     end
+  end
+
+  defp verify_signal_race!(child) do
+    if is_nil(status(child)), do: raise("Could not signal #{child.name}")
   end
 
   defp bounded_exit(child, timeout) do

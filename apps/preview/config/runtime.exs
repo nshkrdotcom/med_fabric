@@ -41,12 +41,12 @@ if config_env() != :test do
 
       value ->
         case Integer.parse(value) do
-          {number, ""} when number in 1..65535 -> number
+          {number, ""} when number in 1..65_535 -> number
           _ -> raise "Invalid Preview port"
         end
     end
 
-  unless is_integer(port) and port in 1..65535, do: raise("Invalid Preview port")
+  unless is_integer(port) and port in 1..65_535, do: raise("Invalid Preview port")
 
   policy =
     case config["ice_transport_policy"] || "all" do

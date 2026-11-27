@@ -2,6 +2,7 @@ defmodule MedFabric.Exam.EffectiveUID do
   @moduledoc false
   @timeout 1_000
   @output_limit 32
+  @id_paths ["/usr/bin/id", "/bin/id", "/usr/lib/cargo/bin/coreutils/id"]
 
   # Identity is resolved afresh at each ownership boundary, never cached in
   # application environment, a process dictionary or a VM-global registry.
@@ -27,7 +28,10 @@ defmodule MedFabric.Exam.EffectiveUID do
   def parse_status(status) when is_binary(status) and byte_size(status) <= 65_536 do
     with [line] <- status |> String.split("\n") |> Enum.filter(&String.starts_with?(&1, "Uid:")),
          [_, real, effective, saved, filesystem] <-
-           Regex.run(~r/\AUid:[\t ]+([0-9]+)[\t ]+([0-9]+)[\t ]+([0-9]+)[\t ]+([0-9]+)[\t ]*\z/, line),
+           Regex.run(
+             ~r/\AUid:[\t ]+([0-9]+)[\t ]+([0-9]+)[\t ]+([0-9]+)[\t ]+([0-9]+)[\t ]*\z/,
+             line
+           ),
          {:ok, _} <- uid(real),
          {:ok, value} <- uid(effective),
          {:ok, _} <- uid(saved),
@@ -57,7 +61,7 @@ defmodule MedFabric.Exam.EffectiveUID do
   end
 
   defp command do
-    case Enum.find(["/usr/bin/id", "/bin/id"], &trusted_executable?/1) do
+    case Enum.find(@id_paths, &trusted_executable?/1) do
       nil ->
         {:error, :identity_command_unavailable}
 
@@ -96,11 +100,9 @@ defmodule MedFabric.Exam.EffectiveUID do
 
   @doc false
   def read_port(port, timeout) when is_port(port) and timeout in 1..@timeout do
-    try do
-      collect(port, System.monotonic_time(:millisecond) + timeout, "")
-    after
-      close_port(port)
-    end
+    collect(port, System.monotonic_time(:millisecond) + timeout, "")
+  after
+    close_port(port)
   end
 
   defp collect(port, deadline, output) do

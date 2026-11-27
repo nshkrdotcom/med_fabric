@@ -5,8 +5,8 @@ Code.require_file("handheld/soak.exs", __DIR__)
 
 defmodule MedFabric.HandheldAcceptance do
   @moduledoc false
-  alias MedFabric.HandheldDemo, as: Demo
   alias MedFabric.Acceptance.{Oracle, ProcessLab, Soak}
+  alias MedFabric.HandheldDemo, as: Demo
   import Oracle, only: [check!: 2, read: 1, sha: 1, integer: 1]
 
   @root Path.expand("..", __DIR__)
@@ -24,6 +24,27 @@ defmodule MedFabric.HandheldAcceptance do
   @faults ~w(accepted_before_durable.audio durable_before_ack.audio journal_sync.audio after_object_install.audio manifest_install.all db_completion.all)
 
   def main(args) do
+    {opts, suite, preview, seconds, required} = options!(args)
+    {directory, report_path, temporary?} = run_paths!(opts)
+    started = System.monotonic_time(:millisecond)
+    Process.flag(:trap_exit, true)
+    initialize_report!(directory, suite, seconds, required)
+
+    run_suites!(
+      directory,
+      required,
+      preview,
+      opts[:installed_consumers],
+      seconds,
+      report_path,
+      temporary?,
+      started
+    )
+
+    if report().passed, do: IO.puts("Passed: #{Enum.join(required, ", ")}"), else: System.halt(1)
+  end
+
+  defp options!(args) do
     {opts, rest, errors} =
       OptionParser.parse(args,
         strict: [
@@ -48,6 +69,18 @@ defmodule MedFabric.HandheldAcceptance do
       "Usage: elixir ops/handheld_acceptance.exs --suite paired|spot-check|browser-microphone|paired-faults|checkpoint-recovery|all|soak --preview off|isolated [--fhir hapi] [--run-dir DIR] [--report FILE] [--seconds 3..1740] [--installed-consumers DIR]"
     )
 
+    validate_duration!(suite, seconds, opts)
+    required = if suite == "all", do: @suites, else: [suite]
+
+    check!(
+      "spot-check" not in required or opts[:fhir] == "hapi",
+      "Spot-check requires --fhir hapi"
+    )
+
+    {opts, suite, preview, seconds, required}
+  end
+
+  defp validate_duration!(suite, seconds, opts) do
     check!(
       if(suite == "soak",
         do: seconds in 3..1740,
@@ -61,14 +94,9 @@ defmodule MedFabric.HandheldAcceptance do
         is_binary(opts[:installed_consumers]),
       "Release native and full soak gates require verified installed archive consumers"
     )
+  end
 
-    required = if suite == "all", do: @suites, else: [suite]
-
-    check!(
-      "spot-check" not in required or opts[:fhir] == "hapi",
-      "Spot-check requires --fhir hapi"
-    )
-
+  defp run_paths!(opts) do
     temporary? = is_nil(opts[:run_dir])
 
     directory =
@@ -90,9 +118,10 @@ defmodule MedFabric.HandheldAcceptance do
         raise "Unsafe lab directory"
     end
 
-    Process.flag(:trap_exit, true)
-    started = System.monotonic_time(:millisecond)
+    {directory, report_path, temporary?}
+  end
 
+  defp initialize_report!(directory, suite, seconds, required) do
     ProcessLab.init(
       directory,
       %{
@@ -125,108 +154,117 @@ defmodule MedFabric.HandheldAcceptance do
       preview_os_process_killed: false,
       bounds_respected: false
     })
+  end
 
-    try do
-      prerequisites!()
-      Demo.prepare!(directory)
-      lab = initialize!(directory, required, preview, opts[:installed_consumers])
+  defp run_suites!(
+         directory,
+         required,
+         preview,
+         installed_consumers,
+         seconds,
+         report_path,
+         temporary?,
+         started
+       ) do
+    prerequisites!()
+    Demo.prepare!(directory)
+    lab = initialize!(directory, required, preview, installed_consumers)
 
+    evidence = Path.dirname(report_path || Path.join(directory, "report.json"))
+
+    _ =
       Enum.reduce(required, lab, fn name, lab ->
         start = System.monotonic_time(:millisecond)
+        lab = run_suite!(name, lab, seconds, evidence)
 
-        lab =
-          case name do
-            "paired" ->
-              paired!(lab)
+        scenario(
+          name <> "-elapsed-seconds",
+          (System.monotonic_time(:millisecond) - start) / 1000
+        )
 
-            "paired-faults" ->
-              lab = monitor_faults!(lab)
-              network_denials!(lab)
-              lab
-
-            @checkpoint_suite ->
-              {lab, _} =
-                paired_case!(lab, "journal_sync", %{"seconds" => 4}, "journal_sync.audio")
-
-              lab
-
-            "soak" ->
-              soak!(
-                lab,
-                seconds,
-                Path.dirname(report_path || Path.join(directory, "report.json"))
-              )
-
-            "spot-check" ->
-              spot!(lab)
-
-            "browser-microphone" ->
-              browser!(lab)
-          end
-
-        scenario(name <> "-elapsed-seconds", (System.monotonic_time(:millisecond) - start) / 1000)
         update(:skipped_required, &List.delete(&1, name))
         lab
       end)
 
-      record(%{passed: true})
-    rescue
-      error ->
-        # Keep reports non-secret; the stack location identifies the failing gate.
-        location =
-          Enum.find(__STACKTRACE__, fn {module, _, _, _} ->
-            module in [__MODULE__, Oracle, ProcessLab]
-          end)
+    record(%{passed: true})
+  rescue
+    error -> report_failure(directory, error, __STACKTRACE__)
+  after
+    cleanup_processes!()
 
-        record(%{
-          passed: false,
-          error: inspect(error.__struct__),
-          failure_location: format_location(location)
-        })
+    record(%{
+      elapsed_seconds: (System.monotonic_time(:millisecond) - started) / 1000,
+      processes: ProcessLab.evidence()
+    })
 
-        if File.dir?(Path.join(directory, "logs")) do
-          failure = Path.join(directory, "logs/native-failure.log")
-          File.write!(failure, Exception.format(:error, error, __STACKTRACE__))
-          File.chmod!(failure, 0o600)
-        end
+    if report_path, do: write_report!(report_path, report())
+    # Preserve a failed run for diagnosis, but never silently retain a success
+    # full of synthetic credentials. Explicit --run-dir is always retained.
+    if temporary? and report().passed, do: File.rm_rf!(directory)
+    unless report().passed, do: IO.puts(:stderr, "Private lab: #{directory}")
+  end
 
-        IO.puts(
-          :stderr,
-          "Native acceptance failed at #{inspect(format_location(location))}; inspect the private lab logs"
-        )
-    after
-      try do
-        ProcessLab.close!()
-      rescue
-        _ -> record(%{passed: false, cleanup_error: "Owned process cleanup failed"})
-      end
+  defp run_suite!("paired", lab, _, _), do: paired!(lab)
 
-      if name = Process.get(:mf_hapi_container) do
-        try do
-          System.cmd("timeout", ["15", "docker", "rm", "-f", name], stderr_to_stdout: true)
+  defp run_suite!("paired-faults", lab, _, _) do
+    lab = monitor_faults!(lab)
+    network_denials!(lab)
+    lab
+  end
 
-          case System.cmd("timeout", ["5", "docker", "inspect", name], stderr_to_stdout: true) do
-            {_, 0} -> record(%{passed: false, cleanup_error: "Owned HAPI container still exists"})
-            _ -> :ok
-          end
-        rescue
-          _ -> record(%{passed: false, cleanup_error: "Owned HAPI cleanup failed"})
-        end
-      end
+  defp run_suite!(@checkpoint_suite, lab, _, _) do
+    {lab, _} = paired_case!(lab, "journal_sync", %{"seconds" => 4}, "journal_sync.audio")
+    lab
+  end
 
-      record(%{
-        elapsed_seconds: (System.monotonic_time(:millisecond) - started) / 1000,
-        processes: ProcessLab.evidence()
-      })
+  defp run_suite!("soak", lab, seconds, evidence), do: soak!(lab, seconds, evidence)
+  defp run_suite!("spot-check", lab, _, _), do: spot!(lab)
+  defp run_suite!("browser-microphone", lab, _, _), do: browser!(lab)
 
-      if report_path, do: write_report!(report_path, report())
-      # Preserve a failed run for diagnosis, but never silently retain a success
-      # full of synthetic credentials. Explicit --run-dir is always retained.
-      if temporary? and report().passed, do: File.rm_rf!(directory)
-      unless report().passed, do: IO.puts(:stderr, "Private lab: #{directory}")
+  defp report_failure(directory, error, stacktrace) do
+    # Keep reports non-secret; the stack location identifies the failing gate.
+    location =
+      Enum.find(stacktrace, fn {module, _, _, _} ->
+        module in [__MODULE__, Oracle, ProcessLab]
+      end)
+
+    record(%{
+      passed: false,
+      error: inspect(error.__struct__),
+      failure_location: format_location(location)
+    })
+
+    if File.dir?(Path.join(directory, "logs")) do
+      failure = Path.join(directory, "logs/native-failure.log")
+      File.write!(failure, Exception.format(:error, error, stacktrace))
+      File.chmod!(failure, 0o600)
     end
 
-    if report().passed, do: IO.puts("Passed: #{Enum.join(required, ", ")}"), else: System.halt(1)
+    IO.puts(
+      :stderr,
+      "Native acceptance failed at #{inspect(format_location(location))}; inspect the private lab logs"
+    )
+  end
+
+  defp cleanup_processes! do
+    try do
+      ProcessLab.close!()
+    rescue
+      _ -> record(%{passed: false, cleanup_error: "Owned process cleanup failed"})
+    end
+
+    if name = Process.get(:mf_hapi_container) do
+      try do
+        System.cmd("timeout", ["15", "docker", "rm", "-f", name], stderr_to_stdout: true)
+
+        case System.cmd("timeout", ["5", "docker", "inspect", name], stderr_to_stdout: true) do
+          {_, 0} -> record(%{passed: false, cleanup_error: "Owned HAPI container still exists"})
+          _ -> :ok
+        end
+      rescue
+        _ -> record(%{passed: false, cleanup_error: "Owned HAPI cleanup failed"})
+      end
+    end
   end
 
   defp format_location({module, function, _, meta}),
@@ -279,75 +317,8 @@ defmodule MedFabric.HandheldAcceptance do
       installed_consumers: if(installed_consumers, do: Path.expand(installed_consumers))
     }
 
-    if lab.installed_consumers do
-      inputs = Path.join(lab.installed_consumers, "artifacts.json")
-      verified = read(inputs)
-      registry = read(Path.join(lab.installed_consumers, "registry.json"))
-
-      check!(
-        verified["schema"] == "medfabric.detached_verified.v2",
-        "Missing verified archive inputs"
-      )
-
-      check!(registry["kind"] == verified["registry"], "Installed registry identity differs")
-
-      installed =
-        for role <- ~w(exam handheld preview) do
-          output = at(lab, "#{role}-installed.json")
-
-          run!(lab, "verify-installed-#{role}", "elixir", [
-            Path.join(@root, "ops/detached_artifacts.exs"),
-            "installed",
-            inputs,
-            Path.join(lab.installed_consumers, role),
-            role,
-            output
-          ])
-
-          read(output)
-        end
-
-      record(%{
-        installed_artifacts: installed,
-        artifact_manifest_sha256: verified["manifest_sha256"],
-        registry: verified["registry"],
-        registry_origin: registry["url"]
-      })
-    end
-
-    # Record hashes/coordinates, never raw selector content (which could contain
-    # embedded credentials). Git status is recorded only if a real repo exists.
-    identities =
-      for repo <- ~w(weld med_ex med_fabric),
-          path = if(repo == "med_fabric", do: @root, else: Path.join(Path.dirname(@root), repo)),
-          File.exists?(Path.join(path, ".git")),
-          into: %{} do
-        {repo,
-         %{
-           head: capture!("git", ["rev-parse", "HEAD"], path, env),
-           dirty: capture!("git", ["status", "--porcelain"], path, env) != ""
-         }}
-      end
-
-    locks =
-      Path.wildcard(Path.join(@root, "**/mix.lock"))
-      |> Enum.reject(fn p ->
-        Enum.any?(Path.split(Path.relative_to(p, @root)), &(&1 in ["deps", "_build"]))
-      end)
-
-    selection = Path.join(@root, ".mix_sources.json")
-
-    record(%{
-      seed: client["seed"],
-      source_identities: identities,
-      dependency_selection_sha256:
-        if(File.regular?(selection), do: sha(File.read!(selection)), else: nil),
-      dependency_lock_sha256: Map.new(locks, &{Path.relative_to(&1, @root), sha(File.read!(&1))}),
-      service_versions: %{
-        elixir: capture!("elixir", ["--version"], @root, env),
-        postgres: capture!("postgres", ["--version"], @root, env)
-      }
-    })
+    if lab.installed_consumers, do: verify_installed!(lab)
+    record_source_identity!(lab)
 
     run!(lab, "initdb", "initdb", [
       "-D",
@@ -398,6 +369,80 @@ defmodule MedFabric.HandheldAcceptance do
     )
 
     login!(lab)
+  end
+
+  defp verify_installed!(lab) do
+    inputs = Path.join(lab.installed_consumers, "artifacts.json")
+    verified = read(inputs)
+    registry = read(Path.join(lab.installed_consumers, "registry.json"))
+
+    check!(
+      verified["schema"] == "medfabric.detached_verified.v2",
+      "Missing verified archive inputs"
+    )
+
+    check!(registry["kind"] == verified["registry"], "Installed registry identity differs")
+
+    installed =
+      for role <- ~w(exam handheld preview) do
+        output = at(lab, "#{role}-installed.json")
+
+        run!(lab, "verify-installed-#{role}", "elixir", [
+          Path.join(@root, "ops/detached_artifacts.exs"),
+          "installed",
+          inputs,
+          Path.join(lab.installed_consumers, role),
+          role,
+          output
+        ])
+
+        read(output)
+      end
+
+    record(%{
+      installed_artifacts: installed,
+      artifact_manifest_sha256: verified["manifest_sha256"],
+      registry: verified["registry"],
+      registry_origin: registry["url"]
+    })
+  end
+
+  defp record_source_identity!(lab) do
+    env = lab.env
+    client = lab.client
+    # Record hashes/coordinates, never raw selector content (which could contain
+    # embedded credentials). Git status is recorded only if a real repo exists.
+    identities =
+      for repo <- ~w(weld med_ex med_fabric),
+          path = if(repo == "med_fabric", do: @root, else: Path.join(Path.dirname(@root), repo)),
+          File.exists?(Path.join(path, ".git")),
+          into: %{} do
+        {repo,
+         %{
+           head: capture!("git", ["rev-parse", "HEAD"], path, env),
+           dirty: capture!("git", ["status", "--porcelain"], path, env) != ""
+         }}
+      end
+
+    locks =
+      Path.wildcard(Path.join(@root, "**/mix.lock"))
+      |> Enum.reject(fn p ->
+        Enum.any?(Path.split(Path.relative_to(p, @root)), &(&1 in ["deps", "_build"]))
+      end)
+
+    selection = Path.join(@root, ".mix_sources.json")
+
+    record(%{
+      seed: client["seed"],
+      source_identities: identities,
+      dependency_selection_sha256:
+        if(File.regular?(selection), do: sha(File.read!(selection)), else: nil),
+      dependency_lock_sha256: Map.new(locks, &{Path.relative_to(&1, @root), sha(File.read!(&1))}),
+      service_versions: %{
+        elixir: capture!("elixir", ["--version"], @root, env),
+        postgres: capture!("postgres", ["--version"], @root, env)
+      }
+    })
   end
 
   defp at(lab, path), do: Path.join(lab.dir, path)
@@ -478,29 +523,8 @@ defmodule MedFabric.HandheldAcceptance do
   defp hapi!(lab) do
     e = hd(lab.cfg["encounters"])
     base = String.trim_trailing(e["destination"], "/")
-    uri = URI.parse(base)
-
-    check!(
-      uri.scheme == "http" and uri.host in ["localhost", "127.0.0.1", "::1"] and
-        is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment),
-      "Use a dedicated loopback synthetic HAPI endpoint"
-    )
-
-    if is_nil(System.get_env("FHIR_BASE_URL")) do
-      name = "fabric-hapi-#{Demo.token(8)}"
-      port = URI.parse(base).port
-      Process.put(:mf_hapi_container, name)
-
-      launch!(lab, "hapi", "docker", [
-        "run",
-        "--rm",
-        "--name",
-        name,
-        "-p",
-        "127.0.0.1:#{port}:8080",
-        System.get_env("MF_HAPI_IMAGE", "hapiproject/hapi:v7.6.0")
-      ])
-    end
+    uri = verify_hapi_origin!(base)
+    if is_nil(System.get_env("FHIR_BASE_URL")), do: start_hapi_container!(lab, uri.port)
 
     cap =
       ProcessLab.wait!(
@@ -538,26 +562,7 @@ defmodule MedFabric.HandheldAcceptance do
       {"Device/synthetic-plx", device}
     ]
 
-    for {ref, attrs} <- resources do
-      [type, id] = String.split(ref, "/")
-
-      {status, _} =
-        request(
-          :put,
-          base <> "/" <> ref,
-          [{"if-none-match", "*"}, {"content-type", "application/fhir+json"}],
-          Map.merge(attrs, %{"resourceType" => type, "id" => id})
-        )
-
-      if type == "Device" and status == 412 do
-        check!(
-          JSON.decode!(get!(base <> "/" <> ref))["deviceName"] == device["deviceName"],
-          "Foreign synthetic device"
-        )
-      else
-        check!(status in [200, 201], "FHIR fixture seed returned #{status}")
-      end
-    end
+    Enum.each(resources, &seed_hapi!(base, &1, device))
 
     %{
       lab
@@ -566,6 +571,54 @@ defmodule MedFabric.HandheldAcceptance do
             [Map.put(first, "destination", base) | rest]
           end)
     }
+  end
+
+  defp verify_hapi_origin!(base) do
+    uri = URI.parse(base)
+
+    check!(
+      uri.scheme == "http" and uri.host in ["localhost", "127.0.0.1", "::1"] and
+        is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment),
+      "Use a dedicated loopback synthetic HAPI endpoint"
+    )
+
+    uri
+  end
+
+  defp start_hapi_container!(lab, port) do
+    name = "fabric-hapi-#{Demo.token(8)}"
+    Process.put(:mf_hapi_container, name)
+
+    launch!(lab, "hapi", "docker", [
+      "run",
+      "--rm",
+      "--name",
+      name,
+      "-p",
+      "127.0.0.1:#{port}:8080",
+      System.get_env("MF_HAPI_IMAGE", "hapiproject/hapi:v7.6.0")
+    ])
+  end
+
+  defp seed_hapi!(base, {ref, attrs}, device) do
+    [type, id] = String.split(ref, "/")
+
+    {status, _} =
+      request(
+        :put,
+        base <> "/" <> ref,
+        [{"if-none-match", "*"}, {"content-type", "application/fhir+json"}],
+        Map.merge(attrs, %{"resourceType" => type, "id" => id})
+      )
+
+    if type == "Device" and status == 412 do
+      check!(
+        JSON.decode!(get!(base <> "/" <> ref))["deviceName"] == device["deviceName"],
+        "Foreign synthetic device"
+      )
+    else
+      check!(status in [200, 201], "FHIR fixture seed returned #{status}")
+    end
   end
 
   defp launch!(lab, name, exe, args, cwd \\ @root, env \\ nil),
@@ -641,86 +694,8 @@ defmodule MedFabric.HandheldAcceptance do
           at(lab, "runtime-tmp")
         ]
 
-    {files, dirs} =
-      case role do
-        "exam" ->
-          {~w(server.json encounters.json cert.pem key.pem device.credential secondary.credential preview.credential),
-           ~w(artifact barriers)}
-
-        "preview" ->
-          {["preview.credential", "preview.json"], []}
-
-        "handheld" ->
-          cfg = read(config)
-          spool = "spool/" <> cfg["acquisition"]
-          File.mkdir_p!(at(lab, spool))
-          File.chmod!(at(lab, spool), 0o700)
-
-          {[Path.relative_to(config, lab.dir), "ca.pem", Path.basename(cfg["credential_file"])],
-           [spool]}
-      end
-
-    mounts =
-      Enum.flat_map(dirs, fn n ->
-        p = at(lab, n)
-        ["--dir", p, "--bind", p, p]
-      end) ++
-        Enum.flat_map(files, fn n ->
-          p = at(lab, n)
-          ["--ro-bind", p, p]
-        end)
-
-    env = env || lab.env
-    env = if lab.installed_consumers, do: Map.put(env, "MIX_ENV", "prod"), else: env
-
-    env =
-      if not is_nil(lab.installed_consumers) and role == "exam" do
-        # The composed application's bootstrap reapplies its packaged config.
-        # Supply the complete disposable deployment through that public runtime
-        # boundary before Mix and the application evaluate either config entry.
-        values = %{
-          "MF_LAB" => "1",
-          "MF_DEPLOYMENT_UUID" => lab.cfg["deployment_uuid"],
-          "MF_ENCOUNTERS_FILE" => at(lab, "encounters.json"),
-          "DATABASE_URL" => lab.cfg["database_url"],
-          "MF_ARTIFACT_DIR" => lab.cfg["artifact_dir"],
-          "MF_SECRET_KEY_BASE" => lab.cfg["cookie_secret"],
-          "MF_HTTP_PORT" => to_string(lab.cfg["http_port"]),
-          "MF_DEVICE_TLS_PORT" => to_string(lab.cfg["tls_port"]),
-          "MF_DEVICE_TLS_CERTFILE" => lab.cfg["cert"],
-          "MF_DEVICE_TLS_KEYFILE" => lab.cfg["key"],
-          "MF_DEVICE_BIND_IP" => "127.0.0.1",
-          "MF_PUBLIC_ORIGIN" => "http://localhost:#{lab.cfg["http_port"]}"
-        }
-
-        values =
-          if lab.cfg["preview_url"],
-            do:
-              Map.merge(values, %{
-                "MF_PREVIEW_URL" => lab.cfg["preview_url"],
-                "MF_PREVIEW_CREDENTIAL_FILE" => lab.cfg["preview_credential_file"]
-              }),
-            else: values
-
-        Map.merge(env, values)
-      else
-        env
-      end
-
-    env =
-      if role == "exam",
-        do: env,
-        else:
-          Map.reject(env, fn {key, _} ->
-            String.starts_with?(key, ["PG", "DATABASE_", "FHIR_"]) or
-              (String.starts_with?(key, "MF_") and
-                 not (role == "preview" and
-                        key in [
-                          "MF_PREVIEW_CREDENTIAL_FILE",
-                          "MF_PREVIEW_PORT",
-                          "MF_PREVIEW_CONFIG"
-                        ]))
-          end)
+    mounts = role_mounts(lab, role, config)
+    env = role_environment(lab, role, env)
 
     # Check the mounted namespace, not just the intended mount list. The
     # marker is emitted by the same owned process before it execs the app.
@@ -750,6 +725,91 @@ defmodule MedFabric.HandheldAcceptance do
       env
     )
   end
+
+  defp role_mounts(lab, role, config) do
+    {files, dirs} =
+      case role do
+        "exam" ->
+          {~w(server.json encounters.json cert.pem key.pem device.credential secondary.credential preview.credential),
+           ~w(artifact barriers)}
+
+        "preview" ->
+          {["preview.credential", "preview.json"], []}
+
+        "handheld" ->
+          cfg = read(config)
+          spool = "spool/" <> cfg["acquisition"]
+          File.mkdir_p!(at(lab, spool))
+          File.chmod!(at(lab, spool), 0o700)
+
+          {[Path.relative_to(config, lab.dir), "ca.pem", Path.basename(cfg["credential_file"])],
+           [spool]}
+      end
+
+    Enum.flat_map(dirs, fn n ->
+      p = at(lab, n)
+      ["--dir", p, "--bind", p, p]
+    end) ++
+      Enum.flat_map(files, fn n ->
+        p = at(lab, n)
+        ["--ro-bind", p, p]
+      end)
+  end
+
+  defp role_environment(lab, role, env) do
+    env = env || lab.env
+    env = if lab.installed_consumers, do: Map.put(env, "MIX_ENV", "prod"), else: env
+
+    env = installed_exam_env(lab, role, env)
+
+    if role == "exam",
+      do: env,
+      else:
+        Map.reject(env, fn {key, _} ->
+          String.starts_with?(key, ["PG", "DATABASE_", "FHIR_"]) or
+            (String.starts_with?(key, "MF_") and
+               not (role == "preview" and
+                      key in [
+                        "MF_PREVIEW_CREDENTIAL_FILE",
+                        "MF_PREVIEW_PORT",
+                        "MF_PREVIEW_CONFIG"
+                      ]))
+        end)
+  end
+
+  defp installed_exam_env(%{installed_consumers: installed} = lab, "exam", env)
+       when not is_nil(installed) do
+    # The composed application's bootstrap reapplies its packaged config.
+    # Supply the complete disposable deployment through that public runtime
+    # boundary before Mix and the application evaluate either config entry.
+    values = %{
+      "MF_LAB" => "1",
+      "MF_DEPLOYMENT_UUID" => lab.cfg["deployment_uuid"],
+      "MF_ENCOUNTERS_FILE" => at(lab, "encounters.json"),
+      "DATABASE_URL" => lab.cfg["database_url"],
+      "MF_ARTIFACT_DIR" => lab.cfg["artifact_dir"],
+      "MF_SECRET_KEY_BASE" => lab.cfg["cookie_secret"],
+      "MF_HTTP_PORT" => to_string(lab.cfg["http_port"]),
+      "MF_DEVICE_TLS_PORT" => to_string(lab.cfg["tls_port"]),
+      "MF_DEVICE_TLS_CERTFILE" => lab.cfg["cert"],
+      "MF_DEVICE_TLS_KEYFILE" => lab.cfg["key"],
+      "MF_DEVICE_BIND_IP" => "127.0.0.1",
+      "MF_PUBLIC_ORIGIN" => "http://localhost:#{lab.cfg["http_port"]}"
+    }
+
+    values =
+      if lab.cfg["preview_url"],
+        do:
+          Map.merge(values, %{
+            "MF_PREVIEW_URL" => lab.cfg["preview_url"],
+            "MF_PREVIEW_CREDENTIAL_FILE" => lab.cfg["preview_credential_file"]
+          }),
+        else: values
+
+    Map.merge(env, values)
+  end
+
+  defp installed_exam_env(_, _, env), do: env
 
   defp start_preview!(lab) do
     cfg = Map.put(lab.cfg, "preview_url", "http://127.0.0.1:#{lab.cfg["preview_port"]}")
@@ -1050,45 +1110,7 @@ defmodule MedFabric.HandheldAcceptance do
     if armed, do: arm!(armed)
     {cfg, child} = client!(lab, "paired_exam", name, settings)
 
-    if cfg["local_monitor_fault"] == "stop" do
-      marker = at(lab, "spool/#{cfg["acquisition"]}/monitor-fault.json")
-
-      ProcessLab.wait!(
-        fn -> File.regular?(marker) end,
-        25_000,
-        child,
-        "durable progress with monitor suspended"
-      )
-
-      action!(lab, cfg["acquisition"], "monitor_gain", %{"gain" => "half"})
-
-      ProcessLab.wait!(
-        fn ->
-          count!(
-            lab,
-            "acquisition_facts",
-            "acquisition_id='#{cfg["acquisition"]}' AND kind='command_outcome_unknown'"
-          ) > 0
-        end,
-        15_000,
-        child,
-        "stalled monitor command remains unknown"
-      )
-
-      record(%{unknown_command_outcome_exercised: true})
-
-      dir = Path.dirname(marker)
-      File.write!(Path.join(dir, "check-monitor-queue"), "")
-
-      ProcessLab.wait!(
-        fn -> File.exists?(Path.join(dir, "monitor-queue-checked")) end,
-        5_000,
-        child,
-        "bounded monitor backlog after command reconciliation"
-      )
-
-      action!(lab, cfg["acquisition"], "stop")
-    end
+    if cfg["local_monitor_fault"] == "stop", do: stop_monitor_fault!(lab, cfg, child)
 
     {lab, concurrent} =
       if name == "baseline" do
@@ -1099,42 +1121,7 @@ defmodule MedFabric.HandheldAcceptance do
         {lab, nil}
       end
 
-    {lab, staged} =
-      if armed do
-        ProcessLab.wait!(fn -> File.regular?(reached(armed)) end, 30_000, child, "fault #{fault}")
-
-        staged =
-          if fault in ["manifest_install.all", "db_completion.all"] do
-            [digest, encoded] =
-              sql!(
-                lab,
-                "SELECT digest,encode(bytes,'hex') FROM acquisition_manifest_staging WHERE acquisition_id='#{cfg["acquisition"]}'"
-              )
-              |> String.split("|")
-
-            bytes = Base.decode16!(encoded, case: :mixed)
-            check!(sha(bytes) == digest, "Staged manifest digest differs")
-            {digest, bytes}
-          end
-
-        if fault == "journal_sync.audio" do
-          backend = armed |> reached() |> File.read!() |> integer()
-
-          check!(
-            sql!(lab, "SELECT pg_terminate_backend(#{backend}, 3000)") == "t",
-            "Could not terminate the checkpoint transaction backend"
-          )
-
-          File.rm!(reached(armed))
-          {lab, staged}
-        else
-          ProcessLab.kill!(lab.server)
-          File.rm!(reached(armed))
-          {lab |> start_server!() |> login!(), staged}
-        end
-      else
-        {lab, nil}
-      end
+    {lab, staged} = apply_paired_fault!(lab, armed, fault, cfg, child)
 
     ProcessLab.await_success!(child, 180_000)
 
@@ -1146,26 +1133,7 @@ defmodule MedFabric.HandheldAcceptance do
       scenario("concurrent-encounter", Map.put(result, :manifest_digest, digest))
     end
 
-    cfg =
-      if cfg["local_monitor_fault"] == "stop" do
-        cutoffs =
-          Map.new(~w(audio ecg), fn stream ->
-            state = read(at(lab, "spool/#{cfg["acquisition"]}/#{stream}/source.json"))
-            rate = if stream == "audio", do: 48_000, else: 250
-
-            check!(
-              state["done"] and state["sample"] > 0 and state["sample"] < cfg["seconds"] * rate,
-              "Operator stop did not terminate #{stream} early"
-            )
-
-            {stream, state["sample"]}
-          end)
-
-        Map.put(cfg, "restart_cutoffs", cutoffs)
-      else
-        cfg
-      end
-
+    cfg = record_stop_cutoffs!(lab, cfg)
     {root, digest, manifest} = manifest!(lab, cfg)
 
     result =
@@ -1187,26 +1155,12 @@ defmodule MedFabric.HandheldAcceptance do
         result
       end
 
-    if name == "baseline" do
-      checks = Map.values(result.clock_holdouts)
+    if name == "baseline", do: verify_baseline!(lab, cfg, manifest, result)
 
-      check!(
-        Enum.all?(checks, &(&1.tested > 0 and &1.violations == 0)),
-        "Clock holdout not bounded or outside interval"
-      )
+    verify_review!(lab, cfg, name, digest, manifest, result)
+  end
 
-      record(
-        Map.take(result, [
-          :raw_payload_digests,
-          :oracle_payload_digests,
-          :duplicate_logical_frames
-        ])
-      )
-
-      record(%{clock_holdout_violations: 0})
-      record(Oracle.monitor!(lab.dir, cfg, manifest))
-    end
-
+  defp verify_review!(lab, cfg, name, digest, manifest, result) do
     choice = review_choice(manifest, name)
     id = cfg["acquisition"]
     action!(lab, id, "review", %{"digest" => String.duplicate("0", 64), "choice" => choice}, 409)
@@ -1242,43 +1196,155 @@ defmodule MedFabric.HandheldAcceptance do
     {lab, result}
   end
 
+  defp stop_monitor_fault!(lab, cfg, child) do
+    marker = at(lab, "spool/#{cfg["acquisition"]}/monitor-fault.json")
+
+    ProcessLab.wait!(
+      fn -> File.regular?(marker) end,
+      25_000,
+      child,
+      "durable progress with monitor suspended"
+    )
+
+    action!(lab, cfg["acquisition"], "monitor_gain", %{"gain" => "half"})
+
+    ProcessLab.wait!(
+      fn ->
+        count!(
+          lab,
+          "acquisition_facts",
+          "acquisition_id='#{cfg["acquisition"]}' AND kind='command_outcome_unknown'"
+        ) > 0
+      end,
+      15_000,
+      child,
+      "stalled monitor command remains unknown"
+    )
+
+    record(%{unknown_command_outcome_exercised: true})
+    dir = Path.dirname(marker)
+    File.write!(Path.join(dir, "check-monitor-queue"), "")
+
+    ProcessLab.wait!(
+      fn -> File.exists?(Path.join(dir, "monitor-queue-checked")) end,
+      5_000,
+      child,
+      "bounded monitor backlog after command reconciliation"
+    )
+
+    action!(lab, cfg["acquisition"], "stop")
+  end
+
+  defp apply_paired_fault!(lab, armed, _fault, _cfg, _child) when armed in [nil, false],
+    do: {lab, nil}
+
+  defp apply_paired_fault!(lab, armed, fault, cfg, child) do
+    ProcessLab.wait!(fn -> File.regular?(reached(armed)) end, 30_000, child, "fault #{fault}")
+
+    staged =
+      if fault in ["manifest_install.all", "db_completion.all"] do
+        [digest, encoded] =
+          sql!(
+            lab,
+            "SELECT digest,encode(bytes,'hex') FROM acquisition_manifest_staging WHERE acquisition_id='#{cfg["acquisition"]}'"
+          )
+          |> String.split("|")
+
+        bytes = Base.decode16!(encoded, case: :mixed)
+        check!(sha(bytes) == digest, "Staged manifest digest differs")
+        {digest, bytes}
+      end
+
+    if fault == "journal_sync.audio" do
+      backend = armed |> reached() |> File.read!() |> integer()
+
+      check!(
+        sql!(lab, "SELECT pg_terminate_backend(#{backend}, 3000)") == "t",
+        "Could not terminate the checkpoint transaction backend"
+      )
+
+      File.rm!(reached(armed))
+      {lab, staged}
+    else
+      ProcessLab.kill!(lab.server)
+      File.rm!(reached(armed))
+      {lab |> start_server!() |> login!(), staged}
+    end
+  end
+
+  defp record_stop_cutoffs!(lab, %{"local_monitor_fault" => "stop"} = cfg) do
+    cutoffs =
+      Map.new(~w(audio ecg), fn stream ->
+        state = read(at(lab, "spool/#{cfg["acquisition"]}/#{stream}/source.json"))
+        rate = if stream == "audio", do: 48_000, else: 250
+
+        check!(
+          state["done"] and state["sample"] > 0 and state["sample"] < cfg["seconds"] * rate,
+          "Operator stop did not terminate #{stream} early"
+        )
+
+        {stream, state["sample"]}
+      end)
+
+    Map.put(cfg, "restart_cutoffs", cutoffs)
+  end
+
+  defp record_stop_cutoffs!(_, cfg), do: cfg
+
+  defp verify_baseline!(lab, cfg, manifest, result) do
+    checks = Map.values(result.clock_holdouts)
+
+    check!(
+      Enum.all?(checks, &(&1.tested > 0 and &1.violations == 0)),
+      "Clock holdout not bounded or outside interval"
+    )
+
+    record(
+      Map.take(result, [
+        :raw_payload_digests,
+        :oracle_payload_digests,
+        :duplicate_logical_frames
+      ])
+    )
+
+    record(%{clock_holdout_violations: 0})
+    record(Oracle.monitor!(lab.dir, cfg, manifest))
+  end
+
+  defp review_choice(_, "spool-capacity"),
+    do: %{"decision" => "reject", "note" => "Verified synthetic interruption", "metrics" => []}
+
+  defp review_choice(_, "source-reset"),
+    do: %{"decision" => "repeat", "note" => "Verified synthetic interruption", "metrics" => []}
+
   defp review_choice(manifest, name) do
-    cond do
-      name == "spool-capacity" ->
-        %{"decision" => "reject", "note" => "Verified synthetic interruption", "metrics" => []}
+    stream =
+      if manifest["streams"]["audio"]["index"]["segments"] != [], do: "audio", else: "ecg"
 
-      name == "source-reset" ->
-        %{"decision" => "repeat", "note" => "Verified synthetic interruption", "metrics" => []}
+    case manifest["streams"][stream]["index"]["segments"] do
+      [] ->
+        %{"decision" => "reject", "note" => "No verified samples", "metrics" => []}
 
-      true ->
-        stream =
-          if manifest["streams"]["audio"]["index"]["segments"] != [], do: "audio", else: "ecg"
+      [first | rest] ->
+        last =
+          case rest do
+            [next | _] when name == "baseline" -> next
+            _ -> first
+          end
 
-        case manifest["streams"][stream]["index"]["segments"] do
-          [] ->
-            %{"decision" => "reject", "note" => "No verified samples", "metrics" => []}
-
-          [first | rest] ->
-            last =
-              case rest do
-                [next | _] when name == "baseline" -> next
-                _ -> first
-              end
-
+        %{
+          "decision" => if(manifest["defects"] == [], do: "complete", else: "partial"),
+          "note" => "Synthetic review",
+          "ranges" => [
             %{
-              "decision" => if(manifest["defects"] == [], do: "complete", else: "partial"),
-              "note" => "Synthetic review",
-              "ranges" => [
-                %{
-                  "stream" => stream,
-                  "first" => first["first_sample"],
-                  "end" => last["end_sample"]
-                }
-              ],
-              "metrics" => [],
-              "acknowledged" => manifest["defects"]
+              "stream" => stream,
+              "first" => first["first_sample"],
+              "end" => last["end_sample"]
             }
-        end
+          ],
+          "metrics" => [],
+          "acknowledged" => manifest["defects"]
+        }
     end
   end
 
@@ -1687,6 +1753,12 @@ defmodule MedFabric.HandheldAcceptance do
     scenario("network-denials", result)
   end
 
+  defp restart_records_ready?(root, names) do
+    Enum.all?(names, fn name ->
+      length(Path.wildcard(Path.join([root, name, "*.rec"]))) >= 3
+    end)
+  end
+
   defp paired_restart!(lab) do
     {cfg, child} = client!(lab, "paired_exam", "handheld-restart", %{"seconds" => 12})
     root = at(lab, "spool/#{cfg["acquisition"]}")
@@ -1703,9 +1775,7 @@ defmodule MedFabric.HandheldAcceptance do
       outage!(lab, fn ->
         ProcessLab.wait!(
           fn ->
-            Enum.all?(names, fn name ->
-              length(Path.wildcard(Path.join([root, name, "*.rec"]))) >= 3
-            end)
+            restart_records_ready?(root, names)
           end,
           30_000,
           child,

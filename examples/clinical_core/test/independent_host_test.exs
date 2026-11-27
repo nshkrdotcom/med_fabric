@@ -1,8 +1,8 @@
 defmodule MedFabric.ClinicalCoreFixtureTest do
   use ExUnit.Case, async: false
   alias MedFabric.Domain.{Evidence, Review}
-  alias MedFabric.Store.{Postgres, Encounters, Records, Deliveries}
   alias MedFabric.Interop.FhirClient
+  alias MedFabric.Store.{Deliveries, Encounters, Postgres, Records}
 
   # These are dedicated operator-provided databases. No test resets a schema,
   # drops evidence or substitutes an application-global connection.

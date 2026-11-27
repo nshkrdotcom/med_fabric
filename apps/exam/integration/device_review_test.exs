@@ -4,16 +4,16 @@ Code.require_file("support/measurement_fixture.exs", __DIR__)
 defmodule MedFabric.Exam.CanonicalEventReviewTest do
   use ExUnit.Case, async: false
 
-  setup context, do: MedFabric.Exam.IntegrationFixtures.trusted_tmp(context)
-
   alias MedFabric.Exam.{
-    IntegrationFixtures,
-    TestMeasurement,
     AcquisitionManifest,
-    AcquisitionReviews
+    AcquisitionReviews,
+    IntegrationFixtures,
+    TestMeasurement
   }
 
-  alias MedFabric.Store.{AcquisitionSessions, MeasurementEvents, Deliveries}
+  alias MedFabric.Store.{AcquisitionSessions, Deliveries, MeasurementEvents}
+
+  setup context, do: IntegrationFixtures.trusted_tmp(context)
 
   test "canonical event-only evidence produces two atomic native observations and unprepared intents",
        %{tmp_dir: root} do

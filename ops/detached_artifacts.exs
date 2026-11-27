@@ -56,112 +56,7 @@ defmodule MedFabric.DetachedArtifacts do
     ensure!(Enum.sort(Map.keys(versions)) == Enum.sort(@family), "Invalid release matrix")
     directory = Path.dirname(Path.expand(manifest_path))
 
-    packages =
-      Map.new(@family, fn name ->
-        entry = Map.fetch!(entries, name)
-        declaration = Map.fetch!(versions, name)
-
-        allowed =
-          if declaration["build"] == "weld",
-            do: ~w(archive sha256 source_revision build prepared_release),
-            else: ~w(archive sha256 source_revision build)
-
-        ensure!(
-          is_map(entry) and Enum.sort(Map.keys(entry)) == Enum.sort(allowed),
-          "Invalid artifact identity for #{name}"
-        )
-
-        ensure!(entry["build"] == declaration["build"], "Wrong construction for #{name}")
-
-        ensure!(
-          hex?(entry["sha256"], 64) and hex?(entry["source_revision"], 40),
-          "Invalid archive/source digest for #{name}"
-        )
-
-        archive = input_path!(entry["archive"], directory)
-
-        ensure!(
-          sha(File.read!(archive)) == entry["sha256"],
-          "Archive checksum differs for #{name}"
-        )
-
-        prepared =
-          if entry["build"] == "weld" do
-            path = input_path!(entry["prepared_release"], directory)
-            release = read_json!(path)
-
-            ensure!(
-              release["schema"] == "weld.bundle/2" and release["artifact"] == name and
-                release["package"] == name and release["version"] == declaration["version"] and
-                release["layout"] == if(name == "med_ex", do: "components", else: "flat") and
-                hex?(release["bundle_id"], 64) and
-                get_in(release, ["source", "commit"]) == entry["source_revision"] and
-                release["archive_sha256"] == entry["sha256"] and
-                get_in(release, ["files", "package"]) == %{
-                  "path" => "package.tar",
-                  "sha256" => entry["sha256"],
-                  "size" => File.stat!(archive).size
-                },
-              "Prepared Weld identity does not own the exact #{name} archive"
-            )
-
-            %{"identity" => release["bundle_id"], "release_sha256" => sha(File.read!(path))}
-          end
-
-        {metadata, files} = archive!(archive, name, work)
-
-        ensure!(
-          metadata["name"] == name and metadata["app"] == name and
-            metadata["version"] == declaration["version"],
-          "Wrong Hex identity for #{name}"
-        )
-
-        requirements = requirements!(metadata["requirements"])
-
-        ensure!(
-          name != "med_ex" or map_size(requirements) == 0,
-          "Base archive must have no runtime dependencies"
-        )
-
-        expected =
-          case name do
-            name when name in ["mf_exam", "mf_handheld"] -> ["med_ex"]
-            "mf_preview" -> ~w(med_ex med_ex_opus med_ex_rtc)
-            _ -> []
-          end
-
-        actual = Map.keys(requirements) |> Enum.filter(&(&1 in @family)) |> Enum.sort()
-        ensure!(actual == Enum.sort(expected), "Wrong ecosystem dependency closure for #{name}")
-
-        for {dependency, options} <- requirements do
-          ensure!(
-            dependency not in @private and options["repository"] in [nil, "hexpm"] and
-              is_binary(options["requirement"]) and
-              String.starts_with?(options["requirement"], "~> ") and
-              Enum.all?(~w(path git github ref subdir override), &(not Map.has_key?(options, &1))),
-            "Nonpublic or non-Hex requirement in #{name}"
-          )
-
-          if dependency in @family do
-            ensure!(
-              options["requirement"] == versions[dependency]["requirement"],
-              "Unbounded or incorrect family requirement in #{name}"
-            )
-          end
-        end
-
-        {name,
-         %{
-           "version" => declaration["version"],
-           "archive" => archive,
-           "sha256" => entry["sha256"],
-           "source_revision" => entry["source_revision"],
-           "build" => entry["build"],
-           "prepared" => prepared,
-           "requirements" => requirements,
-           "files" => files
-         }}
-      end)
+    packages = Map.new(@family, &verified_package!(&1, entries, versions, directory, work))
 
     for names <- [~w(med_ex med_ex_opus med_ex_rtc), ~w(mf_exam mf_handheld mf_preview)] do
       ensure!(
@@ -176,6 +71,125 @@ defmodule MedFabric.DetachedArtifacts do
       "manifest_sha256" => sha(File.read!(manifest_path)),
       "packages" => packages
     }
+  end
+
+  defp verified_package!(name, entries, versions, directory, work) do
+    entry = Map.fetch!(entries, name)
+    declaration = Map.fetch!(versions, name)
+
+    allowed =
+      if declaration["build"] == "weld",
+        do: ~w(archive sha256 source_revision build prepared_release),
+        else: ~w(archive sha256 source_revision build)
+
+    ensure!(
+      is_map(entry) and Enum.sort(Map.keys(entry)) == Enum.sort(allowed),
+      "Invalid artifact identity for #{name}"
+    )
+
+    ensure!(entry["build"] == declaration["build"], "Wrong construction for #{name}")
+
+    ensure!(
+      hex?(entry["sha256"], 64) and hex?(entry["source_revision"], 40),
+      "Invalid archive/source digest for #{name}"
+    )
+
+    archive = input_path!(entry["archive"], directory)
+
+    ensure!(
+      sha(File.read!(archive)) == entry["sha256"],
+      "Archive checksum differs for #{name}"
+    )
+
+    prepared = prepared_archive!(entry, declaration, name, archive, directory)
+
+    {metadata, files} = archive!(archive, name, work)
+
+    ensure!(
+      metadata["name"] == name and metadata["app"] == name and
+        metadata["version"] == declaration["version"],
+      "Wrong Hex identity for #{name}"
+    )
+
+    requirements = requirements!(metadata["requirements"])
+    verify_requirements!(name, requirements, versions)
+
+    {name,
+     %{
+       "version" => declaration["version"],
+       "archive" => archive,
+       "sha256" => entry["sha256"],
+       "source_revision" => entry["source_revision"],
+       "build" => entry["build"],
+       "prepared" => prepared,
+       "requirements" => requirements,
+       "files" => files
+     }}
+  end
+
+  defp prepared_archive!(%{"build" => "weld"} = entry, declaration, name, archive, directory) do
+    path = input_path!(entry["prepared_release"], directory)
+    release = read_json!(path)
+    verify_prepared!(release, name, declaration["version"], entry, archive)
+
+    %{"identity" => release["bundle_id"], "release_sha256" => sha(File.read!(path))}
+  end
+
+  defp prepared_archive!(_, _, _, _, _), do: nil
+
+  defp verify_prepared!(release, name, version, entry, archive) do
+    ensure!(
+      release["schema"] == "weld.bundle/2" and release["artifact"] == name and
+        release["package"] == name and release["version"] == version and
+        release["layout"] == if(name == "med_ex", do: "components", else: "flat") and
+        hex?(release["bundle_id"], 64) and prepared_archive_matches?(release, entry, archive),
+      "Prepared Weld identity does not own the exact #{name} archive"
+    )
+  end
+
+  defp prepared_archive_matches?(release, entry, archive) do
+    get_in(release, ["source", "commit"]) == entry["source_revision"] and
+      release["archive_sha256"] == entry["sha256"] and
+      get_in(release, ["files", "package"]) == %{
+        "path" => "package.tar",
+        "sha256" => entry["sha256"],
+        "size" => File.stat!(archive).size
+      }
+  end
+
+  defp verify_requirements!(name, requirements, versions) do
+    ensure!(
+      name != "med_ex" or map_size(requirements) == 0,
+      "Base archive must have no runtime dependencies"
+    )
+
+    expected =
+      case name do
+        name when name in ["mf_exam", "mf_handheld"] -> ["med_ex"]
+        "mf_preview" -> ~w(med_ex med_ex_opus med_ex_rtc)
+        _ -> []
+      end
+
+    actual = Map.keys(requirements) |> Enum.filter(&(&1 in @family)) |> Enum.sort()
+    ensure!(actual == Enum.sort(expected), "Wrong ecosystem dependency closure for #{name}")
+    Enum.each(requirements, &verify_requirement!(name, &1, versions))
+  end
+
+  defp verify_requirement!(name, {dependency, options}, versions) do
+    ensure!(
+      dependency not in @private and options["repository"] in [nil, "hexpm"] and
+        is_binary(options["requirement"]) and
+        String.starts_with?(options["requirement"], "~> ") and
+        Enum.all?(~w(path git github ref subdir override), &(not Map.has_key?(options, &1))),
+      "Nonpublic or non-Hex requirement in #{name}"
+    )
+
+    if dependency in @family do
+      ensure!(
+        options["requirement"] == versions[dependency]["requirement"],
+        "Unbounded or incorrect family requirement in #{name}"
+      )
+    end
   end
 
   def installed!(inputs, consumer, role) do
@@ -256,27 +270,26 @@ defmodule MedFabric.DetachedArtifacts do
       "Registry URL must not contain embedded credentials or query data"
     )
 
-    case inputs["registry"] do
-      "official" ->
-        ensure!(
-          url == "https://repo.hex.pm",
-          "Official proof requires the official Hex registry origin"
-        )
-
-      "candidate" ->
-        ensure!(
-          host != "repo.hex.pm" and
-            (uri.scheme == "https" or
-               (uri.scheme == "http" and host in ["127.0.0.1", "localhost"])),
-          "Candidate proof requires an explicitly configured signed registry"
-        )
-
-      _ ->
-        raise "Unknown registry proof kind"
-    end
-
+    verify_registry_origin!(inputs["registry"], url, uri.scheme, host)
     %{"kind" => inputs["registry"], "url" => url}
   end
+
+  defp verify_registry_origin!("official", url, _, _) do
+    ensure!(
+      url == "https://repo.hex.pm",
+      "Official proof requires the official Hex registry origin"
+    )
+  end
+
+  defp verify_registry_origin!("candidate", _, scheme, host) do
+    ensure!(
+      host != "repo.hex.pm" and
+        (scheme == "https" or (scheme == "http" and host in ["127.0.0.1", "localhost"])),
+      "Candidate proof requires an explicitly configured signed registry"
+    )
+  end
+
+  defp verify_registry_origin!(_, _, _, _), do: raise("Unknown registry proof kind")
 
   defp archive!(archive, name, work) do
     {:ok, outer} = :erl_tar.extract(String.to_charlist(archive), [:memory])

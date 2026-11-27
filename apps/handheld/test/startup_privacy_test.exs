@@ -4,27 +4,40 @@ defmodule MedExHandheld.StartupPrivacyTest do
   alias MedExHandheld.{Monitor, Spool}
 
   setup do
-    root = Path.join(System.tmp_dir!(), "mf-refusal-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false))
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "mf-refusal-" <> Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
+      )
+
     File.mkdir!(root)
     File.chmod!(root, 0o700)
     on_exit(fn -> File.rm_rf!(root) end)
     %{root: root}
   end
 
-  test "spool and monitor expected refusals preserve caller, shape and private diagnostics", %{root: root} do
+  test "spool and monitor expected refusals preserve caller, shape and private diagnostics", %{
+    root: root
+  } do
     sentinel = "synthetic-startup-secret-591ea884"
     File.write!(Path.join(root, "monitor.json"), JSON.encode!(%{"secret" => sentinel}))
     table = :ets.new(:refusal_table, [:set, :public])
     before_links = links()
     before_ports = MapSet.new(Port.list())
 
-    log = capture_log(fn ->
-      assert {:error, :invalid_monitor_ledger} = Monitor.start_link({%{"spool" => root}, "boot", table})
-      assert {:error, :invalid_spool_options} = Spool.start_link(root: nil, secret: sentinel)
-      assert {:error, :invalid_monitor_options} = Monitor.start_link({%{"secret" => sentinel}, "boot", table})
-      require Logger
-      Logger.warning("handheld_expected_refusal_test")
-    end)
+    log =
+      capture_log(fn ->
+        assert {:error, :invalid_monitor_ledger} =
+                 Monitor.start_link({%{"spool" => root}, "boot", table})
+
+        assert {:error, :invalid_spool_options} = Spool.start_link(root: nil, secret: sentinel)
+
+        assert {:error, :invalid_monitor_options} =
+                 Monitor.start_link({%{"secret" => sentinel}, "boot", table})
+
+        require Logger
+        Logger.warning("handheld_expected_refusal_test")
+      end)
 
     assert Process.alive?(self())
     assert links() == before_links
@@ -35,7 +48,9 @@ defmodule MedExHandheld.StartupPrivacyTest do
     refute log =~ "CRASH REPORT"
   end
 
-  test "failed spool initialization closes its acquired lock and success stays linked", %{root: root} do
+  test "failed spool initialization closes its acquired lock and success stays linked", %{
+    root: root
+  } do
     namespace = Path.join(root, "namespace.json")
     File.write!(namespace, "{\"revision\":1}")
     assert {:error, _} = Spool.start_link(root: root)
@@ -60,7 +75,9 @@ defmodule MedExHandheld.StartupPrivacyTest do
     assert File.ls!(root) == []
   end
 
-  test "startup cannot accept a replacement root after locking the original directory", %{root: root} do
+  test "startup cannot accept a replacement root after locking the original directory", %{
+    root: root
+  } do
     fixture = root <> "-fixture"
     moved = root <> "-moved"
     File.mkdir!(fixture)
@@ -124,11 +141,15 @@ defmodule MedExHandheld.StartupPrivacyTest do
 
   defp await_owner(root, attempts) do
     case Spool.start_link(root: root) do
-      {:ok, spool} -> spool
+      {:ok, spool} ->
+        spool
+
       {:error, :spool_already_owned} ->
         Process.sleep(10)
         await_owner(root, attempts - 1)
-      error -> flunk("unexpected spool ownership result: #{inspect(error)}")
+
+      error ->
+        flunk("unexpected spool ownership result: #{inspect(error)}")
     end
   end
 

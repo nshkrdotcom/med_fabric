@@ -408,12 +408,14 @@ defmodule MedFabric.Store.Deliveries do
   end
 
   defp append(tx, id, attempt, token, stage, outcome, protected, reference) do
-    case
+    rows =
       S.rows(
         tx,
         "INSERT INTO delivery_attempts(delivery_id,attempt_id,token,stage,outcome,conditional_protected,evidence_ref) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(delivery_id,attempt_id,stage) DO NOTHING RETURNING ordinal",
         [id, attempt, token, stage, outcome, protected, reference]
-      ) do
+      )
+
+    case rows do
       [[ordinal]] when is_integer(ordinal) -> :ok
       _ -> S.abort(tx, :invalid_claim_history)
     end

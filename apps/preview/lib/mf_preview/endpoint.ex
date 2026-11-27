@@ -30,7 +30,7 @@ defmodule MedFabric.Preview.Endpoint do
          [epoch] <- get_req_header(conn, "x-source-epoch"),
          {:ok, ep} <- Control.uint64(epoch),
          [descriptor] <- get_req_header(conn, "x-descriptor-ref"),
-         true <- is_binary(descriptor) and Regex.match?(~r/\A[0-9a-f]{64}\z/, descriptor),
+         true <- Regex.match?(~r/\A[0-9a-f]{64}\z/, descriptor),
          {:ok,
           %FrameV1{stream_number: 3, source_epoch: ^ep, sample_count: 960, payload: pcm} = frame} <-
            FrameV1.decode(bytes),

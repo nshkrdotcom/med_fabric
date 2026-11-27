@@ -82,7 +82,10 @@ defmodule MedFabric.Exam.LogPrivacy do
   defp child_owner?(_), do: false
 
   defp field(map, key) when is_map(map), do: Map.get(map, key)
-  defp field(list, key) when is_list(list), do: if(Keyword.keyword?(list), do: Keyword.get(list, key))
+
+  defp field(list, key) when is_list(list),
+    do: if(Keyword.keyword?(list), do: Keyword.get(list, key))
+
   defp field(_, _), do: nil
 
   defp origin({module, _, _}) when is_atom(module), do: module
@@ -99,9 +102,11 @@ defmodule MedFabric.Exam.LogPrivacy do
     # Never carry arbitrary metadata, report callbacks, request IDs or exception
     # terms into downstream handlers. Preserve severity and safe origin only.
     meta = Map.take(event.meta, [:time, :pid, :gl])
+
     meta =
       case event.meta[:mfa] do
-        {module, function, arity} when is_atom(module) and is_atom(function) and is_integer(arity) ->
+        {module, function, arity}
+        when is_atom(module) and is_atom(function) and is_integer(arity) ->
           Map.put(meta, :mfa, {module, function, arity})
 
         _ ->
