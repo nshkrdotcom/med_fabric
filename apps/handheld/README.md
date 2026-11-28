@@ -1,4 +1,13 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/nshkrdotcom/med_fabric/main/apps/handheld/assets/handheld.svg" alt="Med Fabric Handheld logo" width="200" />
+</p>
+
 # Med Fabric Handheld
+
+<p align="center">
+  <a href="https://github.com/nshkrdotcom/med_fabric/tree/main/apps/handheld"><img src="https://img.shields.io/badge/GitHub-mf__handheld-345366" alt="GitHub source" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/apps/handheld/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+</p>
 
 `mf_handheld` 0.3.0 is a direct Mix package for a reference device producer,
 its durable local spool, authenticated TLS upload, and disposable local monitor.
@@ -68,3 +77,5 @@ uses the exact shared MedEx receipt vector file; detached qualification supplies
 `MEDEX_RECEIPT_VECTORS` with its SHA-256 verified by the test. Real TLS/Exam,
 PostgreSQL, filesystem-full and 1,740-second source-oracle lanes are separate
 required system gates; unit tests do not establish those results.
+
+**License:** [MIT](LICENSE).

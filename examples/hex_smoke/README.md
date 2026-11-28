@@ -52,3 +52,5 @@ project configuration is not automatically imported. Use `config :logger,
 level: :info`, the installed Exam Phoenix parameter filters, and the installed
 Exam/Preview runtime configuration. Each host installs its own narrow privacy
 filter before listeners start; the SDK and providers do not configure Logger.
+
+**License:** [MIT](LICENSE).

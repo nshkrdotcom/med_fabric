@@ -10,3 +10,5 @@ Neither consumer is a published package. Production workflow examples live in
 [the browser guide](../guides/browser_to_record.md),
 [the native lab guide](../guides/handheld_demo.md) and
 [release qualification](../guides/releasing_exam.md).
+
+**License:** [MIT](../LICENSE).

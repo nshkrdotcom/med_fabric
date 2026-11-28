@@ -1,4 +1,11 @@
+<p align="center"><img src="assets/med_fabric.svg" width="200" alt="Med Fabric" /></p>
+
 # Med Fabric
+
+<p align="center">
+  <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+</p>
 
 Med Fabric 0.3.0 coordinates source-preserving examination acquisition, native
 clinical review and independent delivery. It uses MedEx 0.4.0 technical contracts
@@ -111,3 +118,5 @@ Synthetic/reference qualification proves software behavior, not sensor
 calibration or clinical readiness. See the [failure matrix](guides/failure_matrix.md),
 [clinical boundary](guides/security_and_clinical_boundary.md),
 [private core guide](guides/clinical_core.md), and package READMEs.
+
+**License:** [MIT](LICENSE).

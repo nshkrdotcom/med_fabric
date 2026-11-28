@@ -1,4 +1,13 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/nshkrdotcom/med_fabric/main/apps/exam/assets/exam.svg" alt="Med Fabric Exam logo" width="200" />
+</p>
+
 # Med Fabric Exam
+
+<p align="center">
+  <a href="https://github.com/nshkrdotcom/med_fabric/tree/main/apps/exam"><img src="https://img.shields.io/badge/GitHub-mf__exam-345366" alt="GitHub source" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/apps/exam/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+</p>
 
 `mf_exam` **0.3.0** is the Phoenix/LiveView host for revision-2 acquisition,
 verified evidence review, native clinical acceptance and independently durable
@@ -56,4 +65,4 @@ a source-only test run does not qualify a deployment. Both Preview-off and
 isolated-Preview native runs, fault injection, ext4 exhaustion and the full
 1,740-second soak are release gates.
 
-MIT license; see [LICENSE](LICENSE).
+**License:** [MIT](LICENSE).

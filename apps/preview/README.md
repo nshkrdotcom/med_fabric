@@ -1,4 +1,13 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/nshkrdotcom/med_fabric/main/apps/preview/assets/preview.svg" alt="Med Fabric Preview logo" width="200" />
+</p>
+
 # Med Fabric Preview
+
+<p align="center">
+  <a href="https://github.com/nshkrdotcom/med_fabric/tree/main/apps/preview"><img src="https://img.shields.io/badge/GitHub-mf__preview-345366" alt="GitHub source" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/apps/preview/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+</p>
 
 `mf_preview` 0.3.0 is an optional, disposable monitoring service in its own BEAM
 OS process. It composes `med_ex_opus ~> 0.3.0` and `med_ex_rtc ~> 0.3.0` directly,
@@ -33,3 +42,5 @@ failure boundaries. Build/package this application directly with Mix. Its real
 native encoder/receiver tests require the pinned native dependencies and local
 WebRTC; unit tests alone do not qualify separate-process failure isolation or
 relay-only TURN.
+
+**License:** [MIT](LICENSE).

@@ -1,4 +1,11 @@
+<p align="center"><img src="assets/interop.svg" width="200" alt="Healthcare record exchange" /></p>
+
 # Private healthcare interop
+
+<p align="center">
+  <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/core/interop/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+</p>
 
 `mf_interop` 0.2.0 is a private component composed into `mf_exam` 0.3.0. It maps
 already committed native observations to FHIR R4, performs bounded HTTP and
@@ -53,3 +60,5 @@ later exact confirmed delivery with real services.
 
 Run strict Credo, Dialyzer and ExDoc before composition. This private source
 component is not separately published.
+
+**License:** [MIT](LICENSE).

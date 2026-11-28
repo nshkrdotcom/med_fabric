@@ -34,3 +34,5 @@ rejected as native invalidity. The broader integration suite additionally tests
 multi-metric atomicity, unsupported mapping, concurrency, lost responses and
 both safe retry/confirmation predicates. This fixture makes one first dispatch;
 it does not assert conditional-create qualification for an arbitrary server.
+
+**License:** [MIT](../../LICENSE).

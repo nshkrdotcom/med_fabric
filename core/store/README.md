@@ -1,4 +1,11 @@
+<p align="center"><img src="assets/store.svg" width="200" alt="Clinical persistence and audit" /></p>
+
 # Private native Store
+
+<p align="center">
+  <a href="https://github.com/nshkrdotcom/med_fabric"><img src="https://img.shields.io/badge/GitHub-med_fabric-345366" alt="GitHub repository" /></a>
+  <a href="https://github.com/nshkrdotcom/med_fabric/blob/main/core/store/LICENSE"><img src="https://img.shields.io/badge/license-MIT-458f8b" alt="MIT license" /></a>
+</p>
 
 `mf_store` 0.2.0 is a private component composed into public `mf_exam` 0.3.0.
 Every reusable operation receives an explicit database or transaction. Store
@@ -63,3 +70,5 @@ termination, concurrent closure/review, immutable constraints, delayed dispatch,
 post-cutpoint restore gaps and two independent database contexts. The separate
 `examples/clinical_core` host also uses real FHIR and never imports Exam. Do not
 point destructive fixture setup at a retained deployment.
+
+**License:** [MIT](LICENSE).
