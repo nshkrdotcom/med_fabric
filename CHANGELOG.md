@@ -29,6 +29,9 @@ artifact qualification gates; no publication or native gate success is implied.
 - Anchor fresh Handheld source clocks after admission/setup, reject started
   source markers with missing or conflicting `identity.json`, and validate
   existing spool namespaces before mutating directory mode or lock files.
+- Reject unexpected persisted Handheld identity fields, null identity contents
+  and unsafe source markers before admission; add a regression for refusing
+  incompatible database table sets without changing retained rows.
 - Sanitize host/dependency logging and expected startup failures, retain fresh
   root/spool ownership checks, and remove the internal Exam Barrier module from
   ExDoc module groups while retaining exact-artifact fault instrumentation.

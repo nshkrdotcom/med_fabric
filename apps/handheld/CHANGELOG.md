@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spool lock holder; retain nonblocking refusal of competing owners and
   fail-closed behavior if ownership is lost.
 - Add immediate supervised restart and failed-start ownership regressions.
+- Require exact persisted acquisition identity fields; reject invalid identity
+  contents and unsafe source markers before network admission or spool mutation.
 
 ### Tests and documentation
 

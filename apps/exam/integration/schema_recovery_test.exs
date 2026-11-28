@@ -41,6 +41,23 @@ defmodule MedFabric.Exam.SchemaRecoveryIntegrationTest do
     assert {:error, :schema_drift} = Postgres.migrate(c.db, @uuid)
   end
 
+  test "unexpected existing tables are refused without changing retained rows", %{tmp_dir: root} do
+    c = F.context(root)
+    Postgrex.query!(c.db, "CREATE TABLE retained_data (value text NOT NULL)", [])
+    Postgrex.query!(c.db, "INSERT INTO retained_data VALUES ('retain')", [])
+    before = Postgres.identity(c.db)
+
+    tables =
+      "SELECT tablename FROM pg_tables WHERE schemaname=current_schema() ORDER BY tablename"
+
+    expected = Postgrex.query!(c.db, tables, []).rows
+
+    assert {:error, :incompatible_schema} = Postgres.migrate(c.db, @uuid)
+    assert Postgrex.query!(c.db, tables, []).rows == expected
+    assert Postgrex.query!(c.db, "SELECT value FROM retained_data", []).rows == [["retain"]]
+    assert Postgres.identity(c.db) == before
+  end
+
   test "receipt shape, source binding, exact terminal identity and source immutability are durable SQL guards",
        %{tmp_dir: root} do
     c = F.context(root)

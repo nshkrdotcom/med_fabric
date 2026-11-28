@@ -79,10 +79,10 @@ defmodule MedFabric.Handheld.Session do
     check_namespace!(root)
 
     expected = Map.take(config, ~w(encounter device acquisition)) |> Map.put("profile", profile)
-    saved = Spool.read_json(Path.join(root, "identity.json"), nil)
+    saved = Spool.read_json(Path.join(root, "identity.json"), :missing)
 
     identity =
-      if saved == nil,
+      if saved == :missing,
         do:
           Map.merge(expected, %{
             "boot" => Transport.operation_id(),
@@ -91,8 +91,9 @@ defmodule MedFabric.Handheld.Session do
           }),
         else: saved
 
-    unless is_map(identity) and Map.take(identity, Map.keys(expected)) == expected and
-             identity["api_revision"] == 2 and ContractRules.id?(identity["boot"]) and
+    unless is_map(identity) and map_size(identity) == 7 and
+             Map.take(identity, Map.keys(expected)) == expected and
+             identity["api_revision"] === 2 and ContractRules.id?(identity["boot"]) and
              is_integer(identity["origin_us"]),
            do: raise(ArgumentError, "spool identity mismatch")
 
@@ -102,12 +103,10 @@ defmodule MedFabric.Handheld.Session do
   end
 
   defp check_source_marker!(root, saved, identity) do
-    marker_path = Path.join(root, "source_started.json")
+    marker = Spool.read_json(Path.join(root, "source_started.json"), :missing)
 
-    if File.exists?(marker_path) and
-         (saved == nil or
-            Spool.read_json(marker_path, :invalid) !=
-              Map.take(identity, ~w(boot acquisition api_revision))) do
+    if marker != :missing and
+         (saved == :missing or marker !== Map.take(identity, ~w(boot acquisition api_revision))) do
       raise ArgumentError, "spool source marker mismatch"
     end
   end

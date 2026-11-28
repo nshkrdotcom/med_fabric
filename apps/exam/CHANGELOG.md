@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add native acceptance, source authority, browser, recovery, schema, log
   privacy and outbox tests; update source lanes, release inventory and
   qualification instructions.
+- Add a regression for refusing incompatible database table sets without
+  changing retained rows.
 - Formal native/service/fault/detached/soak gates must pass before publication.
 - Use maintained signed candidate preparation, verified installed-artifact
   reuse and separate development and release qualification paths.

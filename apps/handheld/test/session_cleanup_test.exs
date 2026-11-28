@@ -82,7 +82,7 @@ defmodule MedFabric.Handheld.SessionCleanupTest do
     assert File.read!(Path.join(spool, "identity.json")) == bytes
   end
 
-  test "started source marker refuses missing or conflicting identity before network or mutation",
+  test "invalid persisted identity or source marker is refused before admission or mutation",
        %{tmp_dir: root} do
     credential = Path.join(root, "credential")
     File.write!(credential, String.duplicate("x", 32))
@@ -132,6 +132,45 @@ defmodule MedFabric.Handheld.SessionCleanupTest do
 
     assert File.read!(Path.join(spool, "identity.json")) == wrong_identity
     assert File.read!(Path.join(spool, "source_started.json")) == marker
+
+    identity_path = Path.join(spool, "identity.json")
+    marker_path = Path.join(spool, "source_started.json")
+    identity = JSON.decode!(wrong_identity) |> Map.put("boot", "boot-1")
+    File.write!(identity_path, JSON.encode!(identity))
+    File.write!(marker_path, "null")
+
+    assert_raise ArgumentError, "spool source marker mismatch", fn ->
+      Session.run(config, "plx_spot_check")
+    end
+
+    assert File.read!(marker_path) == "null"
+    File.rm!(marker_path)
+    File.ln_s!("absent-marker", marker_path)
+
+    assert_raise ArgumentError, "unsafe metadata path or size", fn ->
+      Session.run(config, "plx_spot_check")
+    end
+
+    assert File.read_link!(marker_path) == "absent-marker"
+    assert File.read!(identity_path) == JSON.encode!(identity)
+    refute File.exists?(Path.join(spool, "spool.lock"))
+    File.rm!(marker_path)
+
+    for invalid <- [
+          nil,
+          Map.put(identity, "server", "ws://localhost"),
+          Map.put(identity, "api_revision", 2.0)
+        ] do
+      bytes = JSON.encode!(invalid)
+      File.write!(identity_path, bytes)
+
+      assert_raise ArgumentError, "spool identity mismatch", fn ->
+        Session.run(config, "plx_spot_check")
+      end
+
+      assert File.read!(identity_path) == bytes
+      assert Enum.sort(File.ls!(spool)) == ["identity.json", "namespace.json"]
+    end
   end
 
   test "teardown of partially started sources leaves no linked worker" do
