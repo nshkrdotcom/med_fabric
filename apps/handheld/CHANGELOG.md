@@ -28,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   normal Hex dependencies. Publish as a direct Mix package without shipping
   `mix.lock` in the Hex tarball; refresh third-party dev dependency floors.
 
+### Hardening
+
+- Synchronize graceful shutdown and failed initialization with the external
+  spool lock holder; retain nonblocking refusal of competing owners and
+  fail-closed behavior if ownership is lost.
+- Add immediate supervised restart and failed-start ownership regressions.
+
 ### Tests and documentation
 
 - Update receipt/reclaim, source-marker consistency, malformed state, startup

@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add capability, expiry, frame validation, log privacy, ownership and bounded
   peer tests.
+- Exercise suspended-peer authority expiry with a shorter signed test lease,
+  preserving real media and expiry assertions without changing production
+  authorization deadlines.
 - Document isolated runtime, direct/relay media and raw-integrity qualification;
   formal native and soak gates remain mandatory before publication.
 

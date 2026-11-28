@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   privacy and outbox tests; update source lanes, release inventory and
   qualification instructions.
 - Formal native/service/fault/detached/soak gates must pass before publication.
+- Use maintained signed candidate preparation, verified installed-artifact
+  reuse and separate development and release qualification paths.
 
 ## [0.2.1] - 2026-11-26
 

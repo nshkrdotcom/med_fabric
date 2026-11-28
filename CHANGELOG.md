@@ -42,6 +42,15 @@ artifact qualification gates; no publication or native gate success is implied.
   coverage and safe source-context lock resolution; formal native, detached
   and soak qualification remain mandatory before publication.
 
+- Synchronize graceful Handheld shutdown and failed initialization with the
+  external spool lock holder; retain fail-closed ownership checks.
+- Separate ordinary development tests from release qualification and shorten
+  the Preview authority-expiry test without changing runtime deadlines.
+- Reuse verified installed role consumers across native and detached release
+  phases, parallelize independent builds with Blitz, and record phase timings.
+- Use maintained signed candidate preparation with exact archive verification
+  and explicit downstream lock review.
+
 ## 0.3.1 — 2026-11-26
 
 - Preserve fresh monitor audio across gap-only batches and distinguish ineligible clinical measurements in Exam.
