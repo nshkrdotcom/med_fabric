@@ -112,4 +112,4 @@ From the Fabric root, run `./ops/soak.sh`. At startup it prints one
 capture, `soak-samples.jsonl` records audio and ECG progress, lag, host pressure
 and database activity every five seconds. Each mode writes its verdict and
 sampled timing summaries to `native.json`. For the inputs, automatic lock
-commit and release gate selection, see the [release guide](releasing_exam.md#rerun-both-candidate-soaks).
+commit and release gate selection, see `guides/releasing_exam.md`.
