@@ -22,7 +22,7 @@ defmodule MedFabric.Handheld.Spool do
     do: GenServer.call(pid, {:event, sequence, bytes}, 30_000)
 
   def put_batch_and_advance(pid, root, stream, items, timeout \\ 30_000),
-    do: GenServer.call(pid, {:batch, root, stream, items}, timeout)
+    do: spool_call(pid, {:batch, root, stream, items}, stream, timeout)
 
   def watermark(pid, stream), do: GenServer.call(pid, {:watermark, stream})
 
@@ -38,7 +38,7 @@ defmodule MedFabric.Handheld.Spool do
     do: GenServer.call(pid, {:activate, stream, spec, reply}, 30_000)
 
   def ack(pid, stream, binding, receipt),
-    do: GenServer.call(pid, {:ack, stream, binding, receipt}, 30_000)
+    do: spool_call(pid, {:ack, stream, binding, receipt}, stream, 30_000)
 
   def invalidate(pid, binding), do: GenServer.call(pid, {:invalidate, binding})
   def event_activate(pid, binding), do: GenServer.call(pid, {:event_activate, binding})
@@ -99,7 +99,48 @@ defmodule MedFabric.Handheld.Spool do
     end
   end
 
-  def handle_call(request, from, state) do
+  defp spool_call(pid, request, stream, timeout) do
+    observer = Application.get_env(:mf_handheld, :spool_timing_observer)
+
+    if observer && timing_sample?(elem(request, 0)) do
+      started = System.monotonic_time(:microsecond)
+
+      case GenServer.call(pid, {:timed, request}, timeout) do
+        {:timed, reply, entered, finished} ->
+          observer.(stream, elem(request, 0), entered - started, finished - entered)
+          reply
+
+        reply ->
+          reply
+      end
+    else
+      GenServer.call(pid, request, timeout)
+    end
+  end
+
+  # Only lab callers install an observer. Sample their first call of each kind and every 64th thereafter.
+  defp timing_sample?(operation) do
+    key = {__MODULE__, :timing_count, operation}
+    index = Process.get(key, 0)
+    Process.put(key, rem(index + 1, 64))
+    index == 0
+  end
+
+  def handle_call({:timed, request}, from, state) do
+    entered = System.monotonic_time(:microsecond)
+
+    case dispatch_call(request, from, state) do
+      {:reply, reply, next} ->
+        {:reply, {:timed, reply, entered, System.monotonic_time(:microsecond)}, next}
+
+      stop ->
+        stop
+    end
+  end
+
+  def handle_call(request, from, state), do: dispatch_call(request, from, state)
+
+  defp dispatch_call(request, from, state) do
     if owned_root?(state),
       do: handle_owned_call(request, from, state),
       else: {:stop, :normal, {:error, :unsafe_spool_root}, state}
@@ -134,10 +175,10 @@ defmodule MedFabric.Handheld.Spool do
     with true <- Path.expand(root) == state.root,
          {:ok, stream} <- Map.fetch(state.streams, name),
          true <- not stream.done do
-      case install_batch(state, name, stream, items) do
-        {:ok, next} -> {:reply, :ok, next}
-        {:error, reason, next} -> {:reply, {:error, reason}, next}
-      end
+      {reply, next} = install_batch(state, name, stream, items)
+      # A logical refusal may have installed a prefix. Make it durable before replying.
+      if next.bytes > state.bytes, do: sync_dir!(Path.join(state.root, name))
+      {:reply, reply, next}
     else
       _ -> {:reply, {:error, :invalid_source_batch}, state}
     end
@@ -267,7 +308,8 @@ defmodule MedFabric.Handheld.Spool do
 
       true ->
         path = record_path(state.root, "events", sequence)
-        install!(path, :crypto.hash(:sha256, bytes) <> bytes)
+        link_record!(path, :crypto.hash(:sha256, bytes) <> bytes)
+        sync_dir!(Path.dirname(path))
         size = byte_size(bytes) + 32
 
         {:reply, :ok,
@@ -588,7 +630,7 @@ defmodule MedFabric.Handheld.Spool do
 
       case install_one(acc, name, current, item) do
         {:ok, next} -> {:cont, {:ok, next}}
-        {:error, reason} -> {:halt, {:error, reason, acc}}
+        {:error, reason} -> {:halt, {{:error, reason}, acc}}
       end
     end)
   end
@@ -880,13 +922,13 @@ defmodule MedFabric.Handheld.Spool do
     end
   end
 
-  defp install!(path, bytes) do
+  defp link_record!(path, bytes) do
     tmp = stage!(path, bytes)
 
     try do
       case File.ln(tmp, path) do
         :ok ->
-          sync_dir!(Path.dirname(path))
+          :ok
 
         {:error, :eexist} ->
           if File.read!(path) != bytes, do: raise(ArgumentError, "immutable spool conflict")
@@ -1062,6 +1104,8 @@ defmodule MedFabric.Handheld.Spool do
           load_record(root, name, dir, file, acc, count)
         end)
 
+      # A previous owner may have died after linking and before its batch barrier.
+      if entries != [], do: sync_dir!(dir)
       {:cont, {:ok, records, bytes}}
     else
       _ -> {:halt, {:error, :unsafe_spool_path}}
@@ -1092,7 +1136,7 @@ defmodule MedFabric.Handheld.Spool do
          true <- state.bytes + byte_size(raw) + 32 <= state.limit,
          true <- map_size(state.files) < @max_records do
       path = record_path(state.root, name, metadata.key)
-      install!(path, :crypto.hash(:sha256, raw) <> raw)
+      link_record!(path, :crypto.hash(:sha256, raw) <> raw)
       metadata = Map.merge(metadata, %{path: path, size: byte_size(raw) + 32})
 
       next_stream = %{

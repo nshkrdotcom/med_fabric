@@ -55,7 +55,8 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
   def handle_in({raw, [opcode: :text]}, s) when byte_size(raw) <= 16_384 do
     with {:ok, msg} <- Control.decode(raw, @ops),
          true <- initial?(msg, s) or msg["binding"] == s.binding do
-      dispatch(msg["type"], msg, %{s | operation_id: msg["operation_id"] || "initial"}, raw)
+      state = %{s | operation_id: msg["operation_id"] || "initial"}
+      dispatch_text(msg["type"], msg, state, raw)
     else
       _ -> denied(s)
     end
@@ -105,6 +106,11 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
        when t in ["open_stream", "open_monitor"], do: kind in [:stream, :monitor]
 
   defp initial?(_, _), do: false
+
+  defp dispatch_text(type, msg, state, raw) when type in ["heartbeat", "probe", "probe_reply"],
+    do: sample_request(type, state, fn -> dispatch(type, msg, state, raw) end)
+
+  defp dispatch_text(type, msg, state, raw), do: dispatch(type, msg, state, raw)
 
   defp dispatch("hello", msg, %{bind: nil, kind: kind} = s, _)
        when kind in [:control, :browser] do
@@ -536,7 +542,8 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
           s.binding["connection"]
         )
 
-    if active_stream and S.current?(s.context.db, s.bind) do
+    if active_stream and
+         sample_request(:reply_authority, s, fn -> S.current?(s.context.db, s.bind) end) do
       fields = Map.merge(fields, %{"binding" => s.binding, "operation_id" => s.operation_id})
 
       case Control.encode(type, fields) do
@@ -545,6 +552,23 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
       end
     else
       denied(s)
+    end
+  end
+
+  defp sample_request(stage, s, fun) do
+    if :erlang.phash2(s.operation_id, 64) == 0 do
+      started = System.monotonic_time(:microsecond)
+      result = fun.()
+
+      :telemetry.execute(
+        [:mf_exam, :acquisition_ingress, :request_timing],
+        %{duration_us: System.monotonic_time(:microsecond) - started},
+        %{stage: stage, stream: (s.binding && s.binding["stream"]) || "control"}
+      )
+
+      result
+    else
+      fun.()
     end
   end
 

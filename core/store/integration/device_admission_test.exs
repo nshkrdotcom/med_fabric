@@ -205,6 +205,54 @@ defmodule MedFabric.Store.DeviceAdmissionTest do
     assert {:error, :stale_binding} = DeviceCommands.poll(c.db, resumed, "expired_command_poll")
   end
 
+  test "repeated open receipt keeps its row version and can still reopen a quiescent attempt",
+       c do
+    {:ok, bind} = AcquisitionSessions.admit(c.db, c.principal, F.hello())
+
+    {:ok, attempt} =
+      AcquisitionSessions.scoped(
+        c.db,
+        bind,
+        fn tx, s ->
+          AcquisitionSessions.reserve_attempt(tx, s, "audio")
+        end,
+        :update
+      )
+
+    receipt = %MedEx.Receipt{
+      stream_id: "audio",
+      source_epoch: 0,
+      fence: attempt.fence,
+      descriptor_ref: F.hello()["descriptors"]["audio"]["descriptor_ref"],
+      journal_id: "journal",
+      journal_generation: 1,
+      journal_digest: Serialization.sha256("initial"),
+      accepted_sequence: 0,
+      accepted_sample: 0,
+      durable_sequence: 0,
+      durable_sample: 0
+    }
+
+    record = fn ->
+      assert {:ok, ^receipt} =
+               AcquisitionSessions.scoped(c.db, bind, fn tx, _ ->
+                 AcquisitionSessions.record_receipt(tx, attempt.fence, receipt)
+               end)
+
+      AcquisitionSessions.rows(
+        c.db,
+        "SELECT xmin::text,attempt_state FROM stream_attempts WHERE fence=$1",
+        [attempt.fence]
+      )
+    end
+
+    assert [[version, "open"]] = record.()
+    assert [[^version, "open"]] = record.()
+    AcquisitionSessions.mark_attempt(c.db, attempt.fence, "quiescent")
+    assert [[new_version, "open"]] = record.()
+    refute new_version == version
+  end
+
   test "a quiescent used fence needs a new admission generation before another writable attempt",
        c do
     hello = F.hello()

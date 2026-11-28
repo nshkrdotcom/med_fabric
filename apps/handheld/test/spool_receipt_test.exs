@@ -328,6 +328,30 @@ defmodule MedFabric.Handheld.SpoolReceiptTest do
              Spool.watermark(spool, "audio")
   end
 
+  test "recovery refuses surviving batch names beyond a hole and accepts a contiguous prefix",
+       c do
+    stop_supervised!(Spool)
+    # Model the names visible after loss of an unfinished directory barrier.
+    install = fn seq ->
+      raw = frame(seq, seq)
+
+      File.write!(
+        Path.join([c.root, "audio", "#{seq}-#{seq}.rec"]),
+        :crypto.hash(:sha256, raw) <> raw
+      )
+    end
+
+    install.(1)
+    spool = start_supervised!({Spool, root: c.root})
+    assert {:error, :source_discontinuity} = Spool.register(spool, c.spec)
+    stop_supervised!(Spool)
+
+    install.(0)
+    spool = start_supervised!({Spool, root: c.root})
+    assert :ok = Spool.register(spool, c.spec)
+    assert %{"sequence" => 2, "sample" => 2} = Spool.watermark(spool, "audio")
+  end
+
   test "restart removes only uncommitted staging names and never installs their bytes", c do
     put(c, 0, 0)
     stop_supervised!(Spool)

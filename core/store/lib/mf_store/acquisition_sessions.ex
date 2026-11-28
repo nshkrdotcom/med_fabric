@@ -549,7 +549,10 @@ defmodule MedFabric.Store.AcquisitionSessions do
          ]) do
       [[known, state]] ->
         verify_known_receipt!(tx, known, receipt)
-        persist_receipt!(tx, fence, known, state, receipt, terminal)
+
+        unless state == "open" and is_nil(terminal) and known == Receipt.to_map(receipt) do
+          persist_receipt!(tx, fence, known, state, receipt, terminal)
+        end
 
         receipt
 

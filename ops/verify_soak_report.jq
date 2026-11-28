@@ -57,7 +57,8 @@ installed_evidence and
   $soak.performance.policy.startup_budget_ms == 15000 and
   $soak.performance.policy.lag_budget_ms == 2000 and
   $soak.performance.policy.consecutive_limit == 2 and
-  ($soak.performance.sampled_timings | length) >= 4 and
+  ([$soak.performance.sampled_timings[] | [.stream, .stage]] as $observed |
+    ([("audio", "ecg") as $stream | ("checkpoint", "writer_checkpoint") | [$stream, .]] - $observed | length) == 0) and
   ([$soak.performance.sampled_timings[] |
     .count > 0 and .p50_us >= 0 and .p95_us >= .p50_us and
     .p99_us >= .p95_us and .max_us >= .p99_us] | all) and

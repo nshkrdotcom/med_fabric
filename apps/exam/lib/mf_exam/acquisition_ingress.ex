@@ -247,14 +247,49 @@ defmodule MedFabric.Exam.AcquisitionIngress do
   defp terminal_index(_, _, prefix), do: {:ok, prefix}
 
   defp protected(s, op) do
-    S.scoped(s.context.db, s.bind, fn tx, current ->
-      protected_effect(tx, current, s, op)
-    end)
-    |> flatten_result()
+    result =
+      case op do
+        {:frame, _, %{sequence: seq}} when rem(seq, 64) == 0 ->
+          sampled_frame(s, op)
+
+        _ ->
+          S.scoped(s.context.db, s.bind, &protected_effect(&1, &2, s, op))
+      end
+
+    flatten_result(result)
   rescue
     _ in [DBConnection.ConnectionError, Postgrex.Error] -> {:error, :outcome_unknown}
   catch
     :exit, _ -> {:error, :outcome_unknown}
+  end
+
+  defp sampled_frame(s, op) do
+    started = System.monotonic_time(:microsecond)
+
+    case S.scoped(s.context.db, s.bind, fn tx, current ->
+           result = protected_effect(tx, current, s, op)
+           {result, System.monotonic_time(:microsecond)}
+         end) do
+      {:ok, {result, before_commit}} ->
+        finished = System.monotonic_time(:microsecond)
+        metadata = %{stream: elem(s.key, 1)}
+
+        for {stage, us} <- [
+              frame_scope: finished - started,
+              commit_return: finished - before_commit
+            ] do
+          :telemetry.execute(
+            [:mf_exam, :acquisition_ingress, stage],
+            %{duration_us: us},
+            metadata
+          )
+        end
+
+        {:ok, result}
+
+      error ->
+        error
+    end
   end
 
   defp flatten_result({:ok, {:error, _} = error}), do: error

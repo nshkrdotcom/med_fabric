@@ -1,11 +1,20 @@
 defmodule MedFabric.ExamLabTimings do
   @moduledoc false
 
-  def append(event, measurements, metadata, path) do
+  def append([:mf_exam, :acquisition_ingress, :bounds] = event, measurements, metadata, path) do
+    # Each socket reports monotone high-water marks for its connection.
+    if Process.put({__MODULE__, :bounds, metadata.stream}, measurements) != measurements do
+      write(event, measurements, metadata, path)
+    end
+  end
+
+  def append(event, measurements, metadata, path), do: write(event, measurements, metadata, path)
+
+  defp write(event, measurements, metadata, path) do
     sample = %{
       at_ms: System.system_time(:millisecond),
       stream: metadata[:stream],
-      stage: List.last(event),
+      stage: metadata[:stage] || List.last(event),
       duration_us: measurements[:duration_us],
       measurements:
         Map.take(measurements, [
@@ -73,6 +82,9 @@ if path = c["checkpoint_timings"] do
       [
         [:mf_exam, :acquisition_ingress, :checkpoint],
         [:mf_exam, :acquisition_ingress, :writer_checkpoint],
+        [:mf_exam, :acquisition_ingress, :frame_scope],
+        [:mf_exam, :acquisition_ingress, :commit_return],
+        [:mf_exam, :acquisition_ingress, :request_timing],
         [:mf_exam, :acquisition_ingress, :bounds]
       ],
       &MedFabric.ExamLabTimings.append/4,

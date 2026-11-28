@@ -19,8 +19,9 @@ Gap payloads are canonical JSON with exactly `id`, `first`, `end`,
 canonical decimal strings. There is no second gap file representation.
 
 A source batch contains at most five records. Each record is staged, file
-synced and exclusively installed with a directory barrier before becoming a
-local durable fact. A crash can leave a verified prefix of a batch; restart
+synced and exclusively linked. One directory sync covers all newly installed
+records before the batch reply, including a partial prefix on refusal. Restart
+syncs recovered record names before reuse. A crash can leave a prefix. Restart
 reconstructs it from checksummed installed records, the saved source watermark
 and the previous durable ACK. Missing or conflicting coverage is refusal,
 never manufactured source samples. Known staging remnants are not committed

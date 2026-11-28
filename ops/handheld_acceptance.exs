@@ -942,9 +942,16 @@ defmodule MedFabric.HandheldAcceptance do
     path = at(lab, cfg["acquisition"] <> ".json")
 
     entry =
-      if cfg["local_monitor_fault"],
-        do: [Path.join(@root, "apps/handheld/integration/local_monitor_fault.exs")],
-        else: ["-e", "MedFabric.Handheld.CLI.main(System.argv())"]
+      cond do
+        cfg["local_monitor_fault"] ->
+          [Path.join(@root, "apps/handheld/integration/local_monitor_fault.exs")]
+
+        cfg["soak_timings"] ->
+          [Path.join(@root, "ops/handheld/soak_client.exs")]
+
+        true ->
+          ["-e", "MedFabric.Handheld.CLI.main(System.argv())"]
+      end
 
     isolate!(
       lab,
@@ -1444,7 +1451,7 @@ defmodule MedFabric.HandheldAcceptance do
     scenario("soak", result)
 
     {cfg, child} =
-      client!(lab, "paired_exam", "soak", %{"seconds" => seconds})
+      client!(lab, "paired_exam", "soak", %{"seconds" => seconds, "soak_timings" => true})
 
     id = cfg["acquisition"]
     started = System.monotonic_time(:millisecond)
@@ -1489,7 +1496,10 @@ defmodule MedFabric.HandheldAcceptance do
           await_soak!(lab, cfg, child, started, file)
         after
           assessment = Soak.observations(samples)
-          timings = Soak.timings(lab.cfg["checkpoint_timings"])
+
+          timings =
+            Soak.timings(lab.cfg["checkpoint_timings"]) ++
+              Soak.timings(child.log)
 
           performance =
             Map.merge(result.performance, Map.put(assessment, :sampled_timings, timings))
@@ -1497,6 +1507,14 @@ defmodule MedFabric.HandheldAcceptance do
           scenario("soak", %{result | performance: performance})
         end
       end)
+
+    result = report().scenarios["soak"]
+    performance = Map.put(result.performance, :failures, failures)
+    result = Map.merge(result, %{performance: performance, client_exit: exit_status})
+    scenario("soak", result)
+
+    check!(failures == [], "Soak exceeded its performance guardrail")
+    check!(exit_status == 0, "Soak acquisition did not seal")
 
     preview =
       if viewer do
@@ -1507,9 +1525,7 @@ defmodule MedFabric.HandheldAcceptance do
         %{"enabled" => false}
       end
 
-    result = Map.put(report().scenarios["soak"], :preview, preview)
-    performance = Map.put(result.performance, :failures, failures)
-    result = Map.merge(result, %{performance: performance, client_exit: exit_status})
+    result = Map.put(result, :preview, preview)
     scenario("soak", result)
 
     progress =
@@ -1560,8 +1576,6 @@ defmodule MedFabric.HandheldAcceptance do
 
     measured_bounds!(lab)
     scenario("soak", result)
-    check!(failures == [], "Soak exceeded its performance guardrail")
-    check!(exit_status == 0, "Soak acquisition did not seal")
 
     check!(
       seconds < 20 or performance.sustained_lag_check_possible,

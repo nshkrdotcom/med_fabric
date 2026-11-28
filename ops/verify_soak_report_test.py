@@ -34,7 +34,8 @@ def report():
                     performance=dict(failures=[], sustained_lag_check_possible=True,
                         policy=dict(sample_interval_ms=5000, warmup_ms=10000, startup_budget_ms=15000,
                                     lag_budget_ms=2000, consecutive_limit=2),
-                        sampled_timings=[dict(timing) for _ in range(4)]),
+                        sampled_timings=[dict(timing, stream=stream, stage=stage)
+                            for stream in ("audio", "ecg") for stage in ("checkpoint", "writer_checkpoint")]),
                     reclamation=dict(source_records=100, visits=110, max_visits=200),
                     preview=dict(enabled=False))))
 
@@ -90,6 +91,11 @@ class SoakReportTest(unittest.TestCase):
         changed['registry_origin'] = dict(kind='official', url='https://repo.hex.pm')
         self.check(changed, True)
         changed['registry_origin']['kind'] = 'candidate'
+        self.check(changed, False)
+
+    def test_new_diagnostics_cannot_replace_a_missing_checkpoint_series(self):
+        changed = report()
+        changed['scenarios']['soak']['performance']['sampled_timings'][0]['stage'] = 'frame_scope'
         self.check(changed, False)
 
     def test_wrong_source_bytes_or_unbounded_reclaim_refuse(self):
