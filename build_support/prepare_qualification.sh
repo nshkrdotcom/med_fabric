@@ -27,6 +27,6 @@ manifest="$root/build_support/weld.exs"
 mix weld setup --manifest "$manifest"
 mix weld plan --manifest "$manifest" --artifact mf_exam --format json > "$evidence/plan.json"
 mix weld project --manifest "$manifest" --artifact mf_exam --kind live
-mix weld prepare --manifest "$manifest" --artifact mf_exam
+mix weld prepare --manifest "$manifest" --artifact mf_exam "${@:3}"
 mix weld path --manifest "$manifest" --artifact mf_exam --kind bundle > "$evidence/bundle-path"
 test -z "$(git -C "$root" status --porcelain)"

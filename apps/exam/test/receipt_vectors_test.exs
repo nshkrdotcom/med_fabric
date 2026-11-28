@@ -4,12 +4,7 @@ defmodule MedFabric.Exam.ReceiptVectorsTest do
   @sha "00e4b87285b26e995f5f0e3bff01c3cce5a8f3c4701e41d9f3981b73a197901b"
 
   test "Exam executes the identical canonical Receipt corpus used by the SDK and browser" do
-    path =
-      System.get_env("MEDEX_RECEIPT_VECTORS") ||
-        Path.expand(
-          "../../../../med_ex/core/med_core/test/fixtures/receipt_vectors_v2.json",
-          __DIR__
-        )
+    path = Path.join(__DIR__, "fixtures/receipt_vectors_v2.json")
 
     bytes = File.read!(path)
     assert MedEx.Serialization.sha256(bytes) == @sha
