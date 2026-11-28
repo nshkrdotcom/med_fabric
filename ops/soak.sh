@@ -1,18 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
-# Wait in the foreground shell so terminal signals reach its traps promptly.
+# Wait in the foreground shell so terminal signals reach its traps promptly and
+# tear down every nested session (including setsid/bwrap/postgres children).
 if [[ ${1:-} != --worker ]]; then
-  setsid bash "$0" --worker &
+  volume_base=${SOAK_EXT4_BASE:-/var/tmp}
+  test "$(findmnt -T "$volume_base" -no FSTYPE)" = ext4
+  run=$(mktemp -d /tmp/soak.XXXXXXXX)
+  volume=$(mktemp -d "$volume_base/med-soak.XXXXXXXX")
+
+  stop_tree() {
+    local sig=$1
+    kill "-$sig" -- "-$worker" 2>/dev/null || true
+    pkill "-$sig" -f "${run}|${volume}" 2>/dev/null || true
+  }
+
+  cleanup_parent() {
+    local code=$1
+    trap - INT TERM
+    stop_tree TERM
+    for _ in 1 2 3 4 5 6; do
+      pgrep -f "${run}|${volume}" >/dev/null 2>&1 || break
+      sleep 0.5
+    done
+    stop_tree KILL
+    wait "$worker" 2>/dev/null || true
+    exit "$code"
+  }
+
+  setsid bash "$0" --worker "$run" "$volume" &
   worker=$!
-  trap 'kill -TERM -- "-$worker" 2>/dev/null || true; exit 130' INT
-  trap 'kill -TERM -- "-$worker" 2>/dev/null || true; exit 143' TERM
-  wait "$worker"
-  exit
+  trap 'cleanup_parent 130' INT
+  trap 'cleanup_parent 143' TERM
+  rc=0
+  wait "$worker" || rc=$?
+  if (( rc != 0 )); then
+    stop_tree TERM
+    sleep 1
+    stop_tree KILL
+  fi
+  exit "$rc"
 fi
 fab=$(cd "$(dirname "$0")/.." && pwd -P)
 sdk=$(cd "$fab/../med_ex" && pwd -P)
-run=$(mktemp -d /tmp/soak.XXXXXXXX)
+run=$2
+volume=$3
 out="$run/candidates"
 qc="$run/qualification"
 log="$run/live.log"
@@ -34,9 +66,6 @@ command -v turnserver >/dev/null || { echo "Put the installed turnserver on PATH
 export MED_EX_OPUS_TARBALL="${MED_EX_OPUS_TARBALL:-${XDG_CACHE_HOME:-$HOME/.cache}/med_ex_opus/opus-1.5.2.tar.gz}"
 export MEDEX_RECEIPT_VECTORS="$sdk/core/med_core/test/fixtures/receipt_vectors_v2.json"
 [[ -r "$MED_EX_OPUS_TARBALL" ]] || { echo "Set MED_EX_OPUS_TARBALL to the pinned Opus archive." >&2; exit 2; }
-volume_base=${SOAK_EXT4_BASE:-/var/tmp}
-test "$(findmnt -T "$volume_base" -no FSTYPE)" = ext4
-volume=$(mktemp -d "$volume_base/med-soak.XXXXXXXX")
 printf '%s\n' "$volume" > "$qc/soak-volume-path"
 printf 'Private labs %s\n' "$volume"
 
