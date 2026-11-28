@@ -19,7 +19,7 @@ Never reuse an existing publication. Preserve factual historical changelogs.
 
 Freeze both clean source SHAs, executable Git modes and six version identities.
 Read installed Weld and Hex task help; MedEx's private maintainer project requires Weld
-~> 0.20.2. Use the pinned `.tool-versions`. Record actual compiler/native archive,
+~> 0.20.3. Use the pinned `.tool-versions`. Record actual compiler/native archive,
 OS/filesystem, browser, PostgreSQL and HAPI versions. Do not print secrets.
 
 Use `med_ex/tools/maintainer` as the Weld invoker for both repositories, passing
@@ -217,7 +217,7 @@ composition still uses the private MedEx maintainer project.
 
 Bootstrap once with `mix setup` in each repository. Resolve only genuine lock
 entries, review the diffs, and use `mix setup --locked` for the default release
-context. The SDK source root adds Blitz `0.4.1`; its existing lock must be
+context. The SDK source root adds Blitz `0.5.0`; its existing lock must be
 resolved by real Mix/Hex. Fabric's removed coordinator Dialyxir entry can be
 pruned only through genuine dependency resolution. Private project locks and
 the official smoke fixture must never be hand-written or copied from a different
@@ -235,11 +235,11 @@ relevant Fabric proof; do not claim a source-path result proves registry install
 
 `plan` now shows the local consumer graph. Default `full`/`resume` exclude
 `weld-ci`, `weld-minimum`, `medex-remote` and `fabric-remote`. Those remain explicit
-`--gate` scopes; using released Weld 0.20.2 never requires a sibling Weld CI run.
+`--gate` scopes; using released Weld 0.20.3 never requires a sibling Weld CI run.
 Local source lanes cover direct/live/full/prepared/signed registry; remote Git
 lanes require their own gate and real remote equality. No remote success is
 inferred from local candidates. Gate execution stays sequential across mutable
-candidate/native/soak state, while source projects use bounded Blitz concurrency.
+candidate/native/soak state, while source projects use Blitz resource-aware admission.
 Independent failures are collected, descendants are blocked, matching receipts
 reuse exact output hashes, and superseded attempts remain under `attempts/`.
 
@@ -267,7 +267,7 @@ integrity checks and symlink-refusal tests. No cleanup may remove owner evidence
 ### Documentation and official smoke limits
 
 Direct ExDoc groups include DeliveryWorker and Preview Capability/Timeline.
-The supplied Weld 0.20.2 schema evidence does not support `groups_for_modules`
+The supplied Weld 0.20.3 schema evidence does not support `groups_for_modules`
 for projected `mf_exam`; no unsupported manifest key or new Weld release is
 introduced. Verify the installed schema/help locally and keep this limitation
 explicit if unchanged.

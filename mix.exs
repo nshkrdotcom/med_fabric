@@ -12,7 +12,7 @@ defmodule MedFabric.Workspace.MixProject do
       name: "Med Fabric",
       docs: docs(),
       deps: [
-        {:blitz, "0.4.2", only: [:dev, :test], runtime: false},
+        {:blitz, "0.5.0", only: [:dev, :test], runtime: false},
         {:credo, "~> 1.7.19", only: [:dev, :test], runtime: false},
         {:ex_doc, "~> 0.40.5", only: :dev, runtime: false}
       ],

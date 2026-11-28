@@ -23,17 +23,14 @@ defmodule MedFabric.WorkspaceTest do
     assert_raise Mix.Error, fn -> Workspace.select("dialyzer", ["."], []) end
   end
 
-  test "bounded options preserve native flags without shell interpolation" do
-    defaults = %{jobs: 2, projects: [], locked: false, release: false}
+  test "workspace options preserve native flags without shell interpolation" do
+    defaults = %{projects: [], locked: false, release: false}
 
-    assert {%{jobs: 3, projects: ["."], locked: true}, ["--seed", "0"]} =
+    assert {%{projects: ["."], locked: true}, ["--seed", "0"]} =
              Workspace.options(
-               ["--jobs", "3", "--project", ".", "--locked", "--", "--seed", "0"],
+               ["--project", ".", "--locked", "--", "--seed", "0"],
                defaults
              )
-
-    for value <- ["0", "5", "2;touch", "many"],
-        do: assert_raise(Mix.Error, fn -> Workspace.options(["--jobs", value], defaults) end)
 
     assert [script, "test", "--seed", "0"] =
              Workspace.argv("test", ["--seed", "0"])
@@ -155,7 +152,7 @@ defmodule MedFabric.WorkspaceTest do
            )
   end
 
-  test "installed Blitz limits live commands to the requested concurrency" do
+  test "installed Blitz respects an explicit CPU admission budget" do
     require_blitz!()
     root = temporary_directory("blitz-concurrency")
     worker = Path.join(root, "worker.exs")
@@ -188,7 +185,7 @@ defmodule MedFabric.WorkspaceTest do
       end
 
     run =
-      Task.async(fn -> Blitz.run!(commands, max_concurrency: 2, timeout: 15_000) end)
+      Task.async(fn -> Blitz.run!([%{commands: commands}], budget: [cpu: 2], timeout: 15_000) end)
 
     try do
       wait_for(fn -> length(Path.wildcard(Path.join(root, "*.started"))) >= 2 end)
@@ -227,7 +224,7 @@ defmodule MedFabric.WorkspaceTest do
 
     error =
       assert_raise Blitz.Error, fn ->
-        Blitz.run!([command], max_concurrency: 1, timeout: 15_000)
+        Blitz.run!([%{commands: [command]}], timeout: 15_000)
       end
 
     assert Exception.message(error) =~ "expected-child-failure"

@@ -36,6 +36,8 @@ artifact qualification gates; no publication or native gate success is implied.
   official lock refresh remains reserved for post-publication `BR-05`).
 - Refresh third-party dependency floors and locks across all workspace and
   package Mix projects to latest compatible Hex releases.
+- Upgrade workspace tooling to Blitz 0.5.0 and Weld 0.20.3;
+  use resource-aware admission without fixed workspace worker caps.
 - Route root quality/static checks to real projects with complete source/BEAM
   coverage and safe source-context lock resolution; formal native, detached
   and soak qualification remain mandatory before publication.

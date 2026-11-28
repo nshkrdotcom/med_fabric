@@ -38,13 +38,11 @@ fi
 
 mix local.hex --force --if-missing
 mix local.rebar --force --if-missing
-mix deps.get --check-locked
-
 if [[ -e .mix_sources.json ]]; then
   # A selected source has a dedicated dependency/build/lock context.
   mix setup
 else
-  mix blitz.workspace deps_get -- --check-locked
+  mix setup --locked
 fi
 
 if [[ "${1:-}" == "--integration" ]]; then

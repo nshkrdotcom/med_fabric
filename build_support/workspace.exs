@@ -20,7 +20,7 @@ defmodule MedFabric.Build.Workspace do
   def projects(_task), do: @projects
 
   def run(task, args) do
-    {opts, forwarded} = options(args, %{jobs: 2, projects: [], locked: false, release: false})
+    {opts, forwarded} = options(args, %{projects: [], locked: false, release: false})
     selected = select(task, opts.projects, forwarded)
 
     validate_options!(task, opts, forwarded)
@@ -36,16 +36,17 @@ defmodule MedFabric.Build.Workspace do
           command: "elixir",
           args: argv(task, extra ++ forwarded),
           cd: Path.join(@root, project),
-          env: %{"MIX_ENV" => "dev", "ERL_FLAGS" => System.get_env("ERL_FLAGS", "+S 4:4")}
+          env: %{"MIX_ENV" => "dev"},
+          resources: [cpu: 4, memory_mib: 1536]
         )
       end)
 
-    Blitz.run!(commands, max_concurrency: opts.jobs, timeout: :infinity)
+    Blitz.run!([%{commands: commands}])
   end
 
   defp validate_options!(task, opts, forwarded) do
     if task in ["setup", "quality"] and forwarded != [],
-      do: Mix.raise("#{task} accepts only --jobs, --project, --locked and --release")
+      do: Mix.raise("#{task} accepts only --project, --locked and --release")
 
     if opts.locked and task != "setup", do: Mix.raise("--locked is for mix setup")
     if opts.release and task != "quality", do: Mix.raise("--release is for mix quality")
@@ -92,13 +93,6 @@ defmodule MedFabric.Build.Workspace do
   def options(["--project", project | args], opts),
     do: options(args, %{opts | projects: opts.projects ++ [project]})
 
-  def options(["--jobs", number | args], opts) do
-    case Integer.parse(number) do
-      {jobs, ""} when jobs in 1..4 -> options(args, %{opts | jobs: jobs})
-      _ -> Mix.raise("--jobs must be between 1 and 4")
-    end
-  end
-
   def options(["--locked" | args], opts), do: options(args, %{opts | locked: true})
   def options(["--release" | args], opts), do: options(args, %{opts | release: true})
   def options(args, opts), do: {opts, args}
@@ -125,7 +119,7 @@ defmodule MedFabric.Build.Workspace do
   end
 
   defp check_environment! do
-    for name <- ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_LOCKFILE MIX_EXS),
+    for name <- ~w(MIX_BUILD_PATH MIX_BUILD_ROOT MIX_DEPS_PATH MIX_EXS),
         System.get_env(name) do
       Mix.raise("Unset #{name}; each project owns its build, dependencies and lock context")
     end
