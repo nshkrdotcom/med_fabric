@@ -41,9 +41,11 @@ printf '%s\n' "$volume" > "$qc/soak-volume-path"
 printf 'Private labs %s\n' "$volume"
 
 cd "$sdk"
+# Fail fast on projected doc links and boundary invariants before candidate builds.
+elixir "$fab/ops/check_hardening.exs"
 # The ecosystem runner writes gate output to files while it runs.
 tail -q -n +1 -F -- "$out/source-qc/medex-core.log" "$out/source-qc/medex-prepare.log" \
-  "$out/sync.log" "$out/build.log" 2>/dev/null &
+  "$out/sync.log" "$out/build.log" >>"$log" 2>/dev/null &
 log_reader=$!
 trap 'status=$?; kill "$log_reader" 2>/dev/null || true; wait "$log_reader" 2>/dev/null || true; if (( status != 0 )); then printf "Soak stopped (%s). See %s\n" "$status" "$log" >&3; else printf "Soak passed. Full log: %s\n" "$log" >&3; fi' EXIT
 build_support/prepare_candidates.sh sync "$out"

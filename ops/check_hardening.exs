@@ -61,4 +61,21 @@ for [path] <-
     do: raise("failure_matrix cites missing path: #{path}")
 end
 
+# 6. Verify projected mf_exam docs in build_support/weld.exs do not link to excluded .md files
+{weld, _} = Code.eval_file(Path.join(root, "build_support/weld.exs"))
+mf_exam = weld[:artifacts][:mf_exam]
+projected_docs = [mf_exam[:flat][:readme] | mf_exam[:files][:docs]]
+projected_names = MapSet.new(projected_docs, &Path.basename/1)
+
+for doc <- projected_docs, String.ends_with?(doc, ".md") do
+  content = File.read!(Path.join(root, doc))
+
+  for [target] <-
+        Regex.scan(~r/\]\(([^)#:\s]+\.md)(?:#[^)\s]*)?\)/, content, capture: :all_but_first) do
+    unless MapSet.member?(projected_names, Path.basename(target)) do
+      raise "Projected mf_exam doc #{doc} links to #{target}, which is not in build_support/weld.exs"
+    end
+  end
+end
+
 IO.puts("check_hardening ok")

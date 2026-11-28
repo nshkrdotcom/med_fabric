@@ -1456,6 +1456,17 @@ defmodule MedFabric.HandheldAcceptance do
     end
   end
 
+  defp finish_soak_preview(nil, _stop, _metrics, _failed), do: %{"enabled" => false}
+
+  defp finish_soak_preview(viewer, stop, metrics, true),
+    do: stopped_preview(viewer, stop, metrics)
+
+  defp finish_soak_preview(viewer, stop, metrics, false) do
+    File.write!(stop, "capture complete\n", [:exclusive])
+    ProcessLab.await_success!(viewer, 10_000)
+    read(metrics)
+  end
+
   defp soak!(lab, seconds, evidence) do
     File.mkdir_p!(evidence)
     samples = Path.join(evidence, "soak-samples.jsonl")
@@ -1532,21 +1543,8 @@ defmodule MedFabric.HandheldAcceptance do
     result = Map.merge(result, %{performance: performance, client_exit: exit_status})
     scenario("soak", result)
 
-    capture_failed = failures != [] or exit_status != 0
-
     preview =
-      cond do
-        is_nil(viewer) ->
-          %{"enabled" => false}
-
-        capture_failed ->
-          stopped_preview(viewer, viewer_stop, viewer_metrics)
-
-        true ->
-          File.write!(viewer_stop, "capture complete\n", [:exclusive])
-          ProcessLab.await_success!(viewer, 10_000)
-          read(viewer_metrics)
-      end
+      finish_soak_preview(viewer, viewer_stop, viewer_metrics, failures != [] or exit_status != 0)
 
     result = Map.put(result, :preview, preview)
     scenario("soak", result)

@@ -10,17 +10,32 @@ defmodule MedFabric.HardeningCheckTest do
   @guides ~w(failure_matrix operations_and_telemetry security_and_clinical_boundary clinical_core)
 
   setup %{tmp_dir: root} do
-    for directory <- ["ops", "guides", "apps/exam/lib", "apps/exam/test"] do
+    for directory <- ["ops", "guides", "build_support", "apps/exam/lib", "apps/exam/test"] do
       File.mkdir_p!(Path.join(root, directory))
     end
 
     File.cp!(@script, Path.join(root, "ops/check_hardening.exs"))
     File.write!(Path.join(root, ".gitignore"), "erl_crash.dump\n")
     File.write!(Path.join(root, "apps/exam/mix.exs"), "[]\n")
+    File.write!(Path.join(root, "apps/exam/README.md"), "# Exam\n")
 
     for guide <- @guides do
       File.write!(Path.join(root, "guides/#{guide}.md"), "# Fixture\n")
     end
+
+    File.write!(
+      Path.join(root, "build_support/weld.exs"),
+      """
+      [
+        artifacts: [
+          mf_exam: [
+            flat: [readme: "apps/exam/README.md"],
+            files: [docs: #{inspect(Enum.map(@guides, &"guides/#{&1}.md"))}]
+          ]
+        ]
+      ]
+      """
+    )
 
     %{root: root}
   end
@@ -45,6 +60,17 @@ defmodule MedFabric.HardeningCheckTest do
     assert_raise RuntimeError, ~r/failure_matrix cites missing path: guides\/missing.md/, fn ->
       run(root)
     end
+  end
+
+  test "rejects projected mf_exam docs linking to excluded markdown files", %{root: root} do
+    File.write!(
+      Path.join(root, "guides/operations_and_telemetry.md"),
+      "See [release guide](releasing_exam.md#rerun-both-candidate-soaks).\n"
+    )
+
+    assert_raise RuntimeError,
+                 ~r/Projected mf_exam doc guides\/operations_and_telemetry.md links to releasing_exam.md/,
+                 fn -> run(root) end
   end
 
   defp matrix(root, text), do: File.write!(Path.join(root, "guides/failure_matrix.md"), text)
