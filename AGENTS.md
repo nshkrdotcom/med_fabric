@@ -5,6 +5,17 @@ mutable field and abstraction must serve an exercised requirement. Prefer pure
 functions, one owner per fact and existing libraries. Delete unused scaffolding,
 test guarantees that can fail and report native evidence precisely.
 
+## Quality checks
+
+- README, documentation, and artwork-only edits need only checks relevant to
+  the edited files. Skip code test suites, native checks, and release tooling
+  unless explicitly requested.
+- For code changes, run the checks that cover the affected behavior. For release
+  qualification, run the complete source and native lanes, including Preview.
+  See guides/releasing_exam.md and build_support/release_matrix.json.
+- Report checks blocked by missing services or tooling as NOT RUN. Do not
+  publish, reset data, or activate any deployment without explicit authorization.
+
 ## Revision 2 architecture
 
 - Exam is the host boundary. Domain is pure clinical policy; Store owns all SQL
@@ -30,8 +41,3 @@ test guarantees that can fail and report native evidence precisely.
   are direct Mix packages. Exactly six public packages across both repositories.
 - .mix_sources.json is the sole development selector; internal core paths stay
   fixed. Published archives resolve normal bounded Hex dependencies.
-
-Use the complete source and native quality lanes, including Preview explicitly.
-Never label missing services/tooling PASS. Do not publish, reset data or activate
-any deployment without explicit authorization. See guides/releasing_exam.md and
-build_support/release_matrix.json for the coordinated release gates.
