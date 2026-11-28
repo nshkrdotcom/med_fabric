@@ -14,7 +14,7 @@ defmodule MedFabric.Exam.Application do
   alias MedFabric.Store.{AcquisitionSessions, Encounters, Postgres}
   @asset_revision "0.3.0"
   @asset_hashes %{
-    "exam.js" => "0ace0894746932833484406d9a578e7f5ee1f3ee21a60b7ada33569c4edabdf2",
+    "exam.js" => "8b24b4e331096c83b60b3b60e18dedfbba5f50c995f15867e613c262acd5b6b1",
     "acquisition.js" => "260a1e618d115041bcab49a9c60939165ff90c22f029bcfb12cf9bb2681b0609",
     "acquisition_worklet.js" => "6fcb7dd5010a6b410d6a55fb4e189dbff07cec8bcb6a5e10fc65e43799f9610b"
   }
