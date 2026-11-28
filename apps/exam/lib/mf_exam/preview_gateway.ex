@@ -94,7 +94,7 @@ defmodule MedFabric.Exam.PreviewGateway do
            ],
            retry: false,
            redirect: false,
-           receive_timeout: if(path == "offer", do: 8_000, else: 200),
+           receive_timeout: request_timeout(path),
            decode_body: false,
            into: &bounded_body/2
          ) do
@@ -105,6 +105,10 @@ defmodule MedFabric.Exam.PreviewGateway do
         {:error, :preview_unavailable}
     end
   end
+
+  defp request_timeout("offer"), do: 8_000
+  defp request_timeout("feed"), do: 200
+  defp request_timeout(_), do: 2_000
 
   defp bounded_body({:data, data}, {request, response}) do
     body = response.body || ""
