@@ -348,6 +348,8 @@ defmodule MedFabric.DetachedArtifacts do
       "Hex package inventory differs for #{name}"
     )
 
+    ensure!(not Map.has_key?(files, "mix.lock"), "Packaged source lock in #{name}")
+
     {metadata, files}
   end
 

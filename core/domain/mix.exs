@@ -11,8 +11,8 @@ defmodule MedFabric.Domain.MixProject do
   def project do
     defaults = [
       {:med_ex, "~> 0.4.0"},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:credo, "~> 1.7.19", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4.9", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40.5", only: :dev, runtime: false}
     ]
 

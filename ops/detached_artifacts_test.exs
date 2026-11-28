@@ -265,5 +265,77 @@ defmodule MedFabric.DetachedArtifactsTest do
     end
   end
 
+  test "direct packages shipping a mix.lock fail archive policy even when listed in metadata",
+       c do
+    matrix = @matrix |> File.read!() |> JSON.decode!()
+
+    for target <- ~w(mf_handheld mf_preview) do
+      work = Path.join(c.root, "lock-policy-" <> target)
+      File.mkdir_p!(work)
+      archive = Path.join(work, target <> ".tar")
+
+      reqs =
+        case target do
+          "mf_preview" -> ~w(med_ex med_ex_opus med_ex_rtc)
+          "mf_handheld" -> ["med_ex"]
+        end
+
+      requirements =
+        for dependency <- reqs do
+          version = Enum.find(matrix["packages"], &(&1["name"] == dependency))["requirement"]
+
+          {dependency,
+           [
+             {"requirement", version},
+             {"optional", false},
+             {"app", dependency},
+             {"repository", "hexpm"}
+           ]}
+        end
+
+      metadata =
+        [
+          {"name", target},
+          {"app", target},
+          {"version", "0.3.0"},
+          {"requirements", requirements},
+          {"files", ["mix.exs", "mix.lock"]}
+        ]
+        |> Enum.map(&:io_lib.format(~c"~tp.~n", [&1]))
+        |> IO.iodata_to_binary()
+
+      contents_path = Path.join(work, "contents.tar.gz")
+
+      :ok =
+        :erl_tar.create(
+          String.to_charlist(contents_path),
+          [{~c"mix.exs", "defmodule X, do: :ok\n"}, {~c"mix.lock", "%{}\n"}],
+          [:compressed]
+        )
+
+      contents = File.read!(contents_path)
+
+      :ok =
+        :erl_tar.create(String.to_charlist(archive), [
+          {~c"metadata.config", metadata},
+          {~c"contents.tar.gz", contents}
+        ])
+
+      manifest =
+        c.manifest
+        |> File.read!()
+        |> JSON.decode!()
+        |> put_in(["packages", target, "archive"], archive)
+        |> put_in(["packages", target, "sha256"], sha(File.read!(archive)))
+
+      manifest_path = Path.join(c.root, "lock-policy-" <> target <> ".json")
+      File.write!(manifest_path, JSON.encode!(manifest))
+
+      assert_raise RuntimeError, ~r/Packaged source lock in #{target}/, fn ->
+        Artifacts.inputs!(@matrix, manifest_path, work)
+      end
+    end
+  end
+
   defp sha(bytes), do: :crypto.hash(:sha256, bytes) |> Base.encode16(case: :lower)
 end

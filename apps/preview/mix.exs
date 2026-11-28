@@ -45,8 +45,8 @@ defmodule MedFabric.Preview.MixProject do
 
   defp resolve_deps do
     dev_deps = [
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:credo, "~> 1.7.19", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4.9", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40.5", only: :dev, runtime: false}
     ]
 
@@ -56,8 +56,8 @@ defmodule MedFabric.Preview.MixProject do
           MedFabric.BuildSources.med_ex_dependency(:med_ex),
           MedFabric.BuildSources.med_ex_dependency(:med_ex_opus),
           MedFabric.BuildSources.med_ex_dependency(:med_ex_rtc),
-          {:bandit, "~> 1.6"},
-          {:plug, "~> 1.16"}
+          {:bandit, "~> 1.15"},
+          {:plug, "~> 1.20.4"}
         ] ++ dev_deps
 
       MedFabric.BuildSources.resolve(defaults, __DIR__, Path.expand("../..", __DIR__))
@@ -66,8 +66,8 @@ defmodule MedFabric.Preview.MixProject do
          {:med_ex, "~> 0.4.0", hex: "med_ex", repo: "hexpm"},
          {:med_ex_opus, "~> 0.3.0", hex: "med_ex_opus", repo: "hexpm"},
          {:med_ex_rtc, "~> 0.3.0", hex: "med_ex_rtc", repo: "hexpm"},
-         {:bandit, "~> 1.6"},
-         {:plug, "~> 1.16"}
+         {:bandit, "~> 1.15"},
+         {:plug, "~> 1.20.4"}
        ] ++ dev_deps, []}
     end
   end
@@ -75,7 +75,7 @@ defmodule MedFabric.Preview.MixProject do
   defp package do
     [
       files:
-        ~w(.formatter.exs mix.exs mix.lock VERSION LICENSE README.md CHANGELOG.md assets config guides lib),
+        ~w(.formatter.exs mix.exs VERSION LICENSE README.md CHANGELOG.md assets config guides lib),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,

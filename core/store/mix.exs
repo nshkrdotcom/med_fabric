@@ -12,12 +12,12 @@ defmodule MedFabric.Store.MixProject do
     defaults = [
       {:med_ex, "~> 0.4.0"},
       {:mf_domain, path: "../domain"},
-      {:postgrex, "~> 0.23"},
+      {:postgrex, "~> 0.23.0"},
       {:db_connection, "~> 2.10.3"},
-      {:jason, "~> 1.4"},
-      {:decimal, "~> 3.2"},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:jason, "~> 1.4.5"},
+      {:decimal, "~> 3.2.0"},
+      {:credo, "~> 1.7.19", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4.9", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40.5", only: :dev, runtime: false}
     ]
 

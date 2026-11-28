@@ -58,14 +58,14 @@ defmodule MedFabric.Exam.MixProject do
       {:mf_store, path: "../../core/store"},
       {:mf_interop, path: "../../core/interop"},
       med_ex_dep,
-      {:decimal, "~> 3.2"},
-      {:phoenix, "~> 1.8"},
-      {:phoenix_html, "~> 4.2"},
-      {:phoenix_live_view, "~> 1.0"},
-      {:bandit, "~> 1.6"},
-      {:websock_adapter, "~> 0.5"},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:decimal, "~> 3.2.0"},
+      {:phoenix, "~> 1.8.17"},
+      {:phoenix_html, "~> 4.4"},
+      {:phoenix_live_view, "~> 1.2.15"},
+      {:bandit, "~> 1.15"},
+      {:websock_adapter, "~> 0.7.2"},
+      {:credo, "~> 1.7.19", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4.9", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40.5", only: :dev, runtime: false}
     ]
   end
@@ -102,8 +102,7 @@ defmodule MedFabric.Exam.MixProject do
         "Application & Context": [
           MedFabric.Exam,
           MedFabric.Exam.Application,
-          MedFabric.Exam.Context,
-          MedFabric.Exam.Barrier
+          MedFabric.Exam.Context
         ],
         "Acquisition & Workflow": [
           MedFabric.Exam.AcquisitionIngress,

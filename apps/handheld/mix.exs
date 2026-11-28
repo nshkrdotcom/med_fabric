@@ -1,7 +1,7 @@
 sources_path = Path.expand("../../config/sources.exs", __DIR__)
 if File.regular?(sources_path), do: Code.require_file(sources_path)
 
-defmodule MedExHandheld.MixProject do
+defmodule MedFabric.Handheld.MixProject do
   use Mix.Project
 
   @version Path.join(__DIR__, "VERSION") |> File.read!() |> String.trim()
@@ -38,15 +38,15 @@ defmodule MedExHandheld.MixProject do
 
   def application do
     [
-      mod: {MedExHandheld.Application, []},
+      mod: {MedFabric.Handheld.Application, []},
       extra_applications: [:crypto, :ssl, :public_key]
     ]
   end
 
   defp resolve_deps do
     dev_deps = [
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:credo, "~> 1.7.19", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4.9", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40.5", only: :dev, runtime: false}
     ]
 
@@ -69,8 +69,7 @@ defmodule MedExHandheld.MixProject do
 
   defp package do
     [
-      files:
-        ~w(.formatter.exs mix.exs mix.lock VERSION LICENSE README.md CHANGELOG.md assets guides lib),
+      files: ~w(.formatter.exs mix.exs VERSION LICENSE README.md CHANGELOG.md assets guides lib),
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,
@@ -110,22 +109,22 @@ defmodule MedExHandheld.MixProject do
       ],
       groups_for_modules: [
         "Session & CLI": [
-          MedExHandheld.Application,
-          MedExHandheld.Session,
-          MedExHandheld.Paired,
-          MedExHandheld.CLI
+          MedFabric.Handheld.Application,
+          MedFabric.Handheld.Session,
+          MedFabric.Handheld.Paired,
+          MedFabric.Handheld.CLI
         ],
         Peripherals: [
-          MedExHandheld.SourceAdapter,
-          MedExHandheld.RDP1,
-          MedExHandheld.ReferencePeripheral,
-          MedExHandheld.PLXAdapter,
-          MedExHandheld.PLXPeripheral
+          MedFabric.Handheld.SourceAdapter,
+          MedFabric.Handheld.RDP1,
+          MedFabric.Handheld.ReferencePeripheral,
+          MedFabric.Handheld.PLXAdapter,
+          MedFabric.Handheld.PLXPeripheral
         ],
         "Spool & Transport": [
-          MedExHandheld.Spool,
-          MedExHandheld.Transport,
-          MedExHandheld.Monitor
+          MedFabric.Handheld.Spool,
+          MedFabric.Handheld.Transport,
+          MedFabric.Handheld.Monitor
         ]
       ]
     ]

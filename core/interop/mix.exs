@@ -27,9 +27,9 @@ defmodule MedFabric.Interop.MixProject do
       ],
       deps: [
         {:req, "~> 0.7.5"},
-        {:decimal, "~> 3.2"},
-        {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-        {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+        {:decimal, "~> 3.2.0"},
+        {:credo, "~> 1.7.19", only: [:dev, :test], runtime: false},
+        {:dialyxir, "~> 1.4.9", only: [:dev, :test], runtime: false},
         {:ex_doc, "~> 0.40.5", only: :dev, runtime: false}
       ],
       docs: docs(),
