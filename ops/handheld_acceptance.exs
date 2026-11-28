@@ -1437,6 +1437,25 @@ defmodule MedFabric.HandheldAcceptance do
     _ -> nil
   end
 
+  # The capture already failed. Retain available viewer evidence even if it
+  # exited early, timed out, or never produced a complete metrics file.
+  defp stopped_preview(viewer, stop, metrics) do
+    status =
+      try do
+        File.write!(stop, "capture stopped\n", [:exclusive])
+        ProcessLab.await!(viewer, 10_000)
+      rescue
+        _ in [File.Error, RuntimeError] -> ProcessLab.status(viewer)
+      end
+
+    with {:ok, bytes} <- File.read(metrics),
+         {:ok, snapshot} when is_map(snapshot) <- JSON.decode(bytes) do
+      Map.put(snapshot, "viewer_exit", status)
+    else
+      _ -> %{"enabled" => true, "viewer_exit" => status, "metrics_available" => false}
+    end
+  end
+
   defp soak!(lab, seconds, evidence) do
     File.mkdir_p!(evidence)
     samples = Path.join(evidence, "soak-samples.jsonl")
@@ -1513,20 +1532,26 @@ defmodule MedFabric.HandheldAcceptance do
     result = Map.merge(result, %{performance: performance, client_exit: exit_status})
     scenario("soak", result)
 
-    check!(failures == [], "Soak exceeded its performance guardrail")
-    check!(exit_status == 0, "Soak acquisition did not seal")
+    capture_failed = failures != [] or exit_status != 0
 
     preview =
-      if viewer do
-        File.write!(viewer_stop, "capture complete\n", [:exclusive])
-        ProcessLab.await_success!(viewer, 10_000)
-        read(viewer_metrics)
-      else
-        %{"enabled" => false}
+      cond do
+        is_nil(viewer) ->
+          %{"enabled" => false}
+
+        capture_failed ->
+          stopped_preview(viewer, viewer_stop, viewer_metrics)
+
+        true ->
+          File.write!(viewer_stop, "capture complete\n", [:exclusive])
+          ProcessLab.await_success!(viewer, 10_000)
+          read(viewer_metrics)
       end
 
     result = Map.put(result, :preview, preview)
     scenario("soak", result)
+    check!(failures == [], "Soak exceeded its performance guardrail")
+    check!(exit_status == 0, "Soak acquisition did not seal")
 
     progress =
       sql!(lab, """
