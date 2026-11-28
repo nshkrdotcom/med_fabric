@@ -107,9 +107,8 @@ evidence deletion or destructive downgrade is permitted.
 
 ## Watching a candidate soak
 
-From the Fabric root, run `./ops/soak.sh`. At startup it prints the exact
-`tail -F` commands for the run. Follow the candidate prep logs during the build,
-then the active mode's `run.log` for setup, capture and verification. During
+From the Fabric root, run `./ops/soak.sh`. At startup it prints one
+`tail -F` command for candidate preparation, capture and verification. During
 capture, `soak-samples.jsonl` records audio and ECG progress, lag, host pressure
 and database activity every five seconds. Each mode writes its verdict and
 sampled timing summaries to `native.json`. For the inputs, automatic lock

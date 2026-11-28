@@ -162,9 +162,9 @@ each on ext4. Set `SOAK_EXT4_BASE` to an existing writable ext4 directory
 (default `/var/tmp`). Provide the native preflight tools, including `turnserver`
 on PATH, and the pinned Opus archive via `MED_EX_OPUS_TARBALL` or the SDK cache.
 
-Startup prints copyable `tail -F` commands for candidate preparation, archive
-construction, each native `run.log`, and the five-second `soak-samples.jsonl`.
-Each phase creates its own logs when it starts. The first failure stops the run.
+Startup prints one `tail -F` command for the live log. It follows candidate
+preparation, archive construction, and native soak progress. The first failure
+stops the run.
 The two `qualification/soak-*/native.json` reports are standalone candidate
 evidence. For coordinated release receipts and prerequisite gates, including native
 and physical ENOSPC, use the ecosystem runner with `--gate fabric-soak-isolated`.

@@ -1,19 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
+# Wait in the foreground shell so terminal signals reach its traps promptly.
+if [[ ${1:-} != --worker ]]; then
+  setsid bash "$0" --worker &
+  worker=$!
+  trap 'kill -TERM -- "-$worker" 2>/dev/null || true; exit 130' INT
+  trap 'kill -TERM -- "-$worker" 2>/dev/null || true; exit 143' TERM
+  wait "$worker"
+  exit
+fi
 fab=$(cd "$(dirname "$0")/.." && pwd -P)
 sdk=$(cd "$fab/../med_ex" && pwd -P)
-run=$(mktemp -d /tmp/med-release-soak.XXXXXXXX)
+run=$(mktemp -d /tmp/soak.XXXXXXXX)
 out="$run/candidates"
 qc="$run/qualification"
+log="$run/live.log"
 mkdir "$qc"
-printf 'Evidence %s\n' "$run"
-printf 'Detailed logs (in another Bash terminal):\n'
-printf '  Candidate prep: tail -F %q/source-qc/{medex-core,medex-prepare}.log %q/sync.log\n' "$out" "$out"
-printf '  Candidate build (once started): tail -F %q/build.*/build.log\n' "$out"
-printf '  Native soak: tail -F %q/{soak-off,soak-isolated}/run.log\n' "$qc"
-printf '  Five-second measurements: tail -F %q/{soak-off,soak-isolated}/soak-samples.jsonl\n' "$qc"
+touch "$log"
+printf 'tail -F %q\n' "$log"
 
+trap 'exit 143' TERM
+trap 'status=$?; if (( status != 0 )); then printf "Soak stopped (%s). See %s\n" "$status" "$log" >&3; fi' EXIT
+exec 3>&2 >>"$log" 2>&1
 export PATH="$(pg_config --bindir):$PATH"
 # Fallback for the owned, private coturn installation retained on the original QC host.
 tools_dir=/tmp/med-release-qc.6XQST7
@@ -32,6 +41,11 @@ printf '%s\n' "$volume" > "$qc/soak-volume-path"
 printf 'Private labs %s\n' "$volume"
 
 cd "$sdk"
+# The ecosystem runner writes gate output to files while it runs.
+tail -q -n +1 -F -- "$out/source-qc/medex-core.log" "$out/source-qc/medex-prepare.log" \
+  "$out/sync.log" "$out/build.log" >>"$log" 2>/dev/null &
+log_reader=$!
+trap 'status=$?; kill "$log_reader" 2>/dev/null || true; wait "$log_reader" 2>/dev/null || true; if (( status != 0 )); then printf "Soak stopped (%s). See %s\n" "$status" "$log" >&3; fi' EXIT
 build_support/prepare_candidates.sh sync "$out"
 locks=(core/domain/mix.lock core/store/mix.lock apps/exam/mix.lock
        apps/handheld/mix.lock apps/preview/mix.lock)
