@@ -1,4 +1,4 @@
-defmodule MedExHandheld.ReceiptVectorsTest do
+defmodule MedFabric.Handheld.ReceiptVectorsTest do
   use ExUnit.Case, async: true
   alias MedEx.Receipt
   @sha "00e4b87285b26e995f5f0e3bff01c3cce5a8f3c4701e41d9f3981b73a197901b"

@@ -1,7 +1,8 @@
-defmodule MedExHandheld.PLXAdapterTest do
+defmodule MedFabric.Handheld.PLXAdapterTest do
   use ExUnit.Case, async: true
   alias MedEx.Wire.Control
-  alias MedExHandheld.PLXAdapter, as: PLX
+  alias MedFabric.Handheld.PLXAdapter, as: PLX
+  alias MedFabric.Handheld.PLXPeripheral
 
   test "zero is finite, absent optional values and NaN stay distinct" do
     bytes = <<0, 0, 0, 0xFF, 0x07>>
@@ -70,10 +71,17 @@ defmodule MedExHandheld.PLXAdapterTest do
 
   test "the PLX wire body is the canonical SDK event with exact source bytes and explicit time qualification" do
     config = %{"device" => "gateway", "acquisition" => "collection", "boot" => "boot"}
-    raw = List.last(MedExHandheld.PLXPeripheral.new().records)
+    raw = List.last(PLXPeripheral.new().records)
 
     wire =
-      MedExHandheld.PLXPeripheral.event(raw, "event", 1, "previous", config, :fixed_fixture_utc)
+      PLXPeripheral.event(
+        raw,
+        "event",
+        1,
+        "previous",
+        config,
+        :fixed_fixture_utc
+      )
 
     assert {:ok, event} = MedEx.Serialization.measurement(wire)
     assert event.acquisition_id == "collection" and event.source_ref == "gateway"
@@ -97,7 +105,7 @@ defmodule MedExHandheld.PLXAdapterTest do
              })
 
     assert {:ok, %{"event" => ^wire}} = Control.decode(bytes, ["measurement"])
-    unknown = MedExHandheld.PLXPeripheral.event(raw, "unknown-time", 2, nil, config)
+    unknown = PLXPeripheral.event(raw, "unknown-time", 2, nil, config)
     assert {:ok, %{device_time: :unknown}} = MedEx.Serialization.measurement(unknown)
   end
 end

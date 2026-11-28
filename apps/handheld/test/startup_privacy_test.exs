@@ -1,7 +1,7 @@
-defmodule MedExHandheld.StartupPrivacyTest do
+defmodule MedFabric.Handheld.StartupPrivacyTest do
   use ExUnit.Case, async: false
   import ExUnit.CaptureLog
-  alias MedExHandheld.{Monitor, Spool}
+  alias MedFabric.Handheld.{Monitor, Spool}
 
   setup do
     root =

@@ -2,7 +2,7 @@ defmodule MedFabric.Exam.LogPrivacy do
   @moduledoc false
   @filter :mf_exam_privacy
   @dependencies ~w(Elixir.ExWebRTC Elixir.ExICE Elixir.ExSTUN Elixir.ExTURN Elixir.ExDTLS Elixir.ExLibSRTP Elixir.Postgrex Elixir.DBConnection Elixir.Phoenix Elixir.Bandit Elixir.WebSock Elixir.Req Elixir.Finch Elixir.Mint)
-  @owners ~w(Elixir.MedFabric Elixir.MedEx Elixir.MedExHandheld)
+  @owners ~w(Elixir.MedFabric Elixir.MedEx)
 
   # Installed at the executable host, before opening listeners or admitting
   # media. A provider dependency never changes the embedding host's Logger.

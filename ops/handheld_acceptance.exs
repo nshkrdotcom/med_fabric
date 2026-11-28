@@ -944,7 +944,7 @@ defmodule MedFabric.HandheldAcceptance do
     entry =
       if cfg["local_monitor_fault"],
         do: [Path.join(@root, "apps/handheld/integration/local_monitor_fault.exs")],
-        else: ["-e", "MedExHandheld.CLI.main(System.argv())"]
+        else: ["-e", "MedFabric.Handheld.CLI.main(System.argv())"]
 
     isolate!(
       lab,

@@ -9,11 +9,11 @@ device calibration or clinical qualification.
 
 ## Ownership
 
-`MedExHandheld.Session` coordinates admission, reconnect and final drain.
-`MedExHandheld.Paired` produces source records and uploads retained bytes.
-`MedExHandheld.Spool` owns local durability and its single OS `flock`.
+`MedFabric.Handheld.Session` coordinates admission, reconnect and final drain.
+`MedFabric.Handheld.Paired` produces source records and uploads retained bytes.
+`MedFabric.Handheld.Spool` owns local durability and its single OS `flock`.
 `MedEx.Receipt`, `MedEx.StreamCursor` and `MedEx.Wire.Credit` own technical
-receipt, progression and credit rules. `MedExHandheld.Monitor` owns a separate,
+receipt, progression and credit rules. `MedFabric.Handheld.Monitor` owns a separate,
 bounded derived gain ledger and the latest disposable batch. Preview, codecs,
 RTC, clinical decisions and database access do not belong in this package.
 
@@ -28,7 +28,7 @@ Add the package to a consumer:
 Start the consumer applications and invoke the packaged CLI:
 
 ```sh
-mix run -e 'MedExHandheld.CLI.main(System.argv())' -- \
+mix run -e 'MedFabric.Handheld.CLI.main(System.argv())' -- \
   --config /etc/med_fabric/handheld.json --scenario paired_exam
 ```
 

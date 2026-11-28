@@ -1,9 +1,9 @@
-defmodule MedExHandheld.SpoolReceiptTest do
+defmodule MedFabric.Handheld.SpoolReceiptTest do
   use ExUnit.Case, async: true
   alias MedEx.Receipt
   alias MedEx.Wire.FrameV1
-  alias MedExHandheld.{Paired, Spool}
-  alias MedExHandheld.Spool.Plan
+  alias MedFabric.Handheld.{Paired, Spool}
+  alias MedFabric.Handheld.Spool.Plan
 
   setup do
     suffix = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)
@@ -214,7 +214,10 @@ defmodule MedExHandheld.SpoolReceiptTest do
     File.mkdir_p!(old)
     File.chmod!(old, 0o700)
     File.write!(Path.join(old, "identity.json"), "{}")
+    before = File.ls!(old) |> Enum.sort()
     assert {:error, :incompatible_spool} = Spool.start_link(root: old, limit: 4096)
+    assert Enum.sort(File.ls!(old)) == before
+    assert File.read!(Path.join(old, "identity.json")) == "{}"
   end
 
   test "a record changed after load cannot become covered or reclaimable", c do

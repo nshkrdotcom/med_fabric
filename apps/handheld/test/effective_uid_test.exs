@@ -1,6 +1,6 @@
-defmodule MedExHandheld.EffectiveUIDTest do
+defmodule MedFabric.Handheld.EffectiveUIDTest do
   use ExUnit.Case, async: true
-  alias MedExHandheld.EffectiveUID
+  alias MedFabric.Handheld.EffectiveUID
 
   test "Linux uses the effective UID field rather than real or filesystem UID" do
     status = "Name:\tbeam.smp\nUid:\t1000\t1001\t1002\t1003\nGid:\t1\t2\t3\t4\n"

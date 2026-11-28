@@ -1,11 +1,11 @@
-defmodule MedExHandheld.SourceAdapter do
+defmodule MedFabric.Handheld.SourceAdapter do
   @moduledoc "Contract for incremental source decoders."
   @callback decode(binary(), binary()) :: {:ok, binary(), [map()]} | {:error, atom(), binary()}
 end
 
-defmodule MedExHandheld.RDP1 do
+defmodule MedFabric.Handheld.RDP1 do
   @moduledoc "Bounded incremental decoder of the little-endian synthetic peripheral byte stream."
-  @behaviour MedExHandheld.SourceAdapter
+  @behaviour MedFabric.Handheld.SourceAdapter
   def packet(kind, source, boot, seq, first, count, config, payload)
       when byte_size(payload) <= 2012 do
     body =

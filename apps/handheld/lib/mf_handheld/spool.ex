@@ -1,11 +1,11 @@
-defmodule MedExHandheld.Spool do
+defmodule MedFabric.Handheld.Spool do
   @moduledoc "One OS-locked spool: synchronized source records and canonical durable receipts precede reclamation."
   use GenServer, restart: :temporary
   import Bitwise, only: [band: 2]
   alias MedEx.{Receipt, Serialization, StreamCursor, StreamSpec}
   alias MedEx.Wire.Control
-  alias MedExHandheld.EffectiveUID
-  alias MedExHandheld.Spool.Plan
+  alias MedFabric.Handheld.EffectiveUID
+  alias MedFabric.Handheld.Spool.Plan
   @namespace %{"schema" => "mf_handheld.spool", "revision" => 2}
   @max_records 100_000
 
@@ -67,6 +67,7 @@ defmodule MedExHandheld.Spool do
          limit when is_integer(limit) and limit > 0 and limit <= 536_870_912 <-
            opts[:limit] || 67_108_864,
          {:ok, uid} <- EffectiveUID.resolve(),
+         :ok <- check_existing_namespace(root),
          :ok <- prepare_root(root, uid),
          {:ok, %{major_device: device, inode: inode}} <- File.lstat(root),
          {:ok, owner} <- lock(root) do
@@ -396,6 +397,27 @@ defmodule MedExHandheld.Spool do
     end)
   rescue
     _ in [ArgumentError, ErlangError, MatchError] -> {:error, :unsafe_spool_root}
+  end
+
+  defp check_existing_namespace(root) do
+    case File.lstat(root) do
+      {:ok, %{type: :directory}} -> check_nonempty_namespace(root)
+      _ -> :ok
+    end
+  rescue
+    _ in [File.Error, JSON.DecodeError, ArgumentError] -> {:error, :corrupt_spool}
+  end
+
+  defp check_nonempty_namespace(root) do
+    if File.ls!(root) -- ["spool.lock"] == [] do
+      :ok
+    else
+      case read_json(Path.join(root, "namespace.json"), nil) do
+        value when value == @namespace -> :ok
+        nil -> {:error, :incompatible_spool}
+        _ -> {:error, :corrupt_spool}
+      end
+    end
   end
 
   defp namespace(root, path) do

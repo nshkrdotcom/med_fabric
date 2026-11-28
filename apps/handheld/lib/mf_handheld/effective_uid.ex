@@ -1,4 +1,4 @@
-defmodule MedExHandheld.EffectiveUID do
+defmodule MedFabric.Handheld.EffectiveUID do
   @moduledoc false
   @timeout 1_000
   @output_limit 32

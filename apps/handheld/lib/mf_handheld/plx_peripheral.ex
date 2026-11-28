@@ -1,5 +1,7 @@
-defmodule MedExHandheld.PLXPeripheral do
+defmodule MedFabric.Handheld.PLXPeripheral do
   @moduledoc "PLXS characteristic reads and a simulated RACP procedure port. No BLE radio."
+  alias MedFabric.Handheld.PLXAdapter
+
   def new do
     # Time qualification is explicit for this fixed UTC fixture, never inferred from PLXS.
     time = <<2025::little-16, 1, 2, 3, 4, 5>>
@@ -32,7 +34,7 @@ defmodule MedExHandheld.PLXPeripheral do
 
   @doc "Build the single canonical SDK event; only the declared fixture policy qualifies source-local time."
   def event(raw, id, sequence, repeat_of, config, time_policy \\ :unknown) do
-    {:ok, indication} = MedExHandheld.PLXAdapter.spot_check(raw)
+    {:ok, indication} = PLXAdapter.spot_check(raw)
     {device_time, basis} = source_time(indication.source_time, time_policy)
     features = Base.encode64(read_features())
 

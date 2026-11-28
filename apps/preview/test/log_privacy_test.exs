@@ -108,4 +108,53 @@ defmodule MedFabric.Preview.LogPrivacyTest do
                LogPrivacy.filter(%{event | msg: {:report, %{report | application: :other}}}, [])
     end
   end
+
+  test "canonical MedFabric.Handheld OTP reports are redacted while non-prefix siblings stay ignored" do
+    secret = "synthetic-handheld-secret-7c31b8e2"
+
+    for report <- [
+          %{
+            label: {:proc_lib, :crash},
+            report: [
+              [initial_call: {MedFabric.Handheld.Monitor, :init, 1}, messages: [secret]],
+              []
+            ]
+          },
+          %{
+            label: {:proc_lib, :crash},
+            report: [[registered_name: MedFabric.Handheld.Tasks, messages: [secret]], []]
+          },
+          %{
+            label: {:supervisor, :child_terminated},
+            report: [
+              offender: [
+                id: MedFabric.Handheld.Session,
+                mfargs: {MedFabric.Handheld.Session, :run, [secret]}
+              ]
+            ]
+          }
+        ] do
+      event = %{level: :error, msg: {:report, report}, meta: %{domain: [:otp, :sasl]}}
+
+      assert %{level: :error, msg: {:string, "mf_preview_otp_report"}} =
+               LogPrivacy.filter(event, [])
+
+      log = capture_log(fn -> :logger.error(report, %{domain: [:otp, :sasl]}) end)
+      assert log =~ "mf_preview_otp_report"
+      refute log =~ secret
+    end
+
+    sibling = %{
+      level: :error,
+      msg:
+        {:report,
+         %{
+           label: {:proc_lib, :crash},
+           report: [[initial_call: {MedFabricHandheld.Worker, :init, 1}], []]
+         }},
+      meta: %{domain: [:otp, :sasl]}
+    }
+
+    assert :ignore = LogPrivacy.filter(sibling, [])
+  end
 end

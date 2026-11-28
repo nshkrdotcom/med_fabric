@@ -321,7 +321,7 @@ echo 'Starting detached Handheld acquisition'
         timeout 180 ./handheld-release/bin/mf_handheld eval '
             {:ok, _} = Application.ensure_all_started(:mf_handheld)
 
-            MedExHandheld.CLI.main([
+            MedFabric.Handheld.CLI.main([
               "--config", "handheld-release.json",
               "--scenario", "paired_exam"
             ])

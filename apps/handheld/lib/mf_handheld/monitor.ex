@@ -1,9 +1,9 @@
-defmodule MedExHandheld.Monitor do
+defmodule MedFabric.Handheld.Monitor do
   @moduledoc "Disposable latest-slot monitor with one atomically admitted control and an exact durable command ledger."
   use GenServer, restart: :temporary
   alias MedEx.{ContractRules, ControlInterlock, Serialization}
   alias MedEx.Wire.{Control, FrameV1}
-  alias MedExHandheld.Spool
+  alias MedFabric.Handheld.Spool
   @cache_limit 4096
   @result_keys ~w(id fingerprint boot target generation expected_epoch gain status epoch application reason)
 

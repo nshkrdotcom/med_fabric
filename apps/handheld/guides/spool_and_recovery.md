@@ -2,7 +2,7 @@
 
 ## One durable local owner
 
-Each acquisition uses one `MedExHandheld.Spool` process and one real OS `flock`
+Each acquisition uses one `MedFabric.Handheld.Spool` process and one real OS `flock`
 child. Concurrent ownership is refused. A fresh spool has `namespace.json`
 containing schema `mf_handheld.spool` and revision `2`. A nonempty directory
 without that exact marker is incompatible and is preserved for operator review.

@@ -1,7 +1,7 @@
-defmodule MedExHandheld.MonitorTest do
+defmodule MedFabric.Handheld.MonitorTest do
   use ExUnit.Case, async: true
   alias MedEx.Wire.FrameV1
-  alias MedExHandheld.Monitor
+  alias MedFabric.Handheld.{Monitor, Spool}
 
   setup do
     dir =
@@ -58,7 +58,7 @@ defmodule MedExHandheld.MonitorTest do
     assert_receive {:med_ex_monitor, ^ticket, %{"status" => "rejected", "reason" => "expired"}},
                    1_000
 
-    ledger = MedExHandheld.Spool.read_json(Path.join(c.root, "monitor.json"), nil)
+    ledger = Spool.read_json(Path.join(c.root, "monitor.json"), nil)
     assert ledger["gain"] == "unity" and ledger["epoch"] == "0"
     assert {:message_queue_len, size} = Process.info(monitor, :message_queue_len)
     assert size < 5

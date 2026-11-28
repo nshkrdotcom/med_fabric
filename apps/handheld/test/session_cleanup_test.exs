@@ -1,6 +1,6 @@
-defmodule MedExHandheld.SessionCleanupTest do
+defmodule MedFabric.Handheld.SessionCleanupTest do
   use ExUnit.Case, async: true
-  alias MedExHandheld.{Session, Transport}
+  alias MedFabric.Handheld.{Session, Transport}
 
   setup do
     root =
@@ -80,6 +80,58 @@ defmodule MedExHandheld.SessionCleanupTest do
     end
 
     assert File.read!(Path.join(spool, "identity.json")) == bytes
+  end
+
+  test "started source marker refuses missing or conflicting identity before network or mutation",
+       %{tmp_dir: root} do
+    credential = Path.join(root, "credential")
+    File.write!(credential, String.duplicate("x", 32))
+    spool = Path.join(root, "acq")
+    File.mkdir_p!(spool)
+    File.chmod!(spool, 0o700)
+
+    File.write!(
+      Path.join(spool, "namespace.json"),
+      JSON.encode!(%{"schema" => "mf_handheld.spool", "revision" => 2})
+    )
+
+    marker = JSON.encode!(%{"boot" => "boot-1", "acquisition" => "acq", "api_revision" => 2})
+    File.write!(Path.join(spool, "source_started.json"), marker)
+
+    config = %{
+      "device" => "device",
+      "encounter" => "exam",
+      "acquisition" => "acq",
+      "spool_root" => root,
+      "server" => "wss://localhost:443",
+      "credential_file" => credential
+    }
+
+    assert_raise ArgumentError, "spool source marker mismatch", fn ->
+      Session.run(config, "plx_spot_check")
+    end
+
+    refute File.exists?(Path.join(spool, "identity.json"))
+
+    wrong_identity =
+      JSON.encode!(%{
+        "encounter" => "exam",
+        "device" => "device",
+        "acquisition" => "acq",
+        "profile" => "plx_spot_check",
+        "boot" => "boot-other",
+        "origin_us" => 123_456,
+        "api_revision" => 2
+      })
+
+    File.write!(Path.join(spool, "identity.json"), wrong_identity)
+
+    assert_raise ArgumentError, "spool source marker mismatch", fn ->
+      Session.run(config, "plx_spot_check")
+    end
+
+    assert File.read!(Path.join(spool, "identity.json")) == wrong_identity
+    assert File.read!(Path.join(spool, "source_started.json")) == marker
   end
 
   test "teardown of partially started sources leaves no linked worker" do

@@ -1,6 +1,6 @@
-defmodule MedExHandheld.ReferencePeripheral do
+defmodule MedFabric.Handheld.ReferencePeripheral do
   @moduledoc "RDP1 fixture instrument with its own counters, command cache and bounded packet retention."
-  alias MedExHandheld.RDP1
+  alias MedFabric.Handheld.RDP1
 
   def new(source, boot, variant \\ false) do
     audio = source == 1

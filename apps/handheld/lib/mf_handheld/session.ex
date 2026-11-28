@@ -1,19 +1,19 @@
-defmodule MedExHandheld.Application do
+defmodule MedFabric.Handheld.Application do
   @moduledoc "Starts the supervisor for independently owned Handheld CLI tasks."
   use Application
 
   def start(_, _),
     do:
-      Supervisor.start_link([{Task.Supervisor, name: MedExHandheld.Tasks}],
+      Supervisor.start_link([{Task.Supervisor, name: MedFabric.Handheld.Tasks}],
         strategy: :one_for_one
       )
 end
 
-defmodule MedExHandheld.Session do
+defmodule MedFabric.Handheld.Session do
   @moduledoc "Device admission, local production and bounded reconnect. Only authenticated host authority enables upload."
   alias MedEx.{ContractRules, Serialization}
   alias MedEx.Wire.Control
-  alias MedExHandheld.{Monitor, Paired, PLXAdapter, PLXPeripheral, Spool, Transport}
+  alias MedFabric.Handheld.{Monitor, Paired, PLXAdapter, PLXPeripheral, Spool, Transport}
 
   @doc "Pure connection and source lifecycle; durable recording truth remains in the spool and host journal."
   def transition(state, event, now) when is_map(state) and is_integer(now) do
@@ -96,7 +96,20 @@ defmodule MedExHandheld.Session do
              is_integer(identity["origin_us"]),
            do: raise(ArgumentError, "spool identity mismatch")
 
+    check_source_marker!(root, saved, identity)
+
     config |> Map.put_new("seed", 1) |> Map.merge(identity) |> Map.put("spool", root)
+  end
+
+  defp check_source_marker!(root, saved, identity) do
+    marker_path = Path.join(root, "source_started.json")
+
+    if File.exists?(marker_path) and
+         (saved == nil or
+            Spool.read_json(marker_path, :invalid) !=
+              Map.take(identity, ~w(boot acquisition api_revision))) do
+      raise ArgumentError, "spool source marker mismatch"
+    end
   end
 
   defp hello(config, sources) do
@@ -793,8 +806,10 @@ defmodule MedExHandheld.Session do
   end
 end
 
-defmodule MedExHandheld.CLI do
+defmodule MedFabric.Handheld.CLI do
   @moduledoc "Run a configured synthetic/reference paired or PLX acquisition."
+  alias MedFabric.Handheld.{Session, Tasks}
+
   def main(args) do
     {options, _, []} =
       OptionParser.parse(Enum.reject(args, &(&1 == "--")),
@@ -804,8 +819,8 @@ defmodule MedExHandheld.CLI do
     config = File.read!(Keyword.fetch!(options, :config)) |> JSON.decode!()
 
     task =
-      Task.Supervisor.async_nolink(MedExHandheld.Tasks, fn ->
-        MedExHandheld.Session.run(config, Keyword.fetch!(options, :scenario))
+      Task.Supervisor.async_nolink(Tasks, fn ->
+        Session.run(config, Keyword.fetch!(options, :scenario))
       end)
 
     case Task.await(task, :infinity) do

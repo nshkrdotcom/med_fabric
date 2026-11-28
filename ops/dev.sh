@@ -164,7 +164,7 @@ cmd_handheld() {
   printf '%s\n' "$ready"
 
   cd "$repo_root/apps/handheld"
-  mix run -e 'MedExHandheld.CLI.main(System.argv())' -- \
+  mix run -e 'MedFabric.Handheld.CLI.main(System.argv())' -- \
     --config "$config" --scenario "$scenario"
 }
 

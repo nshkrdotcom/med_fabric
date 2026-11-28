@@ -1,9 +1,9 @@
-defmodule MedExHandheld.Paired do
+defmodule MedFabric.Handheld.Paired do
   @moduledoc "Reference peripheral acquisition runs independently of server connectivity."
   alias MedEx.{Receipt, Serialization, StreamCursor, StreamSpec}
   alias MedEx.Wire.{Control, Credit, FrameV1}
-  alias MedExHandheld.{Monitor, ReferencePeripheral, Spool, Transport}
-  alias MedExHandheld.Spool.Plan
+  alias MedFabric.Handheld.{Monitor, ReferencePeripheral, Spool, Transport}
+  alias MedFabric.Handheld.Spool.Plan
 
   def sources(c) do
     for {n, s} <- [{"audio", 1}, {"ecg", 2}], into: %{} do

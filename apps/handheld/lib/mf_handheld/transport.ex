@@ -1,4 +1,4 @@
-defmodule MedExHandheld.Transport do
+defmodule MedFabric.Handheld.Transport do
   @moduledoc "Verified TLS and bounded revision-2 messages. Authentication never implies continuing acquisition authority."
   alias MedEx.Wire.Control
 

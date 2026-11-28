@@ -1,4 +1,4 @@
-defmodule MedExHandheld.Spool.Plan do
+defmodule MedFabric.Handheld.Spool.Plan do
   @moduledoc false
   alias MedEx.{IntegritySpan, SampleFrame, Serialization, StreamCursor, StreamSpec}
   alias MedEx.Wire.{Control, FrameV1}

@@ -1,6 +1,6 @@
-defmodule MedExHandheld.SpoolEventTest do
+defmodule MedFabric.Handheld.SpoolEventTest do
   use ExUnit.Case, async: true
-  alias MedExHandheld.{PLXPeripheral, Spool}
+  alias MedFabric.Handheld.{PLXPeripheral, Spool}
 
   setup do
     suffix = Base.url_encode64(:crypto.strong_rand_bytes(12), padding: false)

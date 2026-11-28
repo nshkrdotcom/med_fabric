@@ -1,4 +1,4 @@
-defmodule MedExHandheld.PLXAdapter do
+defmodule MedFabric.Handheld.PLXAdapter do
   @moduledoc """
   Handheld simulated-peripheral adapter, not a generic MedEx API or BLE stack.
   Parses PLXS 1.0.1 sections 3.1, 3.3 and 5.1; PLXP 5.4/5.6 require ignoring RFU bits.

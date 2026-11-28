@@ -15,7 +15,7 @@ if cfg["local_monitor_fault"] == "startup" do
   File.write!(Path.join(root, "monitor.json"), "{")
 end
 
-session = Task.async(fn -> MedExHandheld.CLI.main(args) end)
+session = Task.async(fn -> MedFabric.Handheld.CLI.main(args) end)
 receipt = Path.join([cfg["spool_root"], cfg["acquisition"], "audio", "ack.json"])
 
 durable = fn ->
@@ -47,7 +47,7 @@ before_fault =
 monitor =
   Enum.find(
     Process.list(),
-    &(:proc_lib.translate_initial_call(&1) == {MedExHandheld.Monitor, :init, 1})
+    &(:proc_lib.translate_initial_call(&1) == {MedFabric.Handheld.Monitor, :init, 1})
   )
 
 if cfg["local_monitor_fault"] != "startup", do: true = is_pid(monitor)

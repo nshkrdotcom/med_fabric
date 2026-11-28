@@ -1,7 +1,7 @@
-defmodule MedExHandheld.SourceTest do
+defmodule MedFabric.Handheld.SourceTest do
   use ExUnit.Case, async: true
 
-  alias MedExHandheld.{PLXPeripheral, RDP1, ReferencePeripheral}
+  alias MedFabric.Handheld.{PLXPeripheral, RDP1, ReferencePeripheral}
 
   test "RDP1 independent CRC vector survives every split and coalesced reads" do
     bytes = File.read!(Path.join(__DIR__, "fixtures/rdp1_waveform.bin"))

@@ -31,7 +31,7 @@ Omitting `ca_file` uses the platform CA store; it does not disable verification.
 Device, encounter and acquisition identifiers use bounded ASCII identifiers.
 The host must have an active enrollment/grant for the source profile.
 
-Invoke `MedExHandheld.CLI.main/1` with `--config` and `--scenario paired_exam` or
+Invoke `MedFabric.Handheld.CLI.main/1` with `--config` and `--scenario paired_exam` or
 `--scenario plx_spot_check`. The paired profile records separate audio and ECG
 streams under one acquisition. PLX records discrete events and their final
 inventory, without inventing waveform streams. Browser microphone production

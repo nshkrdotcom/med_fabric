@@ -4,7 +4,7 @@ defmodule FabricHexSmoke.PublishedPackagesTest do
   import Plug.Conn, only: [put_req_header: 3]
   alias ExWebRTC.{PeerConnection, SessionDescription}
   alias MedEx.Wire.FrameV1
-  alias MedExHandheld.PLXPeripheral
+  alias MedFabric.Handheld.PLXPeripheral
   alias MedFabric.ExamWeb.Endpoint, as: Exam
   alias MedFabric.Preview.Endpoint, as: Preview
 
