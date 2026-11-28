@@ -106,8 +106,11 @@ The focused tooling tests are `python3 ops/qc_native_test.py` and
 
 ## Native qualification
 
-Use the authoritative qualification specification (QA-01 through QA-10 and all
-54 case IDs) as the release gate. Record PASS/FAIL/BLOCKED/NOT RUN with actual command, exit, count, fixture
+Use this release guide together with the checked-in qualification runners
+(`build_support/qualify_ecosystem.sh`, `ops/qc_detached_release.sh`,
+`ops/qc_native.sh`) and report verifiers (`ops/verify_native_report.jq`,
+`ops/verify_soak_report.jq`) as the authoritative release gate. Record
+PASS/FAIL/BLOCKED/NOT RUN with actual command, exit, count, fixture
 hash, exact source/archive identity and sanitized evidence. Static checks are
 only one gate. Required checks include:
 

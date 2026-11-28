@@ -23,6 +23,8 @@
 | Root lock or DB/root UUID mismatch | Refuse or fail-stop writable service |
 | Older backup missing later irreversible effects | Account for them or block affected/full namespace |
 
-Run actual barriers and native services for all relevant QA-03/04/05/06 cases.
+Run actual barriers and native services for all fault, recovery, persistence,
+browser, clinical, and isolated-preview scenarios in the checked-in qualification
+runners (`ops/qc_native.sh` and `ops/handheld_acceptance.exs`).
 A return-value mock or source scan alone does not prove fault behavior. Preserve
 exact command/status/source/archive identity and durable observations per case.
