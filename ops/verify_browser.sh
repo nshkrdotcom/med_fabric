@@ -33,6 +33,8 @@ export MF_EXAM_ID="exam-$(openssl rand -hex 8)"
 export MF_LAB=1
 export MF_DEPLOYMENT_UUID="$(node -e 'console.log(require("node:crypto").randomUUID())')"
 export MF_HTTP_PORT="${MF_HTTP_PORT:-14000}"
+# Match the exact Origin enforced by the browser acquisition socket.
+export MF_PUBLIC_ORIGIN="http://127.0.0.1:$MF_HTTP_PORT"
 export MF_PATIENT_ACCESS_KEY="$(openssl rand -hex 24)"
 export MF_CLINICIAN_ACCESS_KEY="$(openssl rand -hex 24)"
 export MF_PATIENT_ACTOR="patient"
