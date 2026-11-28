@@ -38,6 +38,34 @@ defmodule MedFabric.WorkspaceTest do
     assert Path.basename(script) == "run_project_qc.exs"
   end
 
+  test "detached build stages use distinct installed role projects in production" do
+    require_blitz!()
+    root = temporary_directory("detached-role-plan")
+    consumers = Path.join(root, "consumers")
+    roles = ~w(exam handheld preview)
+
+    for role <- roles, do: File.mkdir_p!(Path.join(consumers, role))
+
+    for phase <- ~w(compile release) do
+      commands = Workspace.detached_role_commands([phase, consumers, root])
+      assert Enum.map(commands, & &1.id) == Enum.map(roles, &"detached-#{&1}-#{phase}")
+      assert Enum.map(commands, & &1.cd) == Enum.map(roles, &Path.join(consumers, &1))
+
+      for {command, role} <- Enum.zip(commands, roles) do
+        assert command.command == "mix"
+        assert {"MIX_ENV", "prod"} in command.env
+
+        expected_args =
+          case(phase) do
+            "compile" -> ["compile", "--warnings-as-errors"]
+            "release" -> ["release", "mf_#{role}", "--path", Path.join(root, "#{role}-release")]
+          end
+
+        assert command.args == expected_args
+      end
+    end
+  end
+
   test "static coverage refuses zero, partial and extra source inventories" do
     assert ProjectQC.coverage!(["one.ex", "two.ex"], ["two.ex", "one.ex"]) == nil
 

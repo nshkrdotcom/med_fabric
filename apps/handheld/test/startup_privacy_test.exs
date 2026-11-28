@@ -51,13 +51,18 @@ defmodule MedFabric.Handheld.StartupPrivacyTest do
   test "failed spool initialization closes its acquired lock and success stays linked", %{
     root: root
   } do
-    namespace = Path.join(root, "namespace.json")
-    File.write!(namespace, "{\"revision\":1}")
-    assert {:error, _} = Spool.start_link(root: root)
-    File.rm!(namespace)
-    # Failed init acquired flock before checking the namespace. A fresh owner
-    # must be able to acquire that lock and remain linked to its caller.
-    spool = await_owner(root)
+    assert {:ok, spool} = Spool.start_link(root: root)
+    assert :ok = GenServer.stop(spool)
+    record = Path.join([root, "audio", "0-0.rec"])
+    File.write!(record, "broken")
+
+    # A valid namespace with a corrupt record fails after acquiring flock.
+    assert {:error, :corrupt_spool} = Spool.start_link(root: root)
+    assert File.read!(record) == "broken"
+    File.rm!(record)
+
+    # No retry or delay: failed initialization must have released its lock.
+    assert {:ok, spool} = Spool.start_link(root: root)
     assert MapSet.member?(links(), spool)
     assert :ok = GenServer.stop(spool)
   end
@@ -106,9 +111,8 @@ defmodule MedFabric.Handheld.StartupPrivacyTest do
     exec #{quoted_flock} "$1" "$2" "$3" /bin/sh -c '
       printf ready > "$MF_TEST_LOCK_READY_FILE"
       while [ ! -e "$MF_TEST_LOCK_RELEASE_FILE" ]; do sleep 0.01; done
-      echo locked
-      exec cat >/dev/null
-    '
+      exec "$@"
+    ' sh "$4" "$5" "$6"
     """)
 
     File.chmod!(Path.join(fixture, "flock"), 0o700)
@@ -128,29 +132,12 @@ defmodule MedFabric.Handheld.StartupPrivacyTest do
 
     assert {:error, :unsafe_spool_root} = Task.await(starter, 6_000)
     assert File.ls!(root) == []
-    assert {_, 0} = System.cmd(real_flock, ["-w", "1", Path.join(moved, "spool.lock"), "true"])
+    assert {_, 0} = System.cmd(real_flock, ["-n", Path.join(moved, "spool.lock"), "true"])
   end
 
   defp links do
     {:links, values} = Process.info(self(), :links)
     MapSet.new(values)
-  end
-
-  defp await_owner(root, attempts \\ 100)
-  defp await_owner(_, 0), do: flunk("failed initialization did not release the spool lock")
-
-  defp await_owner(root, attempts) do
-    case Spool.start_link(root: root) do
-      {:ok, spool} ->
-        spool
-
-      {:error, :spool_already_owned} ->
-        Process.sleep(10)
-        await_owner(root, attempts - 1)
-
-      error ->
-        flunk("unexpected spool ownership result: #{inspect(error)}")
-    end
   end
 
   defp await_file(path, attempts \\ 100)

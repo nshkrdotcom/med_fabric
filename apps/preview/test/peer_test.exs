@@ -70,9 +70,11 @@ defmodule MedFabric.Preview.PeerTest do
   end
 
   test "suspended established peer cannot resume encoding or sending beyond authority" do
-    {receiver, peer, grant, _} = connect()
+    # A short signed lease exercises the same expiry path without waiting 23 seconds.
+    {receiver, peer, grant, _} = connect(7_000)
     feed(grant, 0)
     assert_receive {:ex_webrtc, ^receiver, {:rtp, _, _, _}}, 2_000
+    assert System.monotonic_time(:millisecond) < grant.deadline
     :ok = :sys.suspend(peer)
     feed(grant, 960)
     Process.sleep(max(0, grant.deadline - System.monotonic_time(:millisecond) + 25))
@@ -83,7 +85,7 @@ defmodule MedFabric.Preview.PeerTest do
     assert Feed.take(Capability.key(grant)) == :empty
   end
 
-  defp connect do
+  defp connect(lifetime_ms \\ 25_000) do
     {:ok, config} =
       MedFabric.Preview.Application.validate_config(Application.fetch_env!(:mf_preview, :listen))
 
@@ -93,7 +95,7 @@ defmodule MedFabric.Preview.PeerTest do
     {:ok, offer} = PeerConnection.create_offer(receiver)
     :ok = PeerConnection.set_local_description(receiver, offer)
     assert_receive {:ex_webrtc, ^receiver, {:ice_gathering_state_change, :complete}}, 5_000
-    grant = grant()
+    grant = grant(lifetime_ms)
 
     assert {:ok, %{"sdp" => answer}} =
              Peer.action(
@@ -139,7 +141,7 @@ defmodule MedFabric.Preview.PeerTest do
     assert :ok = Feed.offer(Capability.source(grant), frame)
   end
 
-  defp grant do
+  defp grant(lifetime_ms \\ 25_000) do
     now = System.system_time(:millisecond)
 
     claims = %{
@@ -153,7 +155,7 @@ defmodule MedFabric.Preview.PeerTest do
       "viewer" => "viewer",
       "viewer_session" => "session",
       "issued_at_ms" => to_string(now),
-      "expires_at_ms" => to_string(now + 25_000),
+      "expires_at_ms" => to_string(now + lifetime_ms),
       "nonce" => "nonce"
     }
 

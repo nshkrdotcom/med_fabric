@@ -44,6 +44,36 @@ defmodule MedFabric.Build.Workspace do
     Blitz.run!([%{commands: commands}])
   end
 
+  # Detached role projects have independent locks, deps and build directories.
+  # Resolve/install serially in the shell runner, then compile or assemble them
+  # in one Blitz stage. This never starts deployment applications.
+  @doc false
+  def run_detached_roles(args) do
+    check_environment!()
+    ensure_tools("test", false)
+    Blitz.run!([%{commands: detached_role_commands(args)}])
+  end
+
+  @doc false
+  def detached_role_commands([phase, consumers, releases]) when phase in ["compile", "release"] do
+    Enum.map(~w(exam handheld preview), fn role ->
+      args =
+        case phase do
+          "compile" -> ["compile", "--warnings-as-errors"]
+          "release" -> ["release", "mf_#{role}", "--path", Path.join(releases, "#{role}-release")]
+        end
+
+      Blitz.command(
+        id: "detached-#{role}-#{phase}",
+        command: "mix",
+        args: args,
+        cd: Path.join(consumers, role),
+        env: %{"MIX_ENV" => "prod"},
+        resources: [cpu: 4, memory_mib: 1536]
+      )
+    end)
+  end
+
   defp validate_options!(task, opts, forwarded) do
     if task in ["setup", "quality"] and forwarded != [],
       do: Mix.raise("#{task} accepts only --project, --locked and --release")

@@ -2,13 +2,18 @@
 set -euo pipefail
 umask 077
 
-[[ $# == 3 && $2 == --artifacts ]] || {
-    echo 'Usage: ops/qc_detached_release.sh REPORT.json --artifacts MANIFEST.json' >&2
+[[ ( $# == 3 || $# == 5 ) && $2 == --artifacts ]] || {
+    echo 'Usage: ops/qc_detached_release.sh REPORT.json --artifacts MANIFEST.json [--native-evidence DIR]' >&2
     echo 'Provide all six exact archives and both prepared Weld identities; no source fallback is allowed.' >&2
     exit 2
 }
 report=$(realpath -m -- "$1")
 artifact_manifest=$(realpath -e -- "$3")
+native_evidence=
+if [[ $# == 5 ]]; then
+    [[ $4 == --native-evidence && -n $5 && -d $5 && ! -L $5 ]] || exit 2
+    native_evidence=$(realpath -e -- "$5")
+fi
 export PATH="$(pg_config --bindir):$PATH"
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 [[ ! -e .mix_sources.json && ! -L .mix_sources.json ]]
@@ -85,7 +90,27 @@ unset PGPASSWORD PGPASSFILE PGSERVICE PGSERVICEFILE
 
 source "$fabric/ops/detached_consumers.sh"
 elixir ops/handheld_demo.exs prepare --run-dir "$lab"
-prepare_detached_consumers "$fabric" "$artifact_manifest" "$lab/consumers" "$inputs"
+phase_started=$SECONDS
+if [[ -n "$native_evidence" ]]; then
+    jq -e -f ops/verify_native_report.jq "$native_evidence/native.json" >/dev/null
+    consumers="$native_evidence/consumers"
+    reverify_detached_consumers "$fabric" "$artifact_manifest" "$consumers" \
+        "$native_evidence/installed" "$inputs"
+    jq -e --slurpfile artifacts "$inputs/artifacts.json" \
+        --slurpfile registry "$inputs/registry.json" \
+        --slurpfile exam "$inputs/exam-installed.json" \
+        --slurpfile handheld "$inputs/handheld-installed.json" \
+        --slurpfile preview "$inputs/preview-installed.json" \
+        '.artifact_manifest_sha256 == $artifacts[0].manifest_sha256 and
+         .registry == $artifacts[0].registry and .registry_origin == $registry[0] and
+         (.installed_artifacts | sort_by(.role)) == [$exam[0], $handheld[0], $preview[0]]' \
+        "$native_evidence/native.json" >/dev/null
+else
+    consumers="$lab/consumers"
+    prepare_detached_consumers "$fabric" "$artifact_manifest" "$consumers" "$inputs"
+fi
+printf 'Detached role inputs ready (%ss)\n' "$((SECONDS-phase_started))"
+phase_started=$SECONDS
 
 # The combined consumer exercises all six installed packages and real media.
 # It is a separate proof from the three role processes below.
@@ -96,11 +121,13 @@ cp -R -- "$fabric/examples/hex_smoke/config" "$fabric/examples/hex_smoke/test" "
     cd "$lab/combined"
     MIX_ENV=test mix deps.get
     MIX_ENV=test mix deps.get --check-locked
-    elixir "$fabric/ops/detached_artifacts.exs" installed "$lab/consumers/artifacts.json" \
+    elixir "$fabric/ops/detached_artifacts.exs" installed "$consumers/artifacts.json" \
         "$lab/combined" combined "$inputs/combined-installed.json"
     cp -- mix.lock "$inputs/combined-mix.lock"
     MIX_ENV=test mix test --warnings-as-errors | tee "$inputs/combined-tests.log"
 )
+printf 'Combined installed consumer passed (%ss)\n' "$((SECONDS-phase_started))"
+phase_started=$SECONDS
 
 cfg="$lab/server.json"
 pg_port=$(jq -er .postgres_port "$cfg")
@@ -114,13 +141,11 @@ pg_ctl -D "$lab/pgdata" -l "$lab/logs/postgres.log" \
 
 pg_owned=true
 
-for app in exam handheld preview; do
-    echo "Building detached $app release from its verified installed archives"
-    (
-        cd "$lab/consumers/$app"
-        MIX_ENV=prod mix release "mf_$app" --path "$lab/$app-release"
-    )
-done
+echo 'Building detached releases from their verified installed archives'
+run_detached_roles "$fabric" release "$consumers" "$lab"
+
+printf 'Detached database and release assembly complete (%ss)\n' "$((SECONDS-phase_started))"
+phase_started=$SECONDS
 
 for app in exam handheld preview; do
     test -z "$(find "$lab/$app-release/lib" \
@@ -369,9 +394,10 @@ done
 
 printf 'PASS detached production acquisition: %s\n' "$acquisition"
 printf 'Verified manifest digest: %s\n' "$manifest_digest"
+printf 'Detached production acquisition and verification passed (%ss)\n' "$((SECONDS-phase_started))"
 
-jq -n --arg sha "$manifest_digest" --slurpfile artifacts "$lab/consumers/artifacts.json" \
-    --slurpfile registry "$lab/consumers/registry.json" \
+jq -n --arg sha "$manifest_digest" --slurpfile artifacts "$consumers/artifacts.json" \
+    --slurpfile registry "$consumers/registry.json" \
     --slurpfile exam "$inputs/exam-installed.json" --slurpfile handheld "$inputs/handheld-installed.json" \
     --slurpfile preview "$inputs/preview-installed.json" --slurpfile combined "$inputs/combined-installed.json" \
     --argjson audio "$(jq '.streams.audio.index.segments | length' "$manifest")" \

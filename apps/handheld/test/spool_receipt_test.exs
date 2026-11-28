@@ -294,6 +294,16 @@ defmodule MedFabric.Handheld.SpoolReceiptTest do
     assert_raise ArgumentError, fn -> Spool.read_json(linked, nil) end
   end
 
+  test "supervised shutdown releases the OS lock before immediate restart", c do
+    assert {:error, :spool_already_owned} = Spool.start_link(root: c.root)
+
+    for _ <- 1..20 do
+      stop_supervised!(Spool)
+      spool = start_supervised!({Spool, root: c.root})
+      assert :ok = Spool.register(spool, c.spec)
+    end
+  end
+
   test "a partially installed capacity-limited batch recovers its actual prefix", c do
     stop_supervised!(Spool)
     size = byte_size(frame(0, 0)) + 32

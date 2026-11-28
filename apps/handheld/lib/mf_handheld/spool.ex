@@ -52,6 +52,8 @@ defmodule MedFabric.Handheld.Spool do
   def stats(pid), do: GenServer.call(pid, :stats)
 
   def init({caller, opts}) do
+    Process.flag(:trap_exit, true)
+
     case initialize(opts) do
       {:stop, reason} ->
         Process.unlink(caller)
@@ -88,7 +90,7 @@ defmodule MedFabric.Handheld.Spool do
           {:ok, state}
 
         {:error, reason} ->
-          close_port(owner)
+          release_lock(owner)
           {:stop, reason}
       end
     else
@@ -791,6 +793,9 @@ defmodule MedFabric.Handheld.Spool do
   def handle_info({port, {:exit_status, _}}, %{owner: port} = state),
     do: {:stop, :spool_lock_lost, state}
 
+  def handle_info({:EXIT, port, _}, %{owner: port} = state),
+    do: {:stop, :spool_lock_lost, state}
+
   def handle_info(_, state), do: {:noreply, state}
 
   defp event_generation(nil, _, _), do: :ok
@@ -931,7 +936,7 @@ defmodule MedFabric.Handheld.Spool do
           Path.join(root, "spool.lock"),
           "sh",
           "-c",
-          "echo locked && exec cat >/dev/null"
+          "echo locked && IFS= read -r release"
         ]
 
         port =
@@ -960,7 +965,26 @@ defmodule MedFabric.Handheld.Spool do
     ArgumentError -> :ok
   end
 
-  def terminate(_, state), do: close_port(state.owner)
+  # Port.close/1 alone does not wait for the OS process to relinquish flock.
+  # On orderly shutdown, signal the holder and wait for its process exit.
+  defp release_lock(port) do
+    if Port.info(port) do
+      Port.command(port, "release\n")
+
+      receive do
+        {^port, {:exit_status, _}} -> :ok
+      after
+        1_000 -> :ok
+      end
+    end
+  rescue
+    ArgumentError -> :ok
+  after
+    # Also close on exceptional shutdown; never unlock another owner's file.
+    close_port(port)
+  end
+
+  def terminate(_, state), do: release_lock(state.owner)
 
   defp event_capacity_exceeded?(state, bytes),
     do: state.bytes + byte_size(bytes) + 32 > state.limit or map_size(state.files) >= @max_records

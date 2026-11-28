@@ -233,6 +233,12 @@ defmodule MedFabric.DetachedArtifactsTest do
     assert_raise RuntimeError, ~r/Installed Hex checksum differs/, fn ->
       Artifacts.installed!(inputs, consumer, "exam")
     end
+
+    File.write!(Path.join(consumer, "mix.lock"), ~S|%{mf_exam: raise("must not execute")}|)
+
+    assert_raise RuntimeError, ~r/Expected literal installed lock/, fn ->
+      Artifacts.installed!(inputs, consumer, "exam")
+    end
   end
 
   test "candidate repository bytes cannot be labelled official registry proof" do

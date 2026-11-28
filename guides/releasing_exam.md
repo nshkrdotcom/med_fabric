@@ -41,6 +41,42 @@ lock entries are retained; resolve six-family entries using the signed candidate
 registry and commit the resulting actual locks before candidate freeze. Never
 substitute a guessed version or checksum. Changed lock/content invalidates proof.
 
+### Prepare unpublished candidates
+
+From the clean, committed SDK and Fabric checkouts, run the maintained two-step
+candidate builder. Choose a **new private evidence directory outside both repositories**:
+
+```sh
+cd /absolute/path/to/med_ex
+build_support/prepare_candidates.sh sync /private/new-candidate-evidence
+```
+
+`sync` runs SDK source qualification and its existing Weld preparation, retains
+three exact upstream archives from the signed candidate registry and refreshes
+only the five dependent Fabric locks using ordinary Mix dependency resolution.
+It retains the previous lock bytes and rejects changes to third-party version,
+registry and checksum pins. It stops before committing anything. If synchronization
+fails, inspect the retained before-locks and source diffs before retrying.
+
+Review and commit the actual Fabric lock changes. Then run:
+
+```sh
+build_support/prepare_candidates.sh build /private/new-candidate-evidence
+```
+
+`build` requires both repositories to be clean and the synchronized locks to
+match the retained bytes. The existing prepared registry helper rebuilds the
+two direct upstream provider tarballs, and the builder requires all three
+served upstream archives to match the retained checksums. It prepares Exam
+using the existing Weld entry point and explicit candidate registry URL/key,
+builds Handheld and Preview with their locked dependencies, and passes the
+six-archive manifest through the existing detached-artifact verifier. The
+result is `candidate-inputs.json`; separate downstream build attempts retain
+their own evidence. These are candidates, not proof of qualification or publication.
+The builder never publishes, pushes, commits or provisions external tools.
+The checked-in combined smoke lock is not used for this workflow: the detached
+combined consumer resolves and retains its own genuine six-package lock.
+
 ### Exact archive inputs for native gates
 
 `ops/qc_native.sh` requires `--artifacts MANIFEST.json` for the full suite and
@@ -78,12 +114,42 @@ compilation and again before native acceptance. Exam and Preview configuration
 must exist in their installed packages. The detached release checks refuse
 private component and maintainer OTP applications; Exam and Handheld also
 refuse the native media dependency closure. The combined Hex example runs
-against the same six archives before the separate process proof. Reports retain
+against the same six archives before the separate process proof. The full native
+runner prepares the three role consumers once and re-verifies their archive,
+registry, lock and installed-file identities before production release assembly.
+Standalone `qc_detached_release.sh` still creates fresh consumers; the full
+runner passes its own `--native-evidence` directory to avoid recompilation.
+The existing root Blitz coordinator compiles and assembles the independent role
+projects in parallel, after serial locked resolution and installed-file verification.
+Run the normal workspace setup before qualification; the runner does not provision
+Blitz or other tools. Phase timings are written to the native run log. Reports retain
 the manifest checksum, package/source/prepared identities, resolved locks,
 installed file inventories and the registry evidence.
 
+For an unpublished six-package manifest, the existing SDK registry runner can
+verify and serve those exact archives without rebuilding them:
+
+```sh
+cd /absolute/path/to/med_ex
+build_support/check_consumers.sh --registry \
+  --registry-manifest /private/candidate-inputs.json -- \
+  ./build_support/qualify_ecosystem.sh full --gate fabric-native \
+  --artifacts /private/candidate-inputs.json --evidence /private/evidence
+```
+
+The sibling `med_fabric` release verifier validates the complete manifest before
+registry construction. The runner signs the candidate registry with its private
+key, uses Erlang's loopback HTTP server, and resolves third-party tarballs from
+actual SDK/provider and Fabric app/core lockfiles. It checks tarball checksums
+before use; it neither serves an official family fallback nor changes the user's
+Hex configuration. External tools must already satisfy native preflight. This
+command is candidate proof only. A new registry invocation creates a new private
+Hex home, key and URL, so receipt reuse across registry restarts is not guaranteed.
+For official proof, use the verified official Hex configuration instead.
+
 Run the three mandatory native branches from the Med Fabric repository with
-distinct evidence directories:
+distinct evidence directories (within the candidate registry command for
+unpublished packages, or under the official registry for published packages):
 
 ```sh
 ops/qc_native.sh --suite all --artifacts /private/candidate-inputs.json \
@@ -223,15 +289,25 @@ pruned only through genuine dependency resolution. Private project locks and
 the official smoke fixture must never be hand-written or copied from a different
 registry context.
 
-From the SDK root, use `build_support/qualify_ecosystem.sh fast --repos PARENT
---evidence PRIVATE_DIR --jobs 2` after bootstrap. The existing runner executes
-`mix quality --release` once per repository, records exact source/tool/lock/fixture
-inputs and retains successful receipts. Fast permits the explicit development
-source selector. `medex-short` and `fabric-short` are distinct independent gates
-for Python/C/Node checks; default full includes them. Their checks-only dispatcher
-never bootstraps or repeats root quality. Retain a passing independent result
-unless its own source, tool or input identity changes. Full refuses it. Moving between those contexts invalidates the
-relevant Fabric proof; do not claim a source-path result proves registry install.
+For day-to-day development, run `mix test` from either repository root, or
+select a single project with `mix test --project PROJECT`. From the SDK root,
+`build_support/qualify_ecosystem.sh fast --no-cache` runs ordinary source tests
+in both repositories. `dev` selects repositories changed against `--base`
+(default HEAD); SDK changes also select Fabric. These commands do not resolve
+consumer projections, build production releases, run Dialyzer/docs or start the
+native qualification services. Their separate `medex-tests` and `fabric-tests`
+receipts cannot satisfy `medex-core` or `fabric-projects`. Use `--no-cache` to
+measure actual execution rather than receipt reuse. Fast/dev permit the explicit
+development source selector; release gates refuse it. The SDK's explicit
+`build_support/check_consumers.sh --affected BASE` remains a consumer-proof
+command, not a fast development test command.
+
+`medex-core` and `fabric-projects` still execute `mix quality --release` and
+`medex-short` and `fabric-short` still run independent Python/C/Node checks.
+Default full includes all four release gates. The checks-only dispatcher never
+bootstraps or repeats root quality. Retain independent passing results unless
+their source, tool or input identity changes. Do not claim a source-path result
+proves registry installation.
 
 `plan` now shows the local consumer graph. Default `full`/`resume` exclude
 `weld-ci`, `weld-minimum`, `medex-remote` and `fabric-remote`. Those remain explicit
@@ -276,5 +352,6 @@ BR-05 remains a post-publication gate: only after separate owner approval and
 all six genuine official versions exist, resolve `examples/hex_smoke/mix.lock`
 against official Hex, verify exact family versions/bytes/closure, run locked
 compile/test and separate role isolation, then commit the genuine fixture lock.
-Its old official entries remain deliberately unchanged before publication.
+The checked-in smoke lock is not updated by pre-publication candidate construction;
+pre-publication combined proof resolves its own detached lock.
 The combined fixture is a resolver/install check, never a production topology.

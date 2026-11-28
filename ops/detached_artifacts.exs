@@ -194,7 +194,11 @@ defmodule MedFabric.DetachedArtifacts do
 
   def installed!(inputs, consumer, role) do
     expected = Map.fetch!(@roles, role)
-    {lock, []} = Code.eval_file(Path.join(consumer, "mix.lock"))
+    path = Path.join(consumer, "mix.lock")
+    opts = [file: path, emit_warnings: false]
+    ast = path |> File.read!() |> Code.string_to_quoted!(opts)
+    ensure!(Macro.quoted_literal?(ast), "Expected literal installed lock")
+    {lock, []} = Code.eval_quoted(ast, [], opts)
     ensure!(is_map(lock), "Invalid installed lock")
 
     family =

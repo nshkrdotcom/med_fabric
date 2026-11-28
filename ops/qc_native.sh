@@ -132,12 +132,15 @@ if [[ -n "$candidate" ]]; then
   fi
 fi
 
+phase_started=$SECONDS
 if [[ -n "$artifacts" ]]; then
   source ops/detached_consumers.sh
   mkdir -m 0700 -- "$evidence/installed"
   prepare_detached_consumers "$PWD" "$artifacts" "$evidence/consumers" "$evidence/installed"
   args+=(--installed-consumers "$evidence/consumers")
+  printf 'Detached consumers ready (%ss)\n' "$((SECONDS-phase_started))"
 fi
+phase_started=$SECONDS
 
 if [[ "$suite" != soak || "$preview_mode" == isolated ]]; then
   # Keep the browser install private to the checkout and keyed to the committed lock.
@@ -148,6 +151,7 @@ if [[ "$suite" != soak || "$preview_mode" == isolated ]]; then
   fi
   (cd ops && node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();await b.close()})().catch(e=>{console.error(e);process.exit(1)})') ||
     (cd ops && npx playwright install chromium)
+  printf 'Browser prerequisites ready (%ss)\n' "$((SECONDS-phase_started))"
 fi
 
 if [[ "$suite" != all ]]; then
@@ -190,6 +194,7 @@ fi
 
 printf 'Receipt corpus SHA-256: %s\n' "$(sha256sum "$MEDEX_RECEIPT_VECTORS" | cut -d' ' -f1)"
 
+phase_started=$SECONDS
 for project in core/store core/interop; do
   (cd "$project" && MIX_ENV=test mix deps.get --check-locked)
 done
@@ -203,20 +208,33 @@ for app in exam handheld preview; do
   )
 done
 
+printf 'Source integration inputs ready (%ss)\n' "$((SECONDS-phase_started))"
+phase_started=$SECONDS
 elixir ops/handheld/oracle_test.exs
 elixir ops/handheld/process_lab_test.exs
 elixir ops/handheld/soak_test.exs
+printf 'Native harness tests passed (%ss)\n' "$((SECONDS-phase_started))"
+phase_started=$SECONDS
 ops/qc_services.sh run "${options[@]}" -- bash -euc '
   evidence=$1
+  phase_started=$SECONDS
   (cd apps/exam && mix test integration/{device_review,device_root_lock,preview_isolation,outbox,ingress_bounds,background_isolation}_test.exs --warnings-as-errors)
+  printf "Exam integration passed (%ss)\n" "$((SECONDS-phase_started))"
+  phase_started=$SECONDS
   timeout --signal=TERM --kill-after=30s 1600s elixir ops/handheld_acceptance.exs \
     --suite all --preview isolated --fhir hapi --report "$evidence/native.json" "${@:2}"
   jq -e -f ops/verify_native_report.jq "$evidence/native.json"
+  printf "Native acceptance passed (%ss)\n" "$((SECONDS-phase_started))"
+  phase_started=$SECONDS
   # This verifier includes Store, Interop, and Exam recording/encounter integration.
   export MF_HTTP_PORT=$(elixir -e '\''{:ok,s}=:gen_tcp.listen(0,ip: {127,0,0,1}); {:ok,{_,p}}=:inet.sockname(s); IO.write(p); :gen_tcp.close(s)'\'')
   timeout --signal=TERM --kill-after=30s 460s ops/verify_browser.sh --release \
     --installed-consumers "$evidence/consumers"
+  printf "Browser release verification passed (%ss)\n" "$((SECONDS-phase_started))"
 ' qc "$evidence" "${args[@]}"
+printf 'Native services phase complete (%ss)\n' "$((SECONDS-phase_started))"
+phase_started=$SECONDS
 MF_QC_KEEP_FAILURE=$keep timeout --signal=TERM --kill-after=30s 900s ops/qc_detached_release.sh \
-  "$evidence/detached.json" --artifacts "$artifacts"
+  "$evidence/detached.json" --artifacts "$artifacts" --native-evidence "$evidence"
+printf 'Detached release phase complete (%ss)\n' "$((SECONDS-phase_started))"
 printf 'Native and detached qualification reports at %s\n' "$evidence"

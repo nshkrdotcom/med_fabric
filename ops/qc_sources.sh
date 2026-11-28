@@ -81,7 +81,10 @@ unless File.read!("mix.lock") == "%{}\n", do: raise("Default lock was modified")
 
 lock =
   if File.regular?(paths[:lockfile]) do
-    {lock, []} = Code.eval_file(paths[:lockfile])
+    opts = [file: paths[:lockfile], emit_warnings: false]
+    ast = paths[:lockfile] |> File.read!() |> Code.string_to_quoted!(opts)
+    unless Macro.quoted_literal?(ast), do: raise("Expected literal source lock")
+    {lock, []} = Code.eval_quoted(ast, [], opts)
     lock
   else
     %{}

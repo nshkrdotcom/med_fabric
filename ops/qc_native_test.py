@@ -134,5 +134,90 @@ printf '%s\n' "$MF_SOURCE_QC_PROFILE" >> "$QC_TEST_LOG"
         self.assertFalse(self.log.exists())
 
 
+class DetachedReuseTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="fabric-detached-reuse-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.consumers = self.root / "consumers"
+        self.previous = self.root / "installed"
+        self.output = self.root / "new"
+        self.manifest = self.root / "manifest.json"
+        for directory in (self.consumers, self.previous, self.output):
+            directory.mkdir()
+        self.artifacts = {"manifest_sha256": "a" * 64, "registry": "candidate"}
+        self.registry = {"kind": "candidate", "url": "http://127.0.0.1:12345"}
+        for directory in (self.previous, self.consumers):
+            (directory / "artifacts.json").write_text(json.dumps(self.artifacts))
+            (directory / "registry.json").write_text(json.dumps(self.registry))
+        self.manifest.write_text(json.dumps(self.artifacts))
+        for role in ("exam", "handheld", "preview"):
+            directory = self.consumers / role
+            directory.mkdir()
+            (directory / "mix.lock").write_text(role + " original lock\n")
+            shutil.copy(directory / "mix.lock", self.previous / f"{role}-mix.lock")
+            (self.previous / f"{role}-dependencies.txt").write_text(role + " dependencies\n")
+            installed = json.dumps({"role": role, "lock_sha256": "b" * 64})
+            (self.previous / f"{role}-installed.json").write_text(installed)
+            (directory / "actual-installed.json").write_text(installed)
+
+    def run_reuse(self, *, success):
+        # Stub external artifact verification and Hex configuration, not reuse
+        # logic. The actual shell comparison and evidence paths are exercised.
+        script = r'''
+source "$1"
+elixir() {
+    case "$2" in
+        inputs) cp -- "$4" "$5" ;;
+        registry) jq -n --arg url "$4" '{kind:"candidate",url:$url}' > "$5" ;;
+        installed) cp -- "$4/actual-installed.json" "$6" ;;
+        *) exit 99 ;;
+    esac
+}
+mix() {
+    [[ "$*" == "hex.repo show hexpm --url" ]] || exit 98
+    echo "http://127.0.0.1:12345"
+}
+reverify_detached_consumers "$2" "$3" "$4" "$5" "$6"
+'''
+        result = subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", script, "reuse-test",
+             str(SCRIPT.with_name("detached_consumers.sh")), str(self.root),
+             str(self.manifest), str(self.consumers), str(self.previous), str(self.output)],
+            text=True, capture_output=True, timeout=10,
+        )
+        if success:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for role in ("exam", "handheld", "preview"):
+                for suffix in ("installed.json", "mix.lock", "dependencies.txt"):
+                    name = f"{role}-{suffix}"
+                    self.assertEqual((self.output / name).read_bytes(), (self.previous / name).read_bytes())
+        else:
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_reuses_verified_roles_without_resolving_or_compiling_again(self):
+        self.run_reuse(success=True)
+
+    def test_changed_manifest_is_rejected(self):
+        self.manifest.write_text(json.dumps(dict(self.artifacts, manifest_sha256="c" * 64)))
+        self.run_reuse(success=False)
+
+    def test_changed_lock_is_rejected(self):
+        (self.consumers / "preview/mix.lock").write_text("different lock")
+        self.run_reuse(success=False)
+
+    def test_changed_installed_identity_is_rejected(self):
+        (self.consumers / "handheld/actual-installed.json").write_text("{}")
+        self.run_reuse(success=False)
+
+    def test_missing_prior_evidence_is_rejected(self):
+        (self.previous / "exam-installed.json").unlink()
+        self.run_reuse(success=False)
+
+    def test_changed_registry_is_rejected(self):
+        (self.consumers / "registry.json").write_text("{}")
+        self.run_reuse(success=False)
+
+
 if __name__ == "__main__":
     unittest.main()
