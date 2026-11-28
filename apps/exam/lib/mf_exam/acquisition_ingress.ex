@@ -465,7 +465,7 @@ defmodule MedFabric.Exam.AcquisitionIngress do
 
   defp reply_to_effect(s, op, value, receipt) do
     if Map.get(value, :terminal) do
-      case retire_writer(%{s | receipt: receipt}) do
+      case stop_terminal_writer(s) do
         :ok ->
           DeviceRootLock.release(s.context.root_owner, s.key)
           {:stop, :normal, {:ok, value}, %{s | writer: nil, gate: false, receipt: receipt}}
@@ -477,6 +477,15 @@ defmodule MedFabric.Exam.AcquisitionIngress do
       publish_optional(s, op)
       {:reply, {:ok, value}, %{s | receipt: Receipt.durable_prefix(receipt)}}
     end
+  end
+
+  defp stop_terminal_writer(%{writer: nil}), do: :ok
+
+  defp stop_terminal_writer(%{writer: writer}) do
+    if Process.alive?(writer), do: GenServer.stop(writer, :normal, @timeout)
+    :ok
+  catch
+    :exit, _ -> {:error, :prior_effect_not_quiescent}
   end
 
   defp gate_inputs(tx, s, id, name) do

@@ -66,9 +66,9 @@ defmodule MedFabric.Exam.AcquisitionManifest do
   end
 
   defp finalize(context, id) do
-    with :ok <- settle_streams(context, id, false),
+    with {:ok, settled} <- settle_streams(context, id, false),
          {:ok, inputs} <- S.settlement(context.db, id, fn tx, s -> S.frozen_inputs(tx, s) end),
-         {:ok, verified} <- verify_inputs(context, inputs),
+         {:ok, verified} <- verify_inputs(context, inputs, settled),
          {:ok, built} <- build(verified),
          {:ok, :ok} <-
            S.settlement(context.db, id, fn tx, s ->
@@ -82,13 +82,13 @@ defmodule MedFabric.Exam.AcquisitionManifest do
 
   defp settle_streams(context, id, interrupt?) do
     with {:ok, inputs} <- S.settlement(context.db, id, fn tx, s -> S.frozen_inputs(tx, s) end) do
-      Enum.reduce_while(Enum.sort(inputs.streams), :ok, fn {name, stream}, :ok ->
-        settle_stream(context, id, interrupt?, name, stream)
+      Enum.reduce_while(Enum.sort(inputs.streams), {:ok, %{}}, fn {name, stream}, {:ok, acc} ->
+        settle_stream(context, id, interrupt?, name, stream, acc)
       end)
     end
   end
 
-  defp settle_stream(context, id, interrupt?, name, stream) do
+  defp settle_stream(context, id, interrupt?, name, stream, acc) do
     {:ok, spec} = Serialization.stream_spec(stream.descriptor)
 
     result =
@@ -97,15 +97,15 @@ defmodule MedFabric.Exam.AcquisitionManifest do
       end)
 
     case result do
-      {:ok, %{sealed: true}} -> {:cont, :ok}
-      {:ok, prefix} when interrupt? -> settle_successor(context, id, name, spec, prefix)
+      {:ok, %{sealed: true} = prefix} -> {:cont, {:ok, Map.put(acc, name, prefix)}}
+      {:ok, prefix} when interrupt? -> settle_successor(context, id, name, spec, prefix, acc)
       _ -> {:halt, {:error, :unresolved_stream}}
     end
   end
 
-  defp settle_successor(context, id, name, spec, prefix) do
+  defp settle_successor(context, id, name, spec, prefix, acc) do
     case interrupt_successor(context, id, name, spec, prefix) do
-      {:ok, %{sealed: true}} -> {:cont, :ok}
+      {:ok, %{sealed: true} = sealed} -> {:cont, {:ok, Map.put(acc, name, sealed)}}
       error -> {:halt, error}
     end
   end
@@ -204,7 +204,7 @@ defmodule MedFabric.Exam.AcquisitionManifest do
     })
   end
 
-  def verify_inputs(context, inputs) do
+  def verify_inputs(context, inputs, settled \\ %{}) do
     result =
       Enum.reduce_while(Enum.sort(inputs.streams), {:ok, %{}}, fn {name,
                                                                    %{
@@ -215,15 +215,8 @@ defmodule MedFabric.Exam.AcquisitionManifest do
         with attempt when not is_nil(attempt) <- Enum.find(attempts, &(!is_nil(&1.receipt))),
              {:ok, spec} <- Serialization.stream_spec(descriptor),
              {:ok, known} <- Receipt.parse(attempt.receipt),
-             opts = [
-               stream: spec,
-               fence: attempt.fence,
-               known_receipt: known,
-               root_owner: context.root_owner
-             ],
-             dir = attempt_dir(context, inputs.session.id, name, attempt.fence),
-             {:ok, prefix} <- Storage.recover(dir, opts),
-             {:ok, prefix} <- reconcile_terminal(dir, opts, prefix),
+             {:ok, prefix} <-
+               verified_prefix(context, inputs.session.id, name, attempt, spec, known, settled),
              true <- prefix.sealed and prefix.index_digest == attempt.digest,
              true <- Receipt.exact_prefix?(known, prefix.receipt),
              {:ok, _} <- Receipt.terminal_receipt(prefix.index, prefix, known) do
@@ -251,6 +244,30 @@ defmodule MedFabric.Exam.AcquisitionManifest do
       false -> {:error, :unverified_inventory}
       error -> error
     end
+  end
+
+  defp verified_prefix(context, id, name, attempt, spec, known, settled) do
+    dir = attempt_dir(context, id, name, attempt.fence)
+
+    case Map.get(settled, name) do
+      %MedEx.Storage.RecoveredPrefix{fence: fence, artifact_dir: settled_dir, sealed: true} =
+          prefix ->
+        if fence == attempt.fence and settled_dir == Path.expand(dir) do
+          {:ok, prefix}
+        else
+          recover_and_reconcile(dir, spec, attempt.fence, known, context.root_owner)
+        end
+
+      _ ->
+        recover_and_reconcile(dir, spec, attempt.fence, known, context.root_owner)
+    end
+  end
+
+  defp recover_and_reconcile(dir, spec, fence, known, root_owner) do
+    opts = [stream: spec, fence: fence, known_receipt: known, root_owner: root_owner]
+
+    with {:ok, prefix} <- Storage.recover(dir, opts),
+         do: reconcile_terminal(dir, opts, prefix)
   end
 
   defp reconcile_terminal(dir, opts, %{terminal_recorded: true, sealed: false}),
@@ -495,7 +512,7 @@ defmodule MedFabric.Exam.AcquisitionManifest do
 
   defp finalize_interrupted(context, id) do
     with {:ok, :ok} <- S.finish_expiry(context.db, id, ClockObservations.wall_mapping()),
-         :ok <- settle_streams(context, id, true) do
+         {:ok, _} <- settle_streams(context, id, true) do
       finalize(context, id)
     end
   end
