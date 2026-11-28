@@ -250,7 +250,7 @@ defmodule MedFabric.Store.AcquisitionSessions do
       fn tx ->
         writable!(tx)
         snapshot = snapshot!(tx, bind.id, mode)
-        authorize_binding!(tx, bind, snapshot)
+        authorize_binding!(tx, bind, snapshot, mode)
         fun.(tx, snapshot)
       end,
       timeout: 40_000
@@ -277,30 +277,31 @@ defmodule MedFabric.Store.AcquisitionSessions do
         _ -> abort(tx, :unknown_acquisition)
       end
 
-    lock = if mode == :update, do: "FOR UPDATE", else: "FOR SHARE"
-    # Lease renewal changes only non-key session fields. A key-share lock keeps
-    # that bounded control path live while the encounter/acquisition share locks
-    # still exclude every revocation, rotation, freeze and source mutation.
-    session_lock = if mode == :update, do: "FOR UPDATE", else: "FOR KEY SHARE"
+    {lock, session_lock} =
+      case mode do
+        :update -> {" FOR UPDATE", " FOR UPDATE"}
+        :read -> {"", ""}
+        _ -> {" FOR SHARE", " FOR KEY SHARE"}
+      end
 
     [[patient, clinician, closed]] =
       rows(
         tx,
-        "SELECT patient_actor,clinician_actor,closed_at FROM encounters WHERE id=$1 " <> lock,
+        "SELECT patient_actor,clinician_actor,closed_at FROM encounters WHERE id=$1" <> lock,
         [enc]
       )
 
     [[state, kind, principal, profile, parent]] =
       rows(
         tx,
-        "SELECT state,source_kind,principal,profile,parent_acquisition_id FROM acquisitions WHERE id=$1 " <>
+        "SELECT state,source_kind,principal,profile,parent_acquisition_id FROM acquisitions WHERE id=$1" <>
           lock,
         [id]
       )
 
     case rows(
            tx,
-           "SELECT boot,site,descriptors,generation,lease_hash,authority_state,connection_state,expires_at,maximum_at,device_id,patient_actor,browser_session,final_inventory,frozen_at,frozen_generation FROM acquisition_sessions WHERE id=$1 " <>
+           "SELECT boot,site,descriptors,generation,lease_hash,authority_state,connection_state,expires_at,maximum_at,device_id,patient_actor,browser_session,final_inventory,frozen_at,frozen_generation FROM acquisition_sessions WHERE id=$1" <>
              session_lock,
            [id]
          ) do
@@ -356,12 +357,12 @@ defmodule MedFabric.Store.AcquisitionSessions do
     end
   end
 
-  defp authorize_binding!(tx, bind, s) do
+  defp authorize_binding!(tx, bind, s, mode) do
     unless same_binding?(s, bind) and hash(bind.lease) == s.lease_hash and
              authority_ms(tx, s.id) > 0,
            do: abort(tx, :stale_binding)
 
-    authorize_source!(tx, s)
+    authorize_source!(tx, s, mode)
   end
 
   defp same_binding?(s, bind) do
@@ -371,7 +372,7 @@ defmodule MedFabric.Store.AcquisitionSessions do
       (s.source_kind != "browser" or s.browser_session == bind.browser_session)
   end
 
-  def authorize_source!(tx, s) do
+  def authorize_source!(tx, s, mode \\ :share) do
     unless is_nil(s.closed_at) and s.authority == "authorized" and authority_ms(tx, s.id) > 0,
       do: abort(tx, :authority_ended)
 
@@ -379,18 +380,24 @@ defmodule MedFabric.Store.AcquisitionSessions do
       "device" ->
         unless rows(
                  tx,
-                 "SELECT c.device_id FROM device_credentials c JOIN device_grants g USING(device_id) WHERE c.device_id=$1 AND g.encounter_id=$2 AND g.profile=$3 AND NOT c.revoked AND NOT g.revoked AND g.expires_at>clock_timestamp() FOR SHARE OF g,c",
+                 "SELECT c.device_id FROM device_credentials c JOIN device_grants g USING(device_id) WHERE c.device_id=$1 AND g.encounter_id=$2 AND g.profile=$3 AND NOT c.revoked AND NOT g.revoked AND g.expires_at>clock_timestamp()" <>
+                   source_lock(:device, mode),
                  [s.device, s.encounter, s.profile]
                ) == [[s.device]], do: abort(tx, :grant_denied)
 
       "browser" ->
         unless rows(
                  tx,
-                 "SELECT id FROM browser_sessions WHERE id=$1 AND encounter_id=$2 AND actor=$3 AND role='patient' AND NOT revoked AND expires_at>clock_timestamp() FOR SHARE",
+                 "SELECT id FROM browser_sessions WHERE id=$1 AND encounter_id=$2 AND actor=$3 AND role='patient' AND NOT revoked AND expires_at>clock_timestamp()" <>
+                   source_lock(:browser, mode),
                  [s.browser_session, s.encounter, s.principal]
                ) == [[s.browser_session]], do: abort(tx, :session_expired)
     end
   end
+
+  defp source_lock(_, :read), do: ""
+  defp source_lock(:device, _), do: " FOR SHARE OF g,c"
+  defp source_lock(:browser, _), do: " FOR SHARE"
 
   def authority_ms(tx, id) do
     case rows(

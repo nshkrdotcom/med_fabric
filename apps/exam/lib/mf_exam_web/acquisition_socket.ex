@@ -90,9 +90,14 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
     with {:ok, frame} <- FrameV1.decode(raw),
          true <- frame.stream_number == 3,
          {:ok, spec} <-
-           S.scoped(s.context.db, bind, fn tx, current -> monitor_spec(tx, current, frame) end) do
+           S.scoped(
+             s.context.db,
+             bind,
+             fn tx, current -> monitor_spec(tx, current, frame) end,
+             :read
+           ) do
       PreviewGateway.feed(bind, spec, raw)
-      reply("monitor_credit", %{"credit_frames" => 1, "credit_bytes" => 1968}, s)
+      encode_reply("monitor_credit", %{"credit_frames" => 1, "credit_bytes" => 1968}, s)
     else
       _ -> denied(s)
     end
@@ -544,14 +549,18 @@ defmodule MedFabric.ExamWeb.AcquisitionSocket do
 
     if active_stream and
          sample_request(:reply_authority, s, fn -> S.current?(s.context.db, s.bind) end) do
-      fields = Map.merge(fields, %{"binding" => s.binding, "operation_id" => s.operation_id})
-
-      case Control.encode(type, fields) do
-        {:ok, bytes} -> {:push, {:text, bytes}, s}
-        _ -> denied(s)
-      end
+      encode_reply(type, fields, s)
     else
       denied(s)
+    end
+  end
+
+  defp encode_reply(type, fields, s) do
+    fields = Map.merge(fields, %{"binding" => s.binding, "operation_id" => s.operation_id})
+
+    case Control.encode(type, fields) do
+      {:ok, bytes} -> {:push, {:text, bytes}, s}
+      _ -> denied(s)
     end
   end
 
