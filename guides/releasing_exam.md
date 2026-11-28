@@ -147,6 +147,28 @@ command is candidate proof only. A new registry invocation creates a new private
 Hex home, key and URL, so receipt reuse across registry restarts is not guaranteed.
 For official proof, use the verified official Hex configuration instead.
 
+### Rerun both candidate soaks
+
+From this repository's root, run the Fabric wrapper with both clean checkouts side by side.
+
+```sh
+./ops/soak.sh
+```
+
+The wrapper builds six candidate archives using the SDK candidate builder, commits
+any verified changes to the five Fabric dependency locks, and starts the signed
+registry. It runs the native soak with Preview off, then isolated, for 1,740 seconds
+each on ext4. Set `SOAK_EXT4_BASE` to an existing writable ext4 directory
+(default `/var/tmp`). Provide the native preflight tools, including `turnserver`
+on PATH, and the pinned Opus archive via `MED_EX_OPUS_TARBALL` or the SDK cache.
+
+Startup prints copyable `tail -F` commands for candidate preparation, archive
+construction, each native `run.log`, and the five-second `soak-samples.jsonl`.
+Each phase creates its own logs when it starts. The first failure stops the run.
+The two `qualification/soak-*/native.json` reports are standalone candidate
+evidence. For coordinated release receipts and prerequisite gates, including native
+and physical ENOSPC, use the ecosystem runner with `--gate fabric-soak-isolated`.
+
 Run the three mandatory native branches from the Med Fabric repository with
 distinct evidence directories (within the candidate registry command for
 unpublished packages, or under the official registry for published packages):

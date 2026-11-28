@@ -103,3 +103,14 @@ these changes do not establish a performance improvement.
 
 See the release guide for approval and preservation prerequisites. No automatic
 evidence deletion or destructive downgrade is permitted.
+
+
+## Watching a candidate soak
+
+From the Fabric root, run `./ops/soak.sh`. At startup it prints the exact
+`tail -F` commands for the run. Follow the candidate prep logs during the build,
+then the active mode's `run.log` for setup, capture and verification. During
+capture, `soak-samples.jsonl` records audio and ECG progress, lag, host pressure
+and database activity every five seconds. Each mode writes its verdict and
+sampled timing summaries to `native.json`. For the inputs, automatic lock
+commit and release gate selection, see the [release guide](releasing_exam.md#rerun-both-candidate-soaks).

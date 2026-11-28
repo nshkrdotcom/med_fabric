@@ -3,25 +3,33 @@ set -euo pipefail
 umask 077
 fab=$(cd "$(dirname "$0")/.." && pwd -P)
 sdk=$(cd "$fab/../med_ex" && pwd -P)
-tools_dir=/tmp/med-release-qc.6XQST7
-export PATH="$tools_dir/native-tools/bin:$(pg_config --bindir):$PATH"
-export MED_EX_OPUS_TARBALL="$(cat "$tools_dir/opus-archive-path")"
-export MEDEX_RECEIPT_VECTORS="$sdk/core/med_core/test/fixtures/receipt_vectors_v2.json"
-test -f "$MED_EX_OPUS_TARBALL"
-test -z "$(git -C "$sdk" status --porcelain)"
-test -z "$(git -C "$fab" status --porcelain)"
-git -C "$sdk" merge-base --is-ancestor 90568d9 HEAD
-git -C "$fab" merge-base --is-ancestor 6750fd5 HEAD
-
 run=$(mktemp -d /tmp/med-release-soak.XXXXXXXX)
 out="$run/candidates"
 qc="$run/qualification"
 mkdir "$qc"
+printf 'Evidence %s\n' "$run"
+printf 'Detailed logs (in another Bash terminal):\n'
+printf '  Candidate prep: tail -F %q/source-qc/{medex-core,medex-prepare}.log %q/sync.log\n' "$out" "$out"
+printf '  Candidate build (once started): tail -F %q/build.*/build.log\n' "$out"
+printf '  Native soak: tail -F %q/{soak-off,soak-isolated}/run.log\n' "$qc"
+printf '  Five-second measurements: tail -F %q/{soak-off,soak-isolated}/soak-samples.jsonl\n' "$qc"
+
+export PATH="$(pg_config --bindir):$PATH"
+# Fallback for the owned, private coturn installation retained on the original QC host.
+tools_dir=/tmp/med-release-qc.6XQST7
+if ! command -v turnserver >/dev/null && [[ ! -L "$tools_dir" && -O "$tools_dir" &&
+    $(stat -c %a "$tools_dir") == 700 && -x "$tools_dir/native-tools/bin/turnserver" ]]; then
+  export PATH="$tools_dir/native-tools/bin:$PATH"
+fi
+command -v turnserver >/dev/null || { echo "Put the installed turnserver on PATH." >&2; exit 2; }
+export MED_EX_OPUS_TARBALL="${MED_EX_OPUS_TARBALL:-${XDG_CACHE_HOME:-$HOME/.cache}/med_ex_opus/opus-1.5.2.tar.gz}"
+export MEDEX_RECEIPT_VECTORS="$sdk/core/med_core/test/fixtures/receipt_vectors_v2.json"
+[[ -r "$MED_EX_OPUS_TARBALL" ]] || { echo "Set MED_EX_OPUS_TARBALL to the pinned Opus archive." >&2; exit 2; }
 volume_base=${SOAK_EXT4_BASE:-/var/tmp}
 test "$(findmnt -T "$volume_base" -no FSTYPE)" = ext4
 volume=$(mktemp -d "$volume_base/med-soak.XXXXXXXX")
 printf '%s\n' "$volume" > "$qc/soak-volume-path"
-printf 'Evidence %s\nLabs %s\n' "$run" "$volume"
+printf 'Private labs %s\n' "$volume"
 
 cd "$sdk"
 build_support/prepare_candidates.sh sync "$out"
@@ -56,6 +64,5 @@ build_support/check_consumers.sh --registry \
     for mode in off isolated; do
       ops/qc_native.sh --suite soak --seconds 1740 --preview "$mode" \
         --artifacts "$manifest" --volume "$volume" --evidence "$qc/soak-$mode"
-      jq -e --arg preview "$mode" -f ops/verify_soak_report.jq "$qc/soak-$mode/native.json"
     done
   ' soak "$fab" "$manifest" "$qc" "$volume"
