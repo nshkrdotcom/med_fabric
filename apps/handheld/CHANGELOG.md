@@ -9,20 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking changes
 
+- Rename the module namespace from `MedExHandheld.*` to `MedFabric.Handheld.*`
+  (with `MedFabric.Handheld.CLI.main/1` and `lib/mf_handheld/`) while preserving
+  the `:mf_handheld` OTP application and revision-2 spool schema; no old-name
+  aliases are retained.
 - Adopt revision-2 control and typed SDK receipt semantics with authenticated
   connection incarnations, verified handoff and persist-before-delete coverage.
 - Account for exact frame/gap operations and encoded bytes within negotiated
   credit; checkpoint the final short batch before waiting to seal.
 - Preserve one durable spool, explicit reconnect/drain lifecycle and incremental
-  reclamation; reject incompatible or corrupt persisted source state.
+  reclamation; reject incompatible or corrupt persisted source state without
+  mutating existing roots.
+- Anchor fresh source clocks after admission/setup and reject started source
+  markers whose persisted `identity.json` is missing or conflicting.
 - Keep raw spool persistence ahead of disposable monitoring; bound command
   admission and poll-start validity and validate the complete persisted ledger.
 - Consume med_ex ~> 0.4.0 through the single explicit development selector or
-  normal Hex dependencies. Publish as a direct Mix package.
+  normal Hex dependencies. Publish as a direct Mix package without shipping
+  `mix.lock` in the Hex tarball; refresh third-party dev dependency floors.
 
 ### Tests and documentation
 
-- Update receipt/reclaim, malformed state, asynchronous monitor and source tests.
+- Update receipt/reclaim, source-marker consistency, malformed state, startup
+  privacy, asynchronous monitor and source tests.
 - Document source continuity, retained evidence and native 29-minute qualification.
 
 ## [0.2.1] - 2026-11-26

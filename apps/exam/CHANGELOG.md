@@ -24,11 +24,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep one Weld monolith containing Exam, Domain, Store and Interop; consume
   med_ex ~> 0.4.0 without optional provider dependencies.
 
+### Hardening
+
+- Settle expired unsent outbox claims only from coherent never-dispatched history
+  and preserve late-sender fencing after dispatch.
+- Isolate `DeliveryWorker` and `AcquisitionExpiry` behind `Endpoint` while
+  retaining core dependency failure fencing; reject SQL-unrepresentable frame
+  positions before credit or writer effects.
+- Make browser finish, reconnect and producer cleanup single-owner and idempotent,
+  binding replies to exact operations and fingerprints.
+- Sanitize host/dependency logs and expected startup failures, remove the
+  internal Barrier module from ExDoc module groups, and update third-party
+  dependency floors to latest compatible Hex releases.
+
 ### Tests and operations
 
-- Add native acceptance, source authority, browser, recovery, schema and outbox
-  tests; update source lanes, release inventory and qualification instructions.
-- Native service/fault/detached/soak gates must pass before any publication.
+- Add native acceptance, source authority, browser, recovery, schema, log
+  privacy and outbox tests; update source lanes, release inventory and
+  qualification instructions.
+- Formal native/service/fault/detached/soak gates must pass before publication.
 
 ## [0.2.1] - 2026-11-26
 

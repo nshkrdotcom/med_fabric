@@ -10,22 +10,35 @@ The workspace version advances independently from 0.3.1 to 0.4.0.
 The release requires fresh schema/artifact/spool namespaces and all six exact
 artifact qualification gates; no publication or native gate success is implied.
 
-## Unreleased
+### Hardening and consolidation
 
+- Rename the Handheld module namespace from `MedExHandheld.*` to
+  `MedFabric.Handheld.*` (preserving `:mf_handheld` and revision-2 spool
+  contracts with no compatibility aliases) and update Exam/Preview log-privacy
+  owner prefixes accordingly.
+- Exclude `mix.lock` from shipped `mf_handheld` and `mf_preview` Hex package
+  file lists while preserving committed source lockfiles, and enforce that
+  policy in `ops/detached_artifacts.exs`.
 - Settle expired unsent outbox claims only from coherent never-dispatched history;
   preserve uncertainty and late-sender fencing after dispatch.
-- Isolate DeliveryWorker/AcquisitionExpiry from capture and Endpoint while keeping
-  core dependency failure fencing; bound per-row poll failures.
+- Isolate `DeliveryWorker`/`AcquisitionExpiry` from capture and `Endpoint` while
+  keeping core dependency failure fencing; bound per-row poll failures.
 - Reject SQL-unrepresentable frame positions before credit or writer effects.
 - Make browser finish/reconnect/producer cleanup single-owner and idempotent;
   bind replies to exact operations/fingerprints and retain unacknowledged source.
+- Anchor fresh Handheld source clocks after admission/setup, reject started
+  source markers with missing or conflicting `identity.json`, and validate
+  existing spool namespaces before mutating directory mode or lock files.
 - Sanitize host/dependency logging and expected startup failures, retain fresh
-  root/spool ownership checks, and move refusal fixtures outside source snapshots.
+  root/spool ownership checks, and remove the internal Exam Barrier module from
+  ExDoc module groups while retaining exact-artifact fault instrumentation.
+- Add a standalone six-package smoke example (`examples/hex_smoke`, whose
+  official lock refresh remains reserved for post-publication `BR-05`).
+- Refresh third-party dependency floors and locks across all workspace and
+  package Mix projects to latest compatible Hex releases.
 - Route root quality/static checks to real projects with complete source/BEAM
-  coverage and safe source-context lock resolution. Add targeted regressions;
-  Elixir, service/native and release qualification remain pending.
-
-- Add a standalone example that exercises all six published Hex packages, including native Opus encoding and WebRTC delivery.
+  coverage and safe source-context lock resolution; formal native, detached
+  and soak qualification remain mandatory before publication.
 
 ## 0.3.1 — 2026-11-26
 

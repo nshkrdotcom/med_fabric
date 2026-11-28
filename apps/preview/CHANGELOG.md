@@ -16,12 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compute emitted sequence and elapsed media tick from source coordinates,
   advancing sequence only after known successful submission.
 - Preserve latest-only disposable frames and capture independence on all failures.
-- Consume med_ex ~> 0.4.0 and providers ~> 0.3.0; publish directly with Mix.
+- Consume med_ex ~> 0.4.0 and providers ~> 0.3.0; publish directly with Mix
+  without shipping `mix.lock` in the Hex tarball.
+
+### Hardening
+
+- Install host OTP log-privacy filtering aligned with `MedFabric.*` ownership,
+  normalize expected startup failures and refresh third-party dependency floors
+  (`bandit ~> 1.15`, `plug ~> 1.20.4`, `credo`, `dialyxir`, `ex_doc`).
 
 ### Tests and documentation
 
-- Add capability, expiry, frame validation, ownership and bounded peer tests.
-- Document isolated runtime, direct/relay media and raw-integrity qualification.
+- Add capability, expiry, frame validation, log privacy, ownership and bounded
+  peer tests.
+- Document isolated runtime, direct/relay media and raw-integrity qualification;
+  formal native and soak gates remain mandatory before publication.
 
 ## [0.2.1] - 2026-11-26
 
